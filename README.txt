@@ -31,6 +31,7 @@ Rutas:
 /api/v1/matches/16599363/incidents
 /api/v1/scope
 /api/v1/teams/2841/performance
+/api/v1/teams/2841/player-stats
 
 AMBITO (ambito.json)
 Esta version solo sirve las competiciones de ambito.json. Hoy: Primera Federacion,
@@ -111,6 +112,77 @@ solo al presentar. last3: los tres partidos contados con fecha mas recientes; la
 cobertura se calcula despues, sin buscar partidos anteriores. undated: contados sin
 fecha (entran en season, no en last3).
 Tras actualizar api.py hay que reiniciar el servicio (ver REINICIAR EL SERVICIO).
+
+ACUMULADOS DE JUGADORES
+GET /api/v1/teams/{teamId}/player-stats
+  200 {"data": {"team_id", "competitions": [una por entrada de ambito.json:
+        name, season, unique_tournament_id, tournament_id, season_id,
+        matches: {counted, with_call_ups},
+        call_ups: {total, confirmed, contradictions, duplicate_records, discarded_records},
+        players: [{player_id, name, usual_position, height_cm, preferred_foot,
+                   last_shirt_number, call_ups,
+                   starts|appearances|minutes|goals|assists: {value, matches, of}}]]},
+       "meta": {"note"}}
+  404 si el equipo no esta en equipos.json.
+Partidos: los mismos contados que el balance (finalizados del ambito con marcador valido),
+por equipo (team_id) y competicion-temporada; with_call_ups, cuantos tienen alguna
+convocatoria del equipo. Un registro cuyo side no es el del equipo en ese partido se
+descarta (discarded_records). Cada jugador cuenta una vez por partido: sus registros
+duplicados se unen y un campo que discrepa entre ellos queda sin dato.
+Cada convocatoria se normaliza con las reglas de NORMALIZACION (abajo).
+  of            convocatorias del jugador (call_ups)
+  starts        substitute false explicito; nunca se deduce de los minutos
+  appearances   value: jugadas; matches: con participacion conocida (jugo o no utilizado)
+  minutes       los normalizados (un no utilizado suma 0)
+  goals         los normalizados
+  assists       los normalizados
+value = suma de los validos; matches = convocatorias con dato; sin ninguno, value null
+(nunca 0). Un valor con matches < of es parcial. call_ups: total, played, unused,
+unknown, contradictions (de participacion), mismatches (goles o asistencias contra las
+incidencias), team_warnings, duplicate_records y discarded_records (lado ilegible).
+El equipo es el del lado (side) de la alineacion; un team_id o source_team_id distinto
+es una advertencia (issues), no un descarte.
+
+NORMALIZACION DE CONVOCATORIAS
+Las mismas reglas para acumulados, /players/{id}/matches (campo normalized de cada
+fila) y /matches/{id}/lineups (normalized.players). Los registros originales no se
+tocan: el normalizado va al lado, con el origen de cada cifra.
+  participation  played | unused | unknown, con basis:
+    played   minutes / played_flag (played true o minutos > 0), substitution_in
+             (entrada en las incidencias), starting_lineup (titular de una alineacion
+             confirmada)
+    unused   unused_substitute: suplente sin minutos ni entrada, cuyas estadisticas son
+             solo las de banquillo (totalShots, statisticsType), en una alineacion
+             confirmada con incidencias cuyas entradas de ese lado coinciden exactamente
+             con los suplentes con minutos (una seccion guardada no basta por si sola)
+    unknown  contradiction (played true con 0 minutos, played false con minutos o con
+             entrada/titularidad), stats_without_entry, events_without_entry,
+             insufficient_coverage
+  minutes   {value, source}: reported (minutes_played o statistics.minutesPlayed),
+            unused (0) o sin dato. Nunca se derivan de los eventos.
+  goals     statistics.goals; assists: statistics.goalAssist. source: reported,
+            omitted_zero (clave omitida en una actuacion con minutos > 0 y al menos
+            MIN_CLAVES_SUSTANCIALES claves individuales: regla de esta fuente, que omite
+            los ceros; no es un 0 del payload), unused (0) o sin dato.
+  Contraste: si las incidencias cuadran con el marcador (goles regular, penalty y
+  ownGoal; ninguna otra clase), los goles de cada jugador (regular y penalty, nunca el
+  autogol ni una tanda, que es otro incidentType) y sus asistencias (assist1) deben
+  coincidir con goals/goalAssist; si no, esa cifra queda sin dato y se anota
+  goals_mismatch / assists_mismatch en issues. Nunca se suman las dos fuentes.
+  issues: participation_contradiction, stats_without_entry, events_without_entry,
+          goals_mismatch, assists_mismatch, team_id_mismatch, source_team_mismatch.
+  evidence: por cada incidencia de participacion o de goles/asistencias, el jugador, el
+          partido, los campos en conflicto con sus valores originales (sin validar), las
+          fuentes (jugador_partido, originales:lineups, originales:incidents) y el
+          fetched_at de cada registro. Nada se resuelve a mano: queda para contrastarlo con
+          otras fuentes.
+  Discrepancia pendiente (exportacion del 21-10): Francisco Gallego (1982588) en J4,
+  Real Jaen 2-1 UD Ibiza (16599916). Suplente sin minutos ni entrada registrada (el lado
+  cuadra sus 5 cambios), pero sus estadisticas traen touches, totalPass, accuratePass,
+  expectedAssists y pases en campo rival: stats_without_entry, participacion sin resolver.
+  La regla del 0 no se aplica a xG, valoracion, otras estadisticas ni datos personales.
+height_cm (entero > 0) y preferred_foot (texto) salen de la ficha; last_shirt_number es
+el dorsal de la ultima convocatoria con fecha: historico, no necesariamente el actual.
 
 DETALLE DE PARTIDO
 Fuente: datos/partidos.json (partido normalizado), datos/equipos.json (nombres)

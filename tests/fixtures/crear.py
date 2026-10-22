@@ -29,6 +29,14 @@ def item(clave, local, visitante):
 def estadisticas(ident, periodos, fetched_at='2026-10-21T12:00:00+00:00'):
     return original(ident, 'statistics', {'statistics': [{'period': p, 'groups': g} for p, g in periodos]}, fetched_at)
 UNO, SOLO_COPA, SUPLENTE = 5001, 5002, 5003
+# Acumulados de jugadores: participación contradictoria, registros duplicados, un registro con el lado equivocado,
+# un jugador del rival y valores fuera de dominio.
+CONTRADICTORIO, DUPLICADO, RIVAL_JUGADOR, LADO_ERRONEO, VALORES_INVALIDOS = 5004, 5005, 5006, 5007, 5008
+# Normalización en FINALIZADO (alineación confirmada e incidencias que cuadran con el 0-2: penalti de UNO y autogol del
+# rival): sin clave de asistencia pero con una en las incidencias (contradicción), un gol en sus estadísticas que no
+# está en las incidencias (contradicción), un suplente con estadísticas pero sin minutos ni entrada, y un suplente rival
+# que entra sin minutos. En DERROTA_CASA, sin alineación ni incidencias, un suplente sin cobertura.
+SIN_CLAVE_ASISTENCIA, GOL_SIN_EVENTO, TOQUES_SIN_ENTRADA, RIVAL_ENTRA, RIVAL_AUTOGOL, SIN_COBERTURA = 5009, 5010, 5011, 5012, 5013, 5014
 
 
 def partido(ident, competicion, local, visitante, estado, marcador, kickoff, ronda, secciones):
@@ -62,11 +70,21 @@ def alineacion(ident, local, visitante, fetched_at):
     return original(ident, 'lineups', {'confirmed': True, 'home': lado(local), 'away': lado(visitante)}, fetched_at)
 
 
-def convocatoria(ident, jugador, lado, suplente, minutos, estadisticas, fetched_at):
-    return {'source': 'Sofascore', 'match_id': ident, 'team_id': JAEN, 'player_id': jugador, 'side': lado,
-            'source_team_id': JAEN, 'substitute': suplente, 'match_position': 'M', 'shirt_number': jugador % 100,
-            'minutes_played': minutos, 'played': (minutos > 0) if minutos is not None else None,
+SEGUN_MINUTOS = object()
+
+
+def convocatoria(ident, jugador, lado, suplente, minutos, estadisticas, fetched_at='2026-10-21T12:00:00+00:00',
+                 jugado=SEGUN_MINUTOS, equipo=JAEN, dorsal=None):
+    return {'source': 'Sofascore', 'match_id': ident, 'team_id': equipo, 'player_id': jugador, 'side': lado,
+            'source_team_id': equipo, 'substitute': suplente, 'match_position': 'M',
+            'shirt_number': jugador % 100 if dorsal is None else dorsal, 'minutes_played': minutos,
+            'played': ((minutos > 0) if minutos is not None else None) if jugado is SEGUN_MINUTOS else jugado,
             'statistics': estadisticas, 'fetched_at': fetched_at}
+
+
+def ficha(ident, nombre, posicion, altura, pie=None):
+    return {'source': 'Sofascore', 'player_id': ident, 'name': nombre, 'usual_position': posicion, 'country': 'Spain',
+            'birth_date': '2000-01-01', 'height_cm': altura, 'preferred_foot': pie, 'fetched_at': '2026-10-21T12:00:00+00:00'}
 
 
 def crear():
@@ -75,6 +93,11 @@ def crear():
     solo_copa = jugador_sofascore(SOLO_COPA, 'Jugador Sólo Copa', 'D', 180)
     suplente = jugador_sofascore(SUPLENTE, 'Jugador Sintético Suplente', 'D', 182)
     stats_uno = {'minutesPlayed': 90, 'totalShots': 2, 'goals': 1, 'goalAssist': 0, 'totalPass': 30, 'accuratePass': 25}
+    # Estadísticas sustanciales sin la clave goals (como hace la fuente con quien no marca) ni goalAssist.
+    stats_sin_asistencia = {'minutesPlayed': 90, 'totalShots': 0, 'totalPass': 40, 'accuratePass': 35, 'touches': 55}
+    stats_gol_sin_evento = {'minutesPlayed': 90, 'totalShots': 3, 'goals': 1, 'goalAssist': 0, 'totalPass': 12, 'touches': 30}
+    stats_toques = {'totalShots': 0, 'statisticsType': {'statisticsType': 'player'}, 'touches': 3, 'totalPass': 2}
+    stats_autogol = {'minutesPlayed': 90, 'totalShots': 0, 'goalAssist': 0, 'totalPass': 20, 'touches': 40, 'ownGoals': 1}
     datos = {
         'equipos': [{'source': 'Sofascore', 'team_id': t, 'name': n} for t, n in
                     ((JAEN, 'Real Jaén'), (RIVAL_A, 'Club Sintético A'), (RIVAL_B, 'Club Sintético B'),
@@ -107,12 +130,50 @@ def crear():
             {'source': 'Sofascore', 'player_id': SUPLENTE, 'name': 'Jugador Sintético Suplente', 'usual_position': 'D',
              'country': 'Spain', 'birth_date': '2000-01-01', 'height_cm': 182, 'preferred_foot': None,
              'fetched_at': '2026-10-21T12:00:00+00:00'},
+            ficha(CONTRADICTORIO, 'Jugador Contradictorio', 'D', 178, 'Right'),
+            ficha(DUPLICADO, 'Jugador Duplicado', 'F', None),
+            ficha(RIVAL_JUGADOR, 'Jugador del Rival', 'F', 181, 'Left'),
+            ficha(LADO_ERRONEO, 'Jugador Lado Erróneo', 'M', 170),
+            # Altura y pie fuera de dominio: sin dato.
+            ficha(VALORES_INVALIDOS, 'Jugador Valores Inválidos', 'G', True, 5),
+            ficha(SIN_CLAVE_ASISTENCIA, 'Jugador Sin Clave de Asistencia', 'M', 177),
+            ficha(GOL_SIN_EVENTO, 'Jugador Gol Sin Evento', 'F', 180),
+            ficha(TOQUES_SIN_ENTRADA, 'Jugador Toques Sin Entrada', 'M', 172),
+            ficha(RIVAL_ENTRA, 'Rival que Entra', 'F', 179),
+            ficha(RIVAL_AUTOGOL, 'Rival del Autogol', 'D', 186),
+            ficha(SIN_COBERTURA, 'Jugador Sin Cobertura', 'D', 181),
         ],
         'jugador_partido': [
             convocatoria(FINALIZADO, UNO, 'away', False, 90, stats_uno, '2026-10-21T12:00:00+00:00'),
             convocatoria(FINALIZADO, SUPLENTE, 'away', True, None, {'totalShots': 0}, '2026-10-21T12:00:00+00:00'),
             convocatoria(EN_COPA, UNO, 'away', False, 90, {'minutesPlayed': 90}, '2026-10-29T12:00:00+00:00'),
             convocatoria(EN_COPA, SOLO_COPA, 'away', False, 90, {'minutesPlayed': 90}, '2026-10-29T12:00:00+00:00'),
+            # Partidos no contados: finalizado sin marcador válido y alineación previa de un pendiente.
+            convocatoria(SIN_MARCADOR, UNO, 'away', False, 90, {'minutesPlayed': 90, 'goals': 2, 'goalAssist': 0}),
+            convocatoria(PENDIENTE, UNO, 'home', False, None, {}),
+            # EMPATE_CASA (local): suplente con minutos y asistencia, sin clave de goles (ausente, no 0); played true con
+            # 0 minutos (contradicción); un registro del Real Jaén en el lado visitante (se descarta) y uno del rival.
+            convocatoria(EMPATE_CASA, SUPLENTE, 'home', True, 25, {'minutesPlayed': 25, 'goalAssist': 1}),
+            convocatoria(EMPATE_CASA, CONTRADICTORIO, 'home', False, 0, {'minutesPlayed': 0, 'goals': 0, 'goalAssist': 0}, jugado=True),
+            convocatoria(EMPATE_CASA, LADO_ERRONEO, 'away', False, 90, {'minutesPlayed': 90, 'goals': 0, 'goalAssist': 0}),
+            convocatoria(EMPATE_CASA, RIVAL_JUGADOR, 'away', False, 90, {'minutesPlayed': 90, 'goals': 1}, equipo=RIVAL_B),
+            # DERROTA_CASA (local): played false con minutos (contradicción) y un registro duplicado idéntico.
+            convocatoria(DERROTA_CASA, CONTRADICTORIO, 'home', True, 30, {'minutesPlayed': 30, 'goals': 1}, jugado=False),
+            convocatoria(DERROTA_CASA, DUPLICADO, 'home', False, 90, {'minutesPlayed': 90, 'goals': 0, 'goalAssist': 0}, dorsal=9),
+            convocatoria(DERROTA_CASA, DUPLICADO, 'home', False, 90, {'minutesPlayed': 90, 'goals': 0, 'goalAssist': 0}, dorsal=9),
+            # MISMO_INSTANTE (visitante): ceros explícitos; duplicado con minutos distintos (sin dato de minutos) y otro
+            # dorsal; valores fuera de dominio (suplente texto, minutos booleanos, goles negativos, asistencia decimal).
+            convocatoria(MISMO_INSTANTE, CONTRADICTORIO, 'away', False, 90, {'minutesPlayed': 90, 'goals': 0, 'goalAssist': 0}),
+            convocatoria(MISMO_INSTANTE, DUPLICADO, 'away', False, 80, {'minutesPlayed': 80, 'goalAssist': 0}, jugado=True, dorsal=11),
+            convocatoria(MISMO_INSTANTE, DUPLICADO, 'away', False, 85, {'minutesPlayed': 85, 'goalAssist': 0}, jugado=True, dorsal=11),
+            convocatoria(MISMO_INSTANTE, VALORES_INVALIDOS, 'away', 'si', True, {'goals': -1, 'goalAssist': 1.0}, jugado=True, dorsal=True),
+            # SIN_FECHA (contado) no tiene convocatorias del Real Jaén.
+            convocatoria(FINALIZADO, SIN_CLAVE_ASISTENCIA, 'away', False, 90, stats_sin_asistencia),
+            convocatoria(FINALIZADO, GOL_SIN_EVENTO, 'away', False, 90, stats_gol_sin_evento),
+            convocatoria(FINALIZADO, TOQUES_SIN_ENTRADA, 'away', True, None, stats_toques),
+            convocatoria(FINALIZADO, RIVAL_ENTRA, 'home', True, None, {'totalShots': 0}, equipo=RIVAL_A),
+            convocatoria(FINALIZADO, RIVAL_AUTOGOL, 'home', False, 90, stats_autogol, equipo=RIVAL_A),
+            convocatoria(DERROTA_CASA, SIN_COBERTURA, 'home', True, None, {'totalShots': 0}),
         ],
         'originales': [
             evento(FINALIZADO, GRUPO_2), evento(PENDIENTE, GRUPO_2), evento(EN_COPA, COPA), evento(EN_GRUPO_1, GRUPO_1),
@@ -136,8 +197,24 @@ def crear():
                 {'groupName': 'Shots', 'statisticsItems': [item('shotsOnGoal', 2, 2)]}])]),
             # Sección guardada sin contenido: no son ceros.
             original(DERROTA_CASA, 'statistics', {'statistics': []}),
-            original(FINALIZADO, 'incidents', {'incidents': [{'incidentType': 'goal', 'time': 30, 'player': {'id': UNO}}]}),
-            alineacion(FINALIZADO, [], [(uno, 10, False, stats_uno), (suplente, 20, True, {'totalShots': 0})],
+            original(FINALIZADO, 'incidents', {'incidents': [
+                {'incidentType': 'period', 'text': 'FT', 'homeScore': 0, 'awayScore': 2},
+                {'incidentType': 'goal', 'incidentClass': 'penalty', 'time': 30, 'isHome': False, 'player': {'id': UNO},
+                 'assist1': {'id': SIN_CLAVE_ASISTENCIA}},
+                # Autogol del rival: suma al Real Jaén y no es gol de ningún jugador.
+                {'incidentType': 'goal', 'incidentClass': 'ownGoal', 'time': 60, 'isHome': True, 'player': {'id': RIVAL_AUTOGOL}},
+                {'incidentType': 'substitution', 'incidentClass': 'regular', 'time': 70, 'isHome': True,
+                 'playerIn': {'id': RIVAL_ENTRA}, 'playerOut': {'id': 9101}},
+                # Una tanda de penaltis no es un gol del jugador.
+                {'incidentType': 'penaltyShootout', 'incidentClass': 'scored', 'isHome': False, 'player': {'id': UNO}},
+            ]}),
+            alineacion(FINALIZADO,
+                       [(jugador_sofascore(RIVAL_AUTOGOL, 'Rival del Autogol', 'D', 186), 4, False, stats_autogol),
+                        (jugador_sofascore(RIVAL_ENTRA, 'Rival que Entra', 'F', 179), 18, True, {'totalShots': 0})],
+                       [(uno, 10, False, stats_uno), (suplente, 20, True, {'totalShots': 0}),
+                        (jugador_sofascore(SIN_CLAVE_ASISTENCIA, 'Jugador Sin Clave de Asistencia', 'M', 177), 6, False, stats_sin_asistencia),
+                        (jugador_sofascore(GOL_SIN_EVENTO, 'Jugador Gol Sin Evento', 'F', 180), 7, False, stats_gol_sin_evento),
+                        (jugador_sofascore(TOQUES_SIN_ENTRADA, 'Jugador Toques Sin Entrada', 'M', 172), 21, True, stats_toques)],
                        '2026-10-21T12:00:00+00:00'),
             alineacion(EN_COPA, [], [(uno_copa, 10, False, {'minutesPlayed': 90}), (solo_copa, 30, False, {'minutesPlayed': 90})],
                        '2026-10-29T12:00:00+00:00'),

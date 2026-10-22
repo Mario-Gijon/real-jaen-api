@@ -145,7 +145,11 @@ def detalle_partido(datos, ident, partes):
     registro = entrada['registro'] if entrada else {}
     meta = {'match_id':ident,'section':seccion,'source':'Sofascore','source_key':SECCIONES[seccion],'availability':estado,
             'fetched_at':registro.get('fetched_at'),'versions':entrada['versiones'] if entrada else 0,'note':NOTA_FETCHED_AT}
-    return 200, {'data':registro.get('payload'),'meta':meta}
+    respuesta = {'data':registro.get('payload'),'meta':meta}
+    if seccion == 'lineups':
+        # La participación de cada convocado según las reglas de esta fuente; el payload original no se toca.
+        respuesta['normalized'] = {'players': list(actuaciones_del_partido(datos, ident).values())}
+    return 200, respuesta
 
 PENDIENTES = ('notstarted', 'postponed')
 NOTA_RENDIMIENTO = ('Resultados de los partidos finalizados observados en cada competición del ámbito; '
@@ -229,46 +233,57 @@ def orden_cronologico(partido):
     momento = inicio(partido)
     return (momento is None, momento or 0, partido['match_id'])
 
-def marcador_valido(valor):
-    """Entero no negativo. bool es subclase de int en Python: True/False no son marcadores."""
+def entero_no_negativo(valor):
+    """bool es subclase de int en Python: True/False no son enteros aquí."""
     return type(valor) is int and valor >= 0
+
+def marcador_valido(valor):
+    """Un marcador es un entero no negativo."""
+    return entero_no_negativo(valor)
+
+def partidos_contados(datos, ident, c):
+    """Recuentos por estado de los partidos del equipo en la competición `c` y, por orden cronológico, los contados:
+    finalizados con marcador válido, con su resultado. Un finalizado sin marcador válido no cuenta (ni como 0-0)."""
+    partidos = sorted((m for m in datos['partidos'] if ident in (m['home_team_id'], m['away_team_id'])
+                       and (m['tournament_id'], m['season_id']) == (c['tournament_id'], c['season_id'])),
+                      key=orden_cronologico)
+    cuenta = {'in_scope': len(partidos), 'finished': 0, 'pending': 0, 'counted': 0,
+              'finished_without_valid_score': 0, 'unknown_status': 0}
+    resultados = []
+    for m in partidos:
+        if m['status'] in PENDIENTES:
+            cuenta['pending'] += 1
+            continue
+        if m['status'] != 'finished':
+            cuenta['unknown_status'] += 1
+            continue
+        cuenta['finished'] += 1
+        if not (marcador_valido(m.get('home_score')) and marcador_valido(m.get('away_score'))):
+            cuenta['finished_without_valid_score'] += 1
+            continue
+        lado = 'home' if m['home_team_id'] == ident else 'away'
+        favor, contra = (m['home_score'], m['away_score']) if lado == 'home' else (m['away_score'], m['home_score'])
+        cuenta['counted'] += 1
+        resultados.append({'match': m, 'side': lado, 'opponent_team_id': m['away_team_id'] if lado == 'home' else m['home_team_id'],
+                           'goals_for': favor, 'goals_against': contra,
+                           'result': 'win' if favor > contra else 'draw' if favor == contra else 'loss'})
+    return cuenta, resultados
 
 def rendimiento(datos, ident):
     """Balance del equipo en cada competición del ámbito, calculado sólo con sus partidos finalizados con marcador
     válido. Un finalizado sin marcador válido no cuenta (ni como 0-0) y se informa aparte; los pendientes tampoco."""
     competiciones = []
     for c in datos['competiciones']:
-        partidos = sorted((m for m in datos['partidos'] if ident in (m['home_team_id'], m['away_team_id'])
-                           and (m['tournament_id'], m['season_id']) == (c['tournament_id'], c['season_id'])),
-                          key=orden_cronologico)
-        cuenta = {'in_scope': len(partidos), 'finished': 0, 'pending': 0, 'counted': 0,
-                  'finished_without_valid_score': 0, 'unknown_status': 0}
+        cuenta, resultados = partidos_contados(datos, ident, c)
         balance = {'played': 0, 'wins': 0, 'draws': 0, 'losses': 0, 'goals_for': 0, 'goals_against': 0}
         lados = {lado: {'wins': 0, 'draws': 0, 'losses': 0} for lado in ('home', 'away')}
-        resultados = []
-        for m in partidos:
-            if m['status'] in PENDIENTES:
-                cuenta['pending'] += 1
-                continue
-            if m['status'] != 'finished':
-                cuenta['unknown_status'] += 1
-                continue
-            cuenta['finished'] += 1
-            if not (marcador_valido(m.get('home_score')) and marcador_valido(m.get('away_score'))):
-                cuenta['finished_without_valid_score'] += 1
-                continue
-            lado = 'home' if m['home_team_id'] == ident else 'away'
-            favor, contra = (m['home_score'], m['away_score']) if lado == 'home' else (m['away_score'], m['home_score'])
-            resultado = 'win' if favor > contra else 'draw' if favor == contra else 'loss'
-            clave = {'win': 'wins', 'draw': 'draws', 'loss': 'losses'}[resultado]
-            cuenta['counted'] += 1
+        for r in resultados:
+            clave = {'win': 'wins', 'draw': 'draws', 'loss': 'losses'}[r['result']]
             balance['played'] += 1
             balance[clave] += 1
-            balance['goals_for'] += favor
-            balance['goals_against'] += contra
-            lados[lado][clave] += 1
-            resultados.append({'match': m, 'side': lado, 'opponent_team_id': m['away_team_id'] if lado == 'home' else m['home_team_id'],
-                               'goals_for': favor, 'goals_against': contra, 'result': resultado})
+            balance['goals_for'] += r['goals_for']
+            balance['goals_against'] += r['goals_against']
+            lados[r['side']][clave] += 1
         balance['goal_difference'] = balance['goals_for'] - balance['goals_against']
         # Producción y concesión: los mismos partidos que el balance. «Últimos 3» son los tres contados más recientes
         # con fecha; la cobertura de cada media se calcula después, sin buscar partidos anteriores que la completen.
@@ -281,6 +296,249 @@ def rendimiento(datos, ident):
                       'undated': len(elegibles) - len(con_fecha)}
         competiciones.append(dict({'name': c['nombre'], 'season': c.get('temporada')}, **{k: c[k] for k in CAMPOS_AMBITO},
                                   matches=cuenta, record=balance, venues=lados, results=resultados, output=produccion))
+    return {'team_id': ident, 'competitions': competiciones}
+
+NOTA_JUGADORES = ('Acumulados de los jugadores observados en las convocatorias de los partidos contados (finalizados '
+                  'con marcador válido) de cada competición del ámbito. No es una plantilla completa ni necesariamente '
+                  'actual; cada cifra dice de cuántas convocatorias tiene dato.')
+
+def participacion(jugado, minutos):
+    """(confirmada, contradicción) según played y los minutos: played true (con minutos > 0 o sin ellos) o minutos > 0
+    sin played la confirman; played true con 0 minutos o played false con minutos > 0 se contradicen."""
+    con_minutos = minutos is not None and minutos > 0
+    if (jugado is True and minutos == 0) or (jugado is False and con_minutos):
+        return False, True
+    return jugado is True or (jugado is not False and con_minutos), False
+
+def comun(valores):
+    """El valor de un campo en los registros de una misma convocatoria: el común, o None si discrepan (1 y True
+    son distintos)."""
+    return valores[0] if len({(type(v), json.dumps(v, sort_keys=True)) for v in valores}) == 1 else None
+
+# Lo único que la fuente da de un suplente no utilizado: no prueba participación (totalShots=0 incluido).
+ESTADISTICAS_DE_BANQUILLO = {'totalShots', 'statisticsType'}
+# Una actuación con estadísticas sustanciales: minutos > 0 y al menos estas claves individuales además de minutos y
+# del resto de banquillo (en la exportación del 21-10 la menor actuación jugada trae 8).
+MIN_CLAVES_SUSTANCIALES = 3
+# Clases de gol de las incidencias que cuentan como goles del jugador; el autogol no, y una tanda de penaltis no es
+# un gol (otro incidentType). Una clase desconocida impide contrastar ese partido.
+CLASES_DE_GOL = {'regular', 'penalty'}
+
+def contexto_partido(datos, ident):
+    """Lo que alineaciones e incidencias originales dicen del partido, para resolver participaciones y contrastar
+    goles. `cobertura[lado]`: alineación confirmada, incidencias guardadas y las entradas de ese lado coinciden
+    exactamente con los suplentes con minutos (una sección guardada no basta por sí sola). `goles` es None si las
+    incidencias no cuadran con el marcador o traen una clase de gol desconocida: entonces no se contrasta."""
+    partido = next((m for m in datos['partidos'] if m['match_id'] == ident), {})
+    alineacion = (datos['originales'].get((ident, 'lineups')) or {}).get('registro', {}).get('payload')
+    incidencias = ((datos['originales'].get((ident, 'incidents')) or {}).get('registro', {}).get('payload') or {})
+    incidencias = incidencias.get('incidents') if isinstance(incidencias, dict) else None
+    confirmada = isinstance(alineacion, dict) and alineacion.get('confirmed') is True
+    lista = [i for i in incidencias if isinstance(i, dict)] if isinstance(incidencias, list) and incidencias else None
+    def jugador(valor):
+        return valor.get('id') if isinstance(valor, dict) else None
+    entradas = {lado: set() for lado in ('home', 'away')}
+    con_eventos = set()
+    goles, asistencias, clases = {}, {}, []
+    for i in lista or []:
+        lado = 'home' if i.get('isHome') is True else 'away' if i.get('isHome') is False else None
+        if i.get('incidentType') == 'substitution' and lado:
+            entradas[lado].add(jugador(i.get('playerIn')))
+            con_eventos.add(jugador(i.get('playerOut')))
+        elif i.get('incidentType') in ('card', 'goal'):
+            con_eventos.add(jugador(i.get('player')))
+        if i.get('incidentType') == 'goal':
+            clases.append(i.get('incidentClass'))
+            if i.get('incidentClass') in CLASES_DE_GOL:
+                goles[jugador(i.get('player'))] = goles.get(jugador(i.get('player')), 0) + 1
+                if jugador(i.get('assist1')) is not None:
+                    asistencias[jugador(i.get('assist1'))] = asistencias.get(jugador(i.get('assist1')), 0) + 1
+    cobertura = {}
+    for lado in ('home', 'away'):
+        usados = set()
+        for e in ((alineacion or {}).get(lado) or {}).get('players') or [] if confirmada else []:
+            minutos = (e.get('statistics') or {}).get('minutesPlayed') if isinstance(e, dict) else None
+            if isinstance(e, dict) and e.get('substitute') is True and entero_no_negativo(minutos) and minutos > 0:
+                usados.add(jugador(e.get('player')))
+        cobertura[lado] = confirmada and lista is not None and usados == entradas[lado]
+    marcador = (partido.get('home_score'), partido.get('away_score'))
+    contrastable = (lista is not None and all(c in CLASES_DE_GOL | {'ownGoal'} for c in clases)
+                    and all(marcador_valido(v) for v in marcador) and len(clases) == sum(marcador))
+    return {'alineacion_confirmada': confirmada, 'entradas': entradas, 'con_eventos': con_eventos, 'cobertura': cobertura,
+            'goles': goles if contrastable else None, 'asistencias': asistencias if contrastable else None}
+
+def valor(dato, origen):
+    return {'value': dato, 'source': origen if dato is not None else None}
+
+def actuacion(filas, partido, contexto):
+    """La convocatoria de un jugador en un partido, normalizada con las reglas de esta fuente (una sola vez para
+    acumulados, ficha y alineaciones). Los registros duplicados se unen; un campo que discrepa o queda fuera de su
+    dominio no tiene dato. Participación `played`, `unused` o `unknown` con su base; minutos, goles y asistencias con
+    su origen: `reported` (lo da la fuente), `omitted_zero` (clave omitida en una actuación con estadísticas
+    sustanciales: regla del adaptador, no un cero explícito) o `unused` (no utilizado). Nunca minutos derivados.
+    Lo que contradice algo queda sin dato y como incidencia de calidad (`issues`), con su evidencia (`evidence`):
+    jugador, partido, campos en conflicto con los valores originales y fuentes, para poder contrastarla más adelante
+    con otras fuentes. Nada se resuelve a mano."""
+    def campo(obtener, valido):
+        v = comun([obtener(r) for r in filas])
+        return v if valido(v) else None
+    def estadisticas_de(r):
+        return r['statistics'] if isinstance(r.get('statistics'), dict) else {}
+    booleano = lambda v: type(v) is bool
+    lado = campo(lambda r: r.get('side'), lambda v: v in ('home', 'away'))
+    equipo = None if lado is None else partido[f'{lado}_team_id']
+    jugador = filas[0]['player_id']
+    incidencias = []
+    if any(r.get('team_id') != equipo for r in filas):
+        incidencias.append('team_id_mismatch')
+    if any(r.get('source_team_id') not in (None, equipo) for r in filas):
+        incidencias.append('source_team_mismatch')
+    suplente = campo(lambda r: r.get('substitute'), booleano)
+    jugado = campo(lambda r: r.get('played'), booleano)
+    # minutes_played y, si falta, statistics.minutesPlayed.
+    minutos = campo(lambda r: r['minutes_played'] if r.get('minutes_played') is not None else estadisticas_de(r).get('minutesPlayed'),
+                    entero_no_negativo)
+    # Las claves que traen todos los registros (un duplicado puede discrepar en otras).
+    claves = set.intersection(*(set(estadisticas_de(r)) for r in filas))
+    solo_banquillo = all(set(estadisticas_de(r)) <= ESTADISTICAS_DE_BANQUILLO | ({'minutesPlayed'} if minutos == 0 else set())
+                         for r in filas)
+    entra = lado is not None and jugador in contexto['entradas'][lado]
+    evidencias = []
+    def evidencia(codigo, campos, fuentes):
+        # Los valores tal como vienen en los registros (sin validar), para no perder la discrepancia.
+        evidencias.append({'issue': codigo, 'match_id': filas[0].get('match_id'), 'player_id': jugador, 'fields': campos,
+                           'sources': fuentes, 'records': [r.get('fetched_at') for r in filas]})
+    def participacion_original():
+        individuales = sorted(set().union(*(set(estadisticas_de(r)) for r in filas)) - ESTADISTICAS_DE_BANQUILLO)
+        return {'substitute': [r.get('substitute') for r in filas], 'played': [r.get('played') for r in filas],
+                'minutes_played': [r.get('minutes_played') for r in filas], 'statistics_keys': individuales,
+                'substitution_in': entra, 'lineup_confirmed': contexto['alineacion_confirmada'],
+                'substitutions_cover_side': contexto['cobertura'].get(lado) if lado else None}
+    FUENTES_PARTICIPACION = ['jugador_partido', 'originales:lineups', 'originales:incidents']
+    confirmada, contradiccion = participacion(jugado, minutos)
+    if contradiccion or (jugado is False and (entra or (suplente is False and contexto['alineacion_confirmada']))):
+        estado, base = 'unknown', 'contradiction'
+        incidencias.append('participation_contradiction')
+        evidencia('participation_contradiction', participacion_original(), FUENTES_PARTICIPACION)
+    elif confirmada:
+        estado, base = 'played', 'minutes' if minutos else 'played_flag'
+    elif entra:
+        estado, base = 'played', 'substitution_in'
+    elif suplente is False and contexto['alineacion_confirmada']:
+        estado, base = 'played', 'starting_lineup'
+    elif suplente is True and lado is not None and contexto['cobertura'][lado] and solo_banquillo and jugador not in contexto['con_eventos']:
+        estado, base = 'unused', 'unused_substitute'
+    else:
+        estado = 'unknown'
+        base = ('stats_without_entry' if not solo_banquillo else 'events_without_entry' if jugador in contexto['con_eventos']
+                else 'insufficient_coverage')
+        if base != 'insufficient_coverage':
+            incidencias.append(base)
+            evidencia(base, participacion_original(), FUENTES_PARTICIPACION)
+    sustanciales = (minutos is not None and minutos > 0
+                    and len(claves - ESTADISTICAS_DE_BANQUILLO - {'minutesPlayed'}) >= MIN_CLAVES_SUSTANCIALES)
+    def contribucion(clave, eventos, codigo):
+        if estado == 'unused':
+            return valor(0, 'unused')
+        if estado != 'played':
+            return valor(None, None)
+        presente = comun([clave in estadisticas_de(r) for r in filas])
+        if presente:
+            dato = campo(lambda r: estadisticas_de(r).get(clave), entero_no_negativo)
+            origen = 'reported'
+        elif presente is False and sustanciales:
+            dato, origen = 0, 'omitted_zero'
+        else:
+            dato, origen = None, None
+        if dato is not None and eventos is not None and dato != eventos.get(jugador, 0):
+            incidencias.append(codigo)
+            evidencia(codigo, {f'statistics.{clave}': [estadisticas_de(r).get(clave) for r in filas], 'source_rule': origen,
+                                'incidents': eventos.get(jugador, 0)},
+                      ['jugador_partido:statistics', 'originales:incidents'])
+            return valor(None, None)
+        return valor(dato, origen)
+    return {
+        'player_id': jugador, 'side': lado, 'team_id': equipo,
+        'starter': None if suplente is None else not suplente,
+        'participation': estado, 'basis': base,
+        'minutes': valor(minutos, 'reported') if estado == 'played' else valor(0, 'unused') if estado == 'unused' else valor(None, None),
+        'goals': contribucion('goals', contexto['goles'], 'goals_mismatch'),
+        'assists': contribucion('goalAssist', contexto['asistencias'], 'assists_mismatch'),
+        'shirt_number': campo(lambda r: r.get('shirt_number'), entero_no_negativo),
+        'duplicate_records': len(filas) - 1,
+        'issues': incidencias,
+        'evidence': evidencias,
+    }
+
+def actuaciones_del_partido(datos, ident, contexto=None):
+    """Todas las convocatorias normalizadas de un partido del ámbito, por jugador (ambos equipos)."""
+    partido = next(m for m in datos['partidos'] if m['match_id'] == ident)
+    contexto = contexto or contexto_partido(datos, ident)
+    grupos = {}
+    for r in datos['jugador_partido']:
+        if r.get('match_id') == ident and type(r.get('player_id')) is int:
+            grupos.setdefault(r['player_id'], []).append(r)
+    return {jugador: actuacion(filas, partido, contexto) for jugador, filas in grupos.items()}
+
+def suma(valores, de):
+    """Total de los valores con dato (`matches`) de `de` convocatorias; sin ninguno, None (nunca 0)."""
+    validos = [v for v in valores if v is not None]
+    return {'value': sum(validos) if validos else None, 'matches': len(validos), 'of': de}
+
+def acumulados_jugadores(datos, ident):
+    """Acumulados de cada jugador del equipo en cada competición del ámbito, sobre los mismos partidos contados que el
+    balance, con las convocatorias normalizadas (`actuacion`). El equipo es el del lado de la alineación: un team_id
+    o source_team_id discrepante se conserva como advertencia. Titularidades por `substitute` explícito; partidos
+    jugados sobre las convocatorias con participación conocida (jugó o no utilizado); minutos, goles y asistencias
+    de las convocatorias que los tienen (un no utilizado suma 0)."""
+    fichas = {p['player_id']: p for p in datos['jugadores']}
+    competiciones = []
+    for c in datos['competiciones']:
+        cuenta, resultados = partidos_contados(datos, ident, c)
+        con_fecha = {r['match']['match_id'] for r in resultados if inicio(r['match']) is not None}
+        convocatorias, descartados = {}, 0
+        for r in resultados:  # orden cronológico
+            for jugador, a in actuaciones_del_partido(datos, r['match']['match_id']).items():
+                if a['side'] is None:
+                    descartados += 1 if any(f.get('team_id') == ident for f in datos['jugador_partido']
+                                            if f.get('match_id') == r['match']['match_id'] and f.get('player_id') == jugador) else 0
+                elif a['team_id'] == ident:
+                    convocatorias.setdefault(jugador, []).append(dict(a, partido=r['match']['match_id']))
+        jugadores = []
+        for jugador, filas in sorted(convocatorias.items()):
+            n = len(filas)
+            ficha = fichas.get(jugador) or {}
+            altura = ficha.get('height_cm')
+            pie = ficha.get('preferred_foot')
+            # El de su última convocatoria con fecha: histórico, no necesariamente el actual.
+            ultima = next((f for f in reversed(filas) if f['partido'] in con_fecha), None)
+            jugadas = sum(f['participation'] == 'played' for f in filas)
+            conocidas = sum(f['participation'] != 'unknown' for f in filas)
+            jugadores.append({
+                'player_id': jugador, 'name': ficha.get('name'), 'usual_position': ficha.get('usual_position'),
+                'height_cm': altura if entero_no_negativo(altura) and altura > 0 else None,
+                'preferred_foot': pie if isinstance(pie, str) else None,
+                'last_shirt_number': ultima['shirt_number'] if ultima else None,
+                'call_ups': n,
+                'starts': suma([None if f['starter'] is None else int(f['starter']) for f in filas], n),
+                'appearances': {'value': jugadas, 'matches': conocidas, 'of': n},
+                'minutes': suma([f['minutes']['value'] for f in filas], n),
+                'goals': suma([f['goals']['value'] for f in filas], n),
+                'assists': suma([f['assists']['value'] for f in filas], n),
+            })
+        todas = [f for fs in convocatorias.values() for f in fs]
+        competiciones.append(dict({'name': c['nombre'], 'season': c.get('temporada')}, **{k: c[k] for k in CAMPOS_AMBITO},
+                                  matches={'counted': cuenta['counted'], 'with_call_ups': len({f['partido'] for f in todas})},
+                                  call_ups={'total': len(todas),
+                                            'played': sum(f['participation'] == 'played' for f in todas),
+                                            'unused': sum(f['participation'] == 'unused' for f in todas),
+                                            'unknown': sum(f['participation'] == 'unknown' for f in todas),
+                                            'contradictions': sum('participation_contradiction' in f['issues'] for f in todas),
+                                            'mismatches': sum(any(i in f['issues'] for i in ('goals_mismatch', 'assists_mismatch')) for f in todas),
+                                            'team_warnings': sum(any(i in f['issues'] for i in ('team_id_mismatch', 'source_team_mismatch')) for f in todas),
+                                            'duplicate_records': sum(f['duplicate_records'] for f in todas),
+                                            'discarded_records': descartados},
+                                  players=jugadores))
     return {'team_id': ident, 'competitions': competiciones}
 
 def consultar(datos, ruta):
@@ -311,6 +569,8 @@ def consultar(datos, ruta):
     sub = partes[4]
     if tipo == 'teams' and sub == 'performance':
         return 200, {'data': rendimiento(datos, ident), 'meta': {'note': NOTA_RENDIMIENTO}}
+    if tipo == 'teams' and sub == 'player-stats':
+        return 200, {'data': acumulados_jugadores(datos, ident), 'meta': {'note': NOTA_JUGADORES}}
     if tipo == 'teams' and sub == 'matches':
         resultado = [m for m in datos['partidos'] if ident in (m['home_team_id'],m['away_team_id'])]
     elif tipo == 'teams' and sub == 'players':
@@ -319,7 +579,9 @@ def consultar(datos, ruta):
         return 200, {'data':resultado,'meta':{'count':len(resultado),'scope':'Jugadores observados en convocatorias; no es una plantilla completa ni necesariamente actual.'}}
     elif tipo == 'players' and sub == 'matches':
         partidos = {m['match_id']:m for m in datos['partidos']}
-        resultado = [dict(r,match=partidos[r['match_id']]) for r in datos['jugador_partido'] if r['player_id']==ident]
+        # Cada convocatoria con su versión normalizada (las mismas reglas que acumulados y alineaciones).
+        normalizadas = {m: actuaciones_del_partido(datos, m).get(ident) for m in {r['match_id'] for r in datos['jugador_partido'] if r['player_id']==ident}}
+        resultado = [dict(r,match=partidos[r['match_id']],normalized=normalizadas[r['match_id']]) for r in datos['jugador_partido'] if r['player_id']==ident]
     else:
         return 404, {'error':'Ruta inexistente'}
     return 200, {'data':resultado,'meta':{'count':len(resultado)}}

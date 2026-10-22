@@ -336,6 +336,60 @@ class RendimientoExportacion(unittest.TestCase):
         self.assertEqual(salida['undated'], 0)
 
 
+class AcumuladosJugadoresExportacion(unittest.TestCase):
+    def test_acumulados_de_la_exportacion(self):
+        estado, cuerpo = consultar('/api/v1/teams/2841/player-stats')
+        [c] = cuerpo['data']['competitions']
+        self.assertEqual((estado, c['tournament_id'], c['season_id']), (200, 94191, 97382))
+        self.assertEqual(c['matches'], {'counted': 8, 'with_call_ups': 8})
+        # 170 convocatorias: 125 jugadas, 44 suplentes no utilizados (alineación confirmada y sustituciones que cuadran)
+        # y 1 sin resolver (Francisco Gallego en J4: estadísticas de toques sin minutos ni entrada).
+        self.assertEqual(c['call_ups'], {'total': 170, 'played': 125, 'unused': 44, 'unknown': 1, 'contradictions': 0,
+                                         'mismatches': 0, 'team_warnings': 0, 'duplicate_records': 0, 'discarded_records': 0})
+        jugadores = {p['player_id']: p for p in c['players']}
+        self.assertEqual(len(jugadores), 25)
+        total = lambda clave: sum(p[clave]['value'] or 0 for p in jugadores.values())
+        self.assertEqual((total('starts'), total('appearances'), total('minutes'), total('goals'), total('assists')), (88, 125, 7898, 12, 7))
+        parciales = {(p['player_id'], k) for p in jugadores.values() for k in ('starts', 'appearances', 'minutes', 'goals', 'assists')
+                     if p[k]['matches'] < p[k]['of']}
+        self.assertEqual(parciales, {(1982588, k) for k in ('appearances', 'minutes', 'goals', 'assists')})
+        cifras = lambda p: {k: (p[k]['value'], p[k]['matches'], p[k]['of']) for k in ('starts', 'appearances', 'minutes', 'goals', 'assists')}
+        self.assertEqual(cifras(jugadores[942663]), {'starts': (6, 7, 7), 'appearances': (7, 7, 7), 'minutes': (504, 7, 7),
+                                                     'goals': (6, 7, 7), 'assists': (0, 7, 7)})
+        self.assertEqual(cifras(jugadores[1982588]), {'starts': (0, 8, 8), 'appearances': (5, 7, 8), 'minutes': (70, 7, 8),
+                                                      'goals': (0, 7, 8), 'assists': (0, 7, 8)})
+        # Salvi: no utilizado en los 8 (0 minutos por no haber jugado, nunca «sin datos» ni minutos inventados).
+        self.assertEqual(cifras(jugadores[1086428]), {'starts': (0, 8, 8), 'appearances': (0, 8, 8), 'minutes': (0, 8, 8),
+                                                      'goals': (0, 8, 8), 'assists': (0, 8, 8)})
+        self.assertEqual((jugadores[942663]['name'], jugadores[942663]['height_cm'], jugadores[942663]['last_shirt_number']),
+                         ('Marco Siverio Toro', 184, 9))
+
+    def test_goles_y_asistencias_cuadran_con_las_incidencias(self):
+        datos = DATOS_REALES
+        for m in (m for m in datos['partidos'] if m['status'] == 'finished'):
+            contexto = api.contexto_partido(datos, m['match_id'])
+            self.assertIsNotNone(contexto['goles'], m['match_id'])
+            self.assertEqual(contexto['cobertura'], {'home': True, 'away': True}, m['match_id'])
+            actuaciones = api.actuaciones_del_partido(datos, m['match_id']).values()
+            for lado in ('home', 'away'):
+                goles = sum(a['goals']['value'] or 0 for a in actuaciones if a['side'] == lado)
+                self.assertEqual(goles, m[f'{lado}_score'], (m['match_id'], lado))
+            self.assertFalse([a for a in actuaciones if 'goals_mismatch' in a['issues'] or 'assists_mismatch' in a['issues']])
+        # El único caso sin resolver de ambos equipos.
+        desconocidas = [(m['match_id'], a['player_id'], a['basis']) for m in datos['partidos'] if m['status'] == 'finished'
+                        for a in api.actuaciones_del_partido(datos, m['match_id']).values() if a['participation'] == 'unknown']
+        self.assertEqual(desconocidas, [(16599916, 1982588, 'stats_without_entry')])
+        # Discrepancia pendiente, con su evidencia: suplente sin minutos ni entrada (el lado cuadra sus 5 cambios) pero
+        # con estadísticas de toques y pases. Se conserva tal cual para contrastarla con otras fuentes.
+        [evidencia] = api.actuaciones_del_partido(datos, 16599916)[1982588]['evidence']
+        self.assertEqual(evidencia['fields'], {
+            'substitute': [True], 'played': [None], 'minutes_played': [None],
+            'statistics_keys': ['accurateOppositionHalfPasses', 'accuratePass', 'expectedAssists', 'totalOppositionHalfPasses',
+                                'totalPass', 'touches'],
+            'substitution_in': False, 'lineup_confirmed': True, 'substitutions_cover_side': True})
+        self.assertEqual(evidencia['records'], ['2026-10-21T12:07:34+00:00'])
+
+
 class ServidorHTTP(unittest.TestCase):
     """Arranca api.py de verdad (otro puerto, mismos datos) y consulta por HTTP."""
 

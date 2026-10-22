@@ -77,10 +77,12 @@ class Ambito(unittest.TestCase):
 
     def test_jugadores_y_convocatorias_solo_del_ambito(self):
         cuerpo = consultar(f'/api/v1/teams/{crear.JAEN}/players')[1]
-        self.assertEqual(sorted(p['player_id'] for p in cuerpo['data']), [crear.UNO, crear.SUPLENTE])
+        self.assertEqual(sorted(p['player_id'] for p in cuerpo['data']),
+                         [crear.UNO, crear.SUPLENTE, crear.CONTRADICTORIO, crear.DUPLICADO, crear.LADO_ERRONEO, crear.VALORES_INVALIDOS,
+                          crear.SIN_CLAVE_ASISTENCIA, crear.GOL_SIN_EVENTO, crear.TOQUES_SIN_ENTRADA, crear.SIN_COBERTURA])
         self.assertEqual(consultar(f'/api/v1/players/{crear.SOLO_COPA}'), (404, {'error': 'Jugador fuera del ámbito de esta versión'}))
         partidos = consultar(f'/api/v1/players/{crear.UNO}/matches')[1]['data']
-        self.assertEqual([r['match_id'] for r in partidos], [crear.FINALIZADO])
+        self.assertEqual([r['match_id'] for r in partidos], [crear.FINALIZADO, crear.SIN_MARCADOR, crear.PENDIENTE])
 
     def test_la_ficha_no_sale_de_un_partido_excluido(self):
         # La ficha guardada es la de Copa (más reciente): se rehace con la alineación del Grupo 2.
@@ -212,6 +214,204 @@ class Rendimiento(unittest.TestCase):
         self.assertEqual(consultar('/api/v1/teams/1/performance'), (404, {'error': 'Entidad no encontrada'}))
 
 
+class Normalizacion(unittest.TestCase):
+    """Una convocatoria normalizada con las reglas de esta fuente: participación, minutos, goles y asistencias."""
+
+    def actuacion(self, partido, jugador):
+        return api.actuaciones_del_partido(DATOS, partido)[jugador]
+
+    def resumen(self, partido, jugador):
+        a = self.actuacion(partido, jugador)
+        return (a['participation'], a['basis'], a['minutes']['value'], a['goals'], a['assists'], a['issues'])
+
+    def test_goles_y_asistencias_omitidos_son_cero_en_una_actuacion_sustancial(self):
+        # Sin clave goals en estadísticas sustanciales: 0 por regla de esta fuente, no un 0 explícito del payload.
+        a = self.actuacion(crear.FINALIZADO, crear.RIVAL_AUTOGOL)
+        self.assertEqual((a['goals'], a['assists']), ({'value': 0, 'source': 'omitted_zero'}, {'value': 0, 'source': 'reported'}))
+        # El explícito se conserva como informado.
+        self.assertEqual(self.actuacion(crear.FINALIZADO, crear.UNO)['goals'], {'value': 1, 'source': 'reported'})
+
+    def test_sin_estadisticas_sustanciales_la_omision_no_es_cero(self):
+        # 25 minutos con sólo goalAssist: no hay base para leer la ausencia de goals como 0.
+        self.assertEqual(self.resumen(crear.EMPATE_CASA, crear.SUPLENTE),
+                         ('played', 'minutes', 25, {'value': None, 'source': None}, {'value': 1, 'source': 'reported'}, []))
+
+    def test_el_penalti_cuenta_y_el_autogol_y_la_tanda_no(self):
+        contexto = api.contexto_partido(DATOS, crear.FINALIZADO)
+        # Penalti de UNO; el autogol no es gol de su autor y la tanda no es un incidentType goal.
+        self.assertEqual(contexto['goles'], {crear.UNO: 1})
+        self.assertEqual(contexto['asistencias'], {crear.SIN_CLAVE_ASISTENCIA: 1})
+        self.assertEqual(self.actuacion(crear.FINALIZADO, crear.UNO)['issues'], [])
+
+    def test_lo_que_contradice_a_las_incidencias_queda_sin_dato_y_como_incidencia(self):
+        # Estadísticas sin asistencia frente a una asistencia en las incidencias; un gol que las incidencias no tienen.
+        self.assertEqual(self.resumen(crear.FINALIZADO, crear.SIN_CLAVE_ASISTENCIA)[4:],
+                         ({'value': None, 'source': None}, ['assists_mismatch']))
+        self.assertEqual(self.resumen(crear.FINALIZADO, crear.GOL_SIN_EVENTO)[3:],
+                         ({'value': None, 'source': None}, {'value': 0, 'source': 'reported'}, ['goals_mismatch']))
+
+    def test_sin_cuadrar_con_el_marcador_no_se_contrasta(self):
+        # EMPATE_CASA no tiene incidencias: no hay contraste (ni contradicción).
+        self.assertIsNone(api.contexto_partido(DATOS, crear.EMPATE_CASA)['goles'])
+
+    def test_suplente_no_utilizado_con_cobertura_de_sustituciones(self):
+        # Alineación confirmada, las entradas del lado coinciden con los suplentes con minutos y sólo el resto de banquillo.
+        self.assertEqual(self.resumen(crear.FINALIZADO, crear.SUPLENTE),
+                         ('unused', 'unused_substitute', 0, {'value': 0, 'source': 'unused'}, {'value': 0, 'source': 'unused'}, []))
+
+    def test_totalshots_cero_no_prueba_participacion_y_sin_cobertura_queda_desconocido(self):
+        # DERROTA_CASA no tiene alineación ni incidencias: {'totalShots': 0} no resuelve nada.
+        self.assertEqual(self.resumen(crear.DERROTA_CASA, crear.SIN_COBERTURA)[:3], ('unknown', 'insufficient_coverage', None))
+
+    def test_estadisticas_sin_entrada_quedan_desconocidas(self):
+        self.assertEqual(self.resumen(crear.FINALIZADO, crear.TOQUES_SIN_ENTRADA)[:3], ('unknown', 'stats_without_entry', None))
+        self.assertEqual(self.actuacion(crear.FINALIZADO, crear.TOQUES_SIN_ENTRADA)['issues'], ['stats_without_entry'])
+
+    def test_cada_incidencia_conserva_su_evidencia(self):
+        # Jugador, partido, campos en conflicto con los valores originales y fuentes; nada se resuelve a mano.
+        [evidencia] = self.actuacion(crear.FINALIZADO, crear.TOQUES_SIN_ENTRADA)['evidence']
+        self.assertEqual((evidencia['issue'], evidencia['match_id'], evidencia['player_id']),
+                         ('stats_without_entry', crear.FINALIZADO, crear.TOQUES_SIN_ENTRADA))
+        self.assertEqual(evidencia['fields']['statistics_keys'], ['totalPass', 'touches'])
+        self.assertEqual((evidencia['fields']['minutes_played'], evidencia['fields']['substitution_in']), ([None], False))
+        self.assertEqual(evidencia['sources'], ['jugador_partido', 'originales:lineups', 'originales:incidents'])
+        [evidencia] = self.actuacion(crear.FINALIZADO, crear.GOL_SIN_EVENTO)['evidence']
+        self.assertEqual((evidencia['issue'], evidencia['fields']['statistics.goals'], evidencia['fields']['incidents']),
+                         ('goals_mismatch', [1], 0))
+        [evidencia] = self.actuacion(crear.EMPATE_CASA, crear.CONTRADICTORIO)['evidence']
+        self.assertEqual((evidencia['fields']['played'], evidencia['fields']['minutes_played']), ([True], [0]))
+        self.assertEqual(self.actuacion(crear.FINALIZADO, crear.UNO)['evidence'], [])
+
+    def test_una_entrada_sin_minutos_es_participacion_sin_minutos_inventados(self):
+        # La entrada del rival basta para saber que jugó; sus minutos no se derivan.
+        self.assertEqual(self.resumen(crear.FINALIZADO, crear.RIVAL_ENTRA)[:3], ('played', 'substitution_in', None))
+        # Su lado ya no tiene cobertura completa (entra alguien sin minutos).
+        self.assertEqual(api.contexto_partido(DATOS, crear.FINALIZADO)['cobertura'], {'home': False, 'away': True})
+
+    def test_contradicciones_de_participacion(self):
+        for partido in (crear.EMPATE_CASA, crear.DERROTA_CASA):
+            self.assertEqual(self.resumen(partido, crear.CONTRADICTORIO)[:2], ('unknown', 'contradiction'))
+            self.assertEqual(self.actuacion(partido, crear.CONTRADICTORIO)['issues'], ['participation_contradiction'])
+
+    def test_el_equipo_es_el_del_lado_y_el_team_id_discrepante_es_advertencia(self):
+        a = self.actuacion(crear.EMPATE_CASA, crear.LADO_ERRONEO)
+        self.assertEqual((a['side'], a['team_id'], a['participation']), ('away', crear.RIVAL_B, 'played'))
+        self.assertEqual(a['issues'], ['team_id_mismatch', 'source_team_mismatch'])
+
+    def test_participacion(self):
+        for jugado, minutos, esperado in ((True, 90, (True, False)), (True, None, (True, False)), (None, 10, (True, False)),
+                                          (None, None, (False, False)), (False, None, (False, False)), (False, 0, (False, False)),
+                                          (None, 0, (False, False)), (True, 0, (False, True)), (False, 30, (False, True))):
+            self.assertEqual(api.participacion(jugado, minutos), esperado, (jugado, minutos))
+
+    def test_la_ficha_y_las_alineaciones_llevan_la_misma_normalizacion(self):
+        filas = consultar(f'/api/v1/players/{crear.SUPLENTE}/matches')[1]['data']
+        normalizadas = {f['match_id']: f['normalized'] for f in filas}
+        self.assertEqual(normalizadas[crear.FINALIZADO], self.actuacion(crear.FINALIZADO, crear.SUPLENTE))
+        # El registro original sigue intacto junto a la normalización.
+        self.assertIsNone(next(f for f in filas if f['match_id'] == crear.FINALIZADO)['minutes_played'])
+        estado, cuerpo = consultar(f'/api/v1/matches/{crear.FINALIZADO}/lineups')
+        self.assertEqual(estado, 200)
+        alineacion = {a['player_id']: a for a in cuerpo['normalized']['players']}
+        self.assertEqual(alineacion[crear.SUPLENTE], normalizadas[crear.FINALIZADO])
+        self.assertEqual(cuerpo['data']['confirmed'], True)
+
+
+class AcumuladosJugadores(unittest.TestCase):
+    """Acumulados por jugador sobre los partidos contados del balance, con las convocatorias normalizadas."""
+
+    def competicion(self, equipo=crear.JAEN):
+        estado, cuerpo = consultar(f'/api/v1/teams/{equipo}/player-stats')
+        self.assertEqual(estado, 200)
+        self.assertIn('No es una plantilla completa', cuerpo['meta']['note'])
+        [competicion] = cuerpo['data']['competitions']
+        return competicion
+
+    def jugadores(self, equipo=crear.JAEN):
+        return {p['player_id']: p for p in self.competicion(equipo)['players']}
+
+    @staticmethod
+    def cifras(jugador):
+        return {k: (jugador[k]['value'], jugador[k]['matches'], jugador[k]['of'])
+                for k in ('starts', 'appearances', 'minutes', 'goals', 'assists')}
+
+    def test_competicion_del_ambito_y_cobertura(self):
+        c = self.competicion()
+        self.assertEqual({k: c[k] for k in ('name', 'season', 'unique_tournament_id', 'tournament_id', 'season_id')},
+                         {'name': 'Primera Federación, Grupo 2', 'season': '26/27',
+                          'unique_tournament_id': 17073, 'tournament_id': 94191, 'season_id': 97382})
+        # Los 5 contados del balance; SIN_FECHA no tiene convocatorias del Real Jaén.
+        self.assertEqual(c['matches'], {'counted': 5, 'with_call_ups': 4})
+        self.assertEqual(c['call_ups'], {'total': 13, 'played': 8, 'unused': 1, 'unknown': 4, 'contradictions': 2, 'mismatches': 2,
+                                         'team_warnings': 0, 'duplicate_records': 2, 'discarded_records': 0})
+
+    def test_solo_partidos_contados_y_del_ambito(self):
+        # UNO: no cuentan el finalizado sin marcador válido, el pendiente ni la Copa.
+        uno = self.jugadores()[crear.UNO]
+        self.assertEqual(uno['call_ups'], 1)
+        self.assertEqual(self.cifras(uno), {'starts': (1, 1, 1), 'appearances': (1, 1, 1), 'minutes': (90, 1, 1),
+                                            'goals': (1, 1, 1), 'assists': (0, 1, 1)})
+        self.assertNotIn(crear.SOLO_COPA, self.jugadores())
+
+    def test_el_no_utilizado_cuenta_como_cero_y_completa_la_cifra(self):
+        # No utilizado en FINALIZADO (0) y 25 minutos en EMPATE_CASA, donde sus goles no se pueden leer.
+        self.assertEqual(self.cifras(self.jugadores()[crear.SUPLENTE]), {
+            'starts': (0, 2, 2), 'appearances': (1, 2, 2), 'minutes': (25, 2, 2), 'goals': (0, 1, 2), 'assists': (1, 2, 2)})
+
+    def test_lo_desconocido_sigue_parcial(self):
+        jugadores = self.jugadores()
+        self.assertEqual(self.cifras(jugadores[crear.CONTRADICTORIO]), {
+            'starts': (2, 3, 3), 'appearances': (1, 1, 3), 'minutes': (90, 1, 3), 'goals': (0, 1, 3), 'assists': (0, 1, 3)})
+        for jugador in (crear.TOQUES_SIN_ENTRADA, crear.SIN_COBERTURA):
+            self.assertEqual(self.cifras(jugadores[jugador])['appearances'], (0, 0, 1))
+            self.assertEqual(self.cifras(jugadores[jugador])['minutes'], (None, 0, 1))
+
+    def test_contradicciones_con_las_incidencias(self):
+        jugadores = self.jugadores()
+        self.assertEqual(self.cifras(jugadores[crear.SIN_CLAVE_ASISTENCIA])['assists'], (None, 0, 1))
+        self.assertEqual(self.cifras(jugadores[crear.SIN_CLAVE_ASISTENCIA])['goals'], (0, 1, 1))
+        self.assertEqual(self.cifras(jugadores[crear.GOL_SIN_EVENTO])['goals'], (None, 0, 1))
+
+    def test_duplicados_cuentan_una_vez_y_lo_que_discrepa_queda_sin_dato(self):
+        jugador = self.jugadores()[crear.DUPLICADO]
+        self.assertEqual(jugador['call_ups'], 2)
+        self.assertEqual(self.cifras(jugador), {'starts': (2, 2, 2), 'appearances': (2, 2, 2), 'minutes': (90, 1, 2),
+                                                'goals': (0, 1, 2), 'assists': (0, 2, 2)})
+        # El dorsal de su última convocatoria con fecha (MISMO_INSTANTE), no el de otra.
+        self.assertEqual(jugador['last_shirt_number'], 11)
+
+    def test_valores_fuera_de_dominio_quedan_sin_dato(self):
+        jugador = self.jugadores()[crear.VALORES_INVALIDOS]
+        self.assertEqual(self.cifras(jugador), {'starts': (None, 0, 1), 'appearances': (1, 1, 1), 'minutes': (None, 0, 1),
+                                                'goals': (None, 0, 1), 'assists': (None, 0, 1)})
+        self.assertEqual((jugador['height_cm'], jugador['preferred_foot'], jugador['last_shirt_number']), (None, None, None))
+
+    def test_datos_personales_en_la_respuesta_agregada(self):
+        jugadores = self.jugadores()
+        self.assertEqual({k: jugadores[crear.CONTRADICTORIO][k] for k in ('name', 'usual_position', 'height_cm', 'preferred_foot')},
+                         {'name': 'Jugador Contradictorio', 'usual_position': 'D', 'height_cm': 178, 'preferred_foot': 'Right'})
+        # La ficha de UNO se rehace sin la Copa.
+        self.assertEqual((jugadores[crear.UNO]['name'], jugadores[crear.UNO]['height_cm']), ('Jugador Sintético Uno', 175))
+
+    def test_separacion_por_equipo_segun_el_lado(self):
+        # El registro con team_id del Real Jaén en el lado del rival cuenta para el rival, con advertencia.
+        self.assertNotIn(crear.LADO_ERRONEO, self.jugadores())
+        self.assertNotIn(crear.RIVAL_JUGADOR, self.jugadores())
+        rival = self.competicion(crear.RIVAL_B)
+        self.assertEqual(rival['matches'], {'counted': 2, 'with_call_ups': 1})
+        self.assertEqual(rival['call_ups']['team_warnings'], 1)
+        jugadores = {p['player_id']: p for p in rival['players']}
+        # Sin estadísticas sustanciales (sólo goals), su asistencia omitida no se lee como 0.
+        self.assertEqual(self.cifras(jugadores[crear.RIVAL_JUGADOR]), {
+            'starts': (1, 1, 1), 'appearances': (1, 1, 1), 'minutes': (90, 1, 1), 'goals': (1, 1, 1), 'assists': (None, 0, 1)})
+        self.assertEqual(self.cifras(jugadores[crear.LADO_ERRONEO])['minutes'], (90, 1, 1))
+
+    def test_equipo_sin_partidos_en_el_ambito_y_equipo_desconocido(self):
+        c = self.competicion(crear.RIVAL_COPA)
+        self.assertEqual((c['matches'], c['players']), ({'counted': 0, 'with_call_ups': 0}, []))
+        self.assertEqual(consultar('/api/v1/teams/1/player-stats'), (404, {'error': 'Entidad no encontrada'}))
+
+
 class ServidorHTTP(unittest.TestCase):
     """Arranca api.py de verdad con la muestra sintética y consulta por HTTP."""
 
@@ -249,6 +449,7 @@ class ServidorHTTP(unittest.TestCase):
         for ruta, estado in (('/health', 200), ('/api/v1/scope', 200), (f'/api/v1/teams/{crear.JAEN}/matches', 200),
                              (f'/api/v1/teams/{crear.JAEN}/players', 200), (f'/api/v1/players/{crear.UNO}/matches', 200),
                              (f'/api/v1/teams/{crear.JAEN}/performance', 200), ('/api/v1/teams/1/performance', 404),
+                             (f'/api/v1/teams/{crear.JAEN}/player-stats', 200),
                              (f'/api/v1/matches/{crear.FINALIZADO}/lineups', 200), (f'/api/v1/matches/{crear.EN_COPA}', 404),
                              (f'/api/v1/matches/{crear.EN_COPA}/lineups', 404), ('/api/v1/teams/abc', 400),
                              (f'/api/v1/teams/{crear.JAEN}?x=1', 400)):
