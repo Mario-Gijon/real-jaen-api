@@ -1,0 +1,35 @@
+[
+ {
+  "source": "Sofascore",
+  "player_id": 5001,
+  "name": "Jugador Sintético Uno (Copa)",
+  "usual_position": "F",
+  "country": "Spain",
+  "birth_date": "2000-01-01",
+  "height_cm": 199,
+  "preferred_foot": null,
+  "fetched_at": "2026-10-29T12:00:00+00:00"
+ },
+ {
+  "source": "Sofascore",
+  "player_id": 5002,
+  "name": "Jugador Sólo Copa",
+  "usual_position": "D",
+  "country": "Spain",
+  "birth_date": "2000-01-01",
+  "height_cm": 180,
+  "preferred_foot": null,
+  "fetched_at": "2026-10-29T12:00:00+00:00"
+ },
+ {
+  "source": "Sofascore",
+  "player_id": 5003,
+  "name": "Jugador Sintético Suplente",
+  "usual_position": "D",
+  "country": "Spain",
+  "birth_date": "2000-01-01",
+  "height_cm": 182,
+  "preferred_foot": null,
+  "fetched_at": "2026-10-21T12:00:00+00:00"
+ }
+]

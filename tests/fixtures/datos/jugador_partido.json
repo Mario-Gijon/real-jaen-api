@@ -1,0 +1,75 @@
+[
+ {
+  "source": "Sofascore",
+  "match_id": 1001,
+  "team_id": 2841,
+  "player_id": 5001,
+  "side": "away",
+  "source_team_id": 2841,
+  "substitute": false,
+  "match_position": "M",
+  "shirt_number": 1,
+  "minutes_played": 90,
+  "played": true,
+  "statistics": {
+   "minutesPlayed": 90,
+   "totalShots": 2,
+   "goals": 1,
+   "goalAssist": 0,
+   "totalPass": 30,
+   "accuratePass": 25
+  },
+  "fetched_at": "2026-10-21T12:00:00+00:00"
+ },
+ {
+  "source": "Sofascore",
+  "match_id": 1001,
+  "team_id": 2841,
+  "player_id": 5003,
+  "side": "away",
+  "source_team_id": 2841,
+  "substitute": true,
+  "match_position": "M",
+  "shirt_number": 3,
+  "minutes_played": null,
+  "played": null,
+  "statistics": {
+   "totalShots": 0
+  },
+  "fetched_at": "2026-10-21T12:00:00+00:00"
+ },
+ {
+  "source": "Sofascore",
+  "match_id": 1003,
+  "team_id": 2841,
+  "player_id": 5001,
+  "side": "away",
+  "source_team_id": 2841,
+  "substitute": false,
+  "match_position": "M",
+  "shirt_number": 1,
+  "minutes_played": 90,
+  "played": true,
+  "statistics": {
+   "minutesPlayed": 90
+  },
+  "fetched_at": "2026-10-29T12:00:00+00:00"
+ },
+ {
+  "source": "Sofascore",
+  "match_id": 1003,
+  "team_id": 2841,
+  "player_id": 5002,
+  "side": "away",
+  "source_team_id": 2841,
+  "substitute": false,
+  "match_position": "M",
+  "shirt_number": 2,
+  "minutes_played": 90,
+  "played": true,
+  "statistics": {
+   "minutesPlayed": 90
+  },
+  "fetched_at": "2026-10-29T12:00:00+00:00"
+ }
+]

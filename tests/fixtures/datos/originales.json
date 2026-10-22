@@ -1,0 +1,230 @@
+[
+ {
+  "event_id": 1001,
+  "key": "event",
+  "sub": "",
+  "fetched_at": "2026-10-21T12:00:00+00:00",
+  "payload": {
+   "event": {
+    "id": 1001,
+    "tournament": {
+     "id": 94191,
+     "name": "Primera Federacion, Group 2",
+     "uniqueTournament": {
+      "id": 17073
+     }
+    },
+    "season": {
+     "id": 97382,
+     "year": "26/27"
+    }
+   }
+  }
+ },
+ {
+  "event_id": 1002,
+  "key": "event",
+  "sub": "",
+  "fetched_at": "2026-10-21T12:00:00+00:00",
+  "payload": {
+   "event": {
+    "id": 1002,
+    "tournament": {
+     "id": 94191,
+     "name": "Primera Federacion, Group 2",
+     "uniqueTournament": {
+      "id": 17073
+     }
+    },
+    "season": {
+     "id": 97382,
+     "year": "26/27"
+    }
+   }
+  }
+ },
+ {
+  "event_id": 1003,
+  "key": "event",
+  "sub": "",
+  "fetched_at": "2026-10-21T12:00:00+00:00",
+  "payload": {
+   "event": {
+    "id": 1003,
+    "tournament": {
+     "id": 150,
+     "name": "Copa del Rey",
+     "uniqueTournament": {
+      "id": 329
+     }
+    },
+    "season": {
+     "id": 104108,
+     "year": "26/27"
+    }
+   }
+  }
+ },
+ {
+  "event_id": 1004,
+  "key": "event",
+  "sub": "",
+  "fetched_at": "2026-10-21T12:00:00+00:00",
+  "payload": {
+   "event": {
+    "id": 1004,
+    "tournament": {
+     "id": 94190,
+     "name": "Primera Federacion, Group 1",
+     "uniqueTournament": {
+      "id": 17073
+     }
+    },
+    "season": {
+     "id": 97382,
+     "year": "26/27"
+    }
+   }
+  }
+ },
+ {
+  "event_id": 1001,
+  "key": "statistics",
+  "sub": "",
+  "fetched_at": "2026-10-21T12:00:00+00:00",
+  "payload": {
+   "statistics": [
+    {
+     "period": "ALL",
+     "groups": []
+    }
+   ]
+  }
+ },
+ {
+  "event_id": 1001,
+  "key": "incidents",
+  "sub": "",
+  "fetched_at": "2026-10-21T12:00:00+00:00",
+  "payload": {
+   "incidents": [
+    {
+     "incidentType": "goal",
+     "time": 30,
+     "player": {
+      "id": 5001
+     }
+    }
+   ]
+  }
+ },
+ {
+  "event_id": 1001,
+  "key": "lineups",
+  "sub": "",
+  "fetched_at": "2026-10-21T12:00:00+00:00",
+  "payload": {
+   "confirmed": true,
+   "home": {
+    "players": []
+   },
+   "away": {
+    "players": [
+     {
+      "player": {
+       "id": 5001,
+       "name": "Jugador Sintético Uno",
+       "position": "M",
+       "height": 175,
+       "country": {
+        "name": "Spain"
+       },
+       "dateOfBirthTimestamp": 946684800
+      },
+      "shirtNumber": 10,
+      "substitute": false,
+      "position": "M",
+      "statistics": {
+       "minutesPlayed": 90,
+       "totalShots": 2,
+       "goals": 1,
+       "goalAssist": 0,
+       "totalPass": 30,
+       "accuratePass": 25
+      }
+     },
+     {
+      "player": {
+       "id": 5003,
+       "name": "Jugador Sintético Suplente",
+       "position": "D",
+       "height": 182,
+       "country": {
+        "name": "Spain"
+       },
+       "dateOfBirthTimestamp": 946684800
+      },
+      "shirtNumber": 20,
+      "substitute": true,
+      "position": "D",
+      "statistics": {
+       "totalShots": 0
+      }
+     }
+    ]
+   }
+  }
+ },
+ {
+  "event_id": 1003,
+  "key": "lineups",
+  "sub": "",
+  "fetched_at": "2026-10-29T12:00:00+00:00",
+  "payload": {
+   "confirmed": true,
+   "home": {
+    "players": []
+   },
+   "away": {
+    "players": [
+     {
+      "player": {
+       "id": 5001,
+       "name": "Jugador Sintético Uno (Copa)",
+       "position": "F",
+       "height": 199,
+       "country": {
+        "name": "Spain"
+       },
+       "dateOfBirthTimestamp": 946684800
+      },
+      "shirtNumber": 10,
+      "substitute": false,
+      "position": "F",
+      "statistics": {
+       "minutesPlayed": 90
+      }
+     },
+     {
+      "player": {
+       "id": 5002,
+       "name": "Jugador Sólo Copa",
+       "position": "D",
+       "height": 180,
+       "country": {
+        "name": "Spain"
+       },
+       "dateOfBirthTimestamp": 946684800
+      },
+      "shirtNumber": 30,
+      "substitute": false,
+      "position": "D",
+      "statistics": {
+       "minutesPlayed": 90
+      }
+     }
+    ]
+   }
+  }
+ }
+]
