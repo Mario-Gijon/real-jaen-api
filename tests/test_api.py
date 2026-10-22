@@ -64,7 +64,10 @@ class Ambito(unittest.TestCase):
 
     def test_solo_partidos_del_grupo_2(self):
         partidos = consultar(f'/api/v1/teams/{crear.JAEN}/matches')[1]['data']
-        self.assertEqual([m['match_id'] for m in partidos], [crear.FINALIZADO, crear.PENDIENTE])
+        self.assertEqual({m['tournament_id'] for m in partidos}, {94191})
+        self.assertNotIn(crear.EN_COPA, {m['match_id'] for m in partidos})
+        self.assertNotIn(crear.EN_GRUPO_1, {m['match_id'] for m in partidos})
+        self.assertEqual(len(partidos), 10)
 
     def test_copa_y_otro_grupo_no_se_sirven_ni_por_su_identificador(self):
         # El Grupo 1 comparte competición general (17073) y temporada: no basta con ellas.
@@ -91,8 +94,61 @@ class Ambito(unittest.TestCase):
     def test_los_datos_cargados_conservan_los_excluidos(self):
         # Excluir no es borrar: lo excluido sigue en los JSON de origen.
         partidos = json.loads((MUESTRA / 'partidos.json').read_text(encoding='utf-8'))
-        self.assertEqual(len(partidos), 4)
+        self.assertEqual(len(partidos), 12)
         self.assertEqual(DATOS['excluidos'], {crear.EN_COPA, crear.EN_GRUPO_1})
+
+
+class Rendimiento(unittest.TestCase):
+    """Balance del equipo con los finalizados del ámbito con marcador válido; sin clasificación ni puntos."""
+
+    def competicion(self, equipo=crear.JAEN):
+        estado, cuerpo = consultar(f'/api/v1/teams/{equipo}/performance')
+        self.assertEqual(estado, 200)
+        self.assertIn('no es necesariamente la temporada completa', cuerpo['meta']['note'])
+        [competicion] = cuerpo['data']['competitions']
+        return competicion
+
+    def test_una_entrada_por_competicion_del_ambito_con_sus_ids(self):
+        c = self.competicion()
+        self.assertEqual({k: c[k] for k in ('name', 'season', 'unique_tournament_id', 'tournament_id', 'season_id')},
+                         {'name': 'Primera Federación, Grupo 2', 'season': '26/27',
+                          'unique_tournament_id': 17073, 'tournament_id': 94191, 'season_id': 97382})
+        self.assertNotIn('points', c['record'])
+        self.assertNotIn('rank', c)
+
+    def test_recuentos_por_estado(self):
+        # Copa y Grupo 1, aunque finalizados y con marcador, no están en el ámbito.
+        self.assertEqual(self.competicion()['matches'], {
+            'in_scope': 10, 'finished': 6, 'pending': 3, 'counted': 3,
+            'finished_without_valid_score': 3, 'unknown_status': 1})
+
+    def test_balance_casa_fuera_y_diferencia(self):
+        c = self.competicion()
+        self.assertEqual(c['record'], {'played': 3, 'wins': 1, 'draws': 1, 'losses': 1,
+                                       'goals_for': 3, 'goals_against': 4, 'goal_difference': -1})
+        self.assertEqual(c['venues'], {'home': {'wins': 0, 'draws': 1, 'losses': 1}, 'away': {'wins': 1, 'draws': 0, 'losses': 0}})
+
+    def test_resultados_por_fecha_desde_el_lado_del_equipo(self):
+        resultados = self.competicion()['results']
+        self.assertEqual([(r['match']['match_id'], r['side'], r['opponent_team_id'], r['goals_for'], r['goals_against'], r['result'])
+                          for r in resultados],
+                         [(crear.FINALIZADO, 'away', crear.RIVAL_A, 2, 0, 'win'),
+                          (crear.EMPATE_CASA, 'home', crear.RIVAL_B, 1, 1, 'draw'),
+                          (crear.DERROTA_CASA, 'home', crear.RIVAL_A, 0, 3, 'loss')])
+        # Ningún marcador inválido, pendiente o en juego entra como resultado (ni como 0-0).
+        excluidos = {crear.SIN_MARCADOR, crear.MARCADOR_BOOLEANO, crear.MARCADOR_NEGATIVO, crear.EN_JUEGO,
+                     crear.PENDIENTE_CON_MARCADOR, crear.APLAZADO, crear.PENDIENTE}
+        self.assertFalse(excluidos & {r['match']['match_id'] for r in resultados})
+
+    def test_marcador_valido(self):
+        for valor, valido in ((0, True), (3, True), (True, False), (False, False), (-1, False), (1.0, False), ('1', False), (None, False)):
+            self.assertIs(api.marcador_valido(valor), valido, repr(valor))
+
+    def test_equipo_sin_partidos_en_el_ambito_y_equipo_desconocido(self):
+        # Sólo jugó en Copa: cero partidos, que no es un error.
+        c = self.competicion(crear.RIVAL_COPA)
+        self.assertEqual((c['matches']['in_scope'], c['record']['played'], c['results']), (0, 0, []))
+        self.assertEqual(consultar('/api/v1/teams/1/performance'), (404, {'error': 'Entidad no encontrada'}))
 
 
 class ServidorHTTP(unittest.TestCase):
@@ -131,6 +187,7 @@ class ServidorHTTP(unittest.TestCase):
     def test_rutas_por_http(self):
         for ruta, estado in (('/health', 200), ('/api/v1/scope', 200), (f'/api/v1/teams/{crear.JAEN}/matches', 200),
                              (f'/api/v1/teams/{crear.JAEN}/players', 200), (f'/api/v1/players/{crear.UNO}/matches', 200),
+                             (f'/api/v1/teams/{crear.JAEN}/performance', 200), ('/api/v1/teams/1/performance', 404),
                              (f'/api/v1/matches/{crear.FINALIZADO}/lineups', 200), (f'/api/v1/matches/{crear.EN_COPA}', 404),
                              (f'/api/v1/matches/{crear.EN_COPA}/lineups', 404), ('/api/v1/teams/abc', 400),
                              (f'/api/v1/teams/{crear.JAEN}?x=1', 400)):

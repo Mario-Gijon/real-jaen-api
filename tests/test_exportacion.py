@@ -305,6 +305,22 @@ class Ambito(unittest.TestCase):
                 cargar_modificada(lambda d: None, ambito)
 
 
+class RendimientoExportacion(unittest.TestCase):
+    def test_balance_de_la_exportacion(self):
+        estado, cuerpo = consultar('/api/v1/teams/2841/performance')
+        [c] = cuerpo['data']['competitions']
+        self.assertEqual((estado, c['tournament_id'], c['season_id']), (200, 94191, 97382))
+        self.assertEqual(c['matches'], {'in_scope': 37, 'finished': 8, 'pending': 29, 'counted': 8,
+                                        'finished_without_valid_score': 0, 'unknown_status': 0})
+        self.assertEqual(c['record'], {'played': 8, 'wins': 4, 'draws': 3, 'losses': 1,
+                                       'goals_for': 12, 'goals_against': 8, 'goal_difference': 4})
+        self.assertEqual(c['venues'], {'home': {'wins': 2, 'draws': 2, 'losses': 0}, 'away': {'wins': 2, 'draws': 1, 'losses': 1}})
+        self.assertEqual([(r['match']['round'], r['result'][0], r['goals_for'], r['goals_against']) for r in c['results']],
+                         [(1, 'w', 3, 0), (2, 'd', 2, 2), (3, 'w', 1, 0), (4, 'w', 2, 1), (5, 'l', 0, 2), (6, 'd', 0, 0),
+                          (7, 'd', 3, 3), (8, 'w', 1, 0)])
+        self.assertNotIn(COPA, {r['match']['match_id'] for r in c['results']})
+
+
 class ServidorHTTP(unittest.TestCase):
     """Arranca api.py de verdad (otro puerto, mismos datos) y consulta por HTTP."""
 

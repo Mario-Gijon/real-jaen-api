@@ -30,6 +30,7 @@ Rutas:
 /api/v1/matches/16599363/lineups
 /api/v1/matches/16599363/incidents
 /api/v1/scope
+/api/v1/teams/2841/performance
 
 AMBITO (ambito.json)
 Esta version solo sirve las competiciones de ambito.json. Hoy: Primera Federacion,
@@ -65,6 +66,28 @@ Los jugadores del equipo son los observados en las convocatorias de la muestra,
 no una plantilla completa/actual. La ficha es la ultima observada en la muestra.
 played=null indica minutos desconocidos. Los ausentes no se convierten en cero.
 No admite filtros ni paginacion en esta primera version.
+
+RENDIMIENTO DEL EQUIPO
+GET /api/v1/teams/{teamId}/performance
+  200 {"data": {"team_id", "competitions": [una por entrada de ambito.json:
+        name, season, unique_tournament_id, tournament_id, season_id,
+        matches: {in_scope, finished, pending, counted,
+                  finished_without_valid_score, unknown_status},
+        record: {played, wins, draws, losses, goals_for, goals_against,
+                 goal_difference},
+        venues: {home|away: {wins, draws, losses}},
+        results: [{match, side, opponent_team_id, goals_for, goals_against,
+                   result: win|draw|loss}]  (por fecha, del mas antiguo)]},
+       "meta": {"note"}}
+  404 si el equipo no esta en equipos.json.
+Solo cuenta partidos del ambito con status finished y marcador valido: dos
+enteros no negativos (True/False no lo son, aunque Python los trate como int).
+Un finalizado sin marcador valido no cuenta (nunca como 0-0) y se informa en
+finished_without_valid_score; notstarted y postponed son pending; cualquier otro
+estado es unknown_status. Sin clasificacion ni puntos: son los partidos
+observados, no necesariamente la temporada completa. Un equipo sin partidos en
+el ambito responde 200 con ceros.
+Tras actualizar api.py hay que reiniciar el servicio (ver REINICIAR EL SERVICIO).
 
 DETALLE DE PARTIDO
 Fuente: datos/partidos.json (partido normalizado), datos/equipos.json (nombres)

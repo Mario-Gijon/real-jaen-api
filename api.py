@@ -146,6 +146,55 @@ def detalle_partido(datos, ident, partes):
             'fetched_at':registro.get('fetched_at'),'versions':entrada['versiones'] if entrada else 0,'note':NOTA_FETCHED_AT}
     return 200, {'data':registro.get('payload'),'meta':meta}
 
+PENDIENTES = ('notstarted', 'postponed')
+NOTA_RENDIMIENTO = ('Resultados de los partidos finalizados observados en cada competición del ámbito; '
+                    'no es necesariamente la temporada completa. Sin clasificación ni puntos.')
+
+def marcador_valido(valor):
+    """Entero no negativo. bool es subclase de int en Python: True/False no son marcadores."""
+    return type(valor) is int and valor >= 0
+
+def rendimiento(datos, ident):
+    """Balance del equipo en cada competición del ámbito, calculado sólo con sus partidos finalizados con marcador
+    válido. Un finalizado sin marcador válido no cuenta (ni como 0-0) y se informa aparte; los pendientes tampoco."""
+    competiciones = []
+    for c in datos['competiciones']:
+        partidos = sorted((m for m in datos['partidos'] if ident in (m['home_team_id'], m['away_team_id'])
+                           and (m['tournament_id'], m['season_id']) == (c['tournament_id'], c['season_id'])),
+                          key=lambda m: (m.get('kickoff_utc') is None, m.get('kickoff_utc') or '', m.get('round') or 0, m['match_id']))
+        cuenta = {'in_scope': len(partidos), 'finished': 0, 'pending': 0, 'counted': 0,
+                  'finished_without_valid_score': 0, 'unknown_status': 0}
+        balance = {'played': 0, 'wins': 0, 'draws': 0, 'losses': 0, 'goals_for': 0, 'goals_against': 0}
+        lados = {lado: {'wins': 0, 'draws': 0, 'losses': 0} for lado in ('home', 'away')}
+        resultados = []
+        for m in partidos:
+            if m['status'] in PENDIENTES:
+                cuenta['pending'] += 1
+                continue
+            if m['status'] != 'finished':
+                cuenta['unknown_status'] += 1
+                continue
+            cuenta['finished'] += 1
+            if not (marcador_valido(m.get('home_score')) and marcador_valido(m.get('away_score'))):
+                cuenta['finished_without_valid_score'] += 1
+                continue
+            lado = 'home' if m['home_team_id'] == ident else 'away'
+            favor, contra = (m['home_score'], m['away_score']) if lado == 'home' else (m['away_score'], m['home_score'])
+            resultado = 'win' if favor > contra else 'draw' if favor == contra else 'loss'
+            clave = {'win': 'wins', 'draw': 'draws', 'loss': 'losses'}[resultado]
+            cuenta['counted'] += 1
+            balance['played'] += 1
+            balance[clave] += 1
+            balance['goals_for'] += favor
+            balance['goals_against'] += contra
+            lados[lado][clave] += 1
+            resultados.append({'match': m, 'side': lado, 'opponent_team_id': m['away_team_id'] if lado == 'home' else m['home_team_id'],
+                               'goals_for': favor, 'goals_against': contra, 'result': resultado})
+        balance['goal_difference'] = balance['goals_for'] - balance['goals_against']
+        competiciones.append(dict({'name': c['nombre'], 'season': c.get('temporada')}, **{k: c[k] for k in CAMPOS_AMBITO},
+                                  matches=cuenta, record=balance, venues=lados, results=resultados))
+    return {'team_id': ident, 'competitions': competiciones}
+
 def consultar(datos, ruta):
     partes = ruta.strip('/').split('/')
     if ruta == '/health':
@@ -172,6 +221,8 @@ def consultar(datos, ruta):
     if len(partes) == 4:
         return 200, {'data':entidad}
     sub = partes[4]
+    if tipo == 'teams' and sub == 'performance':
+        return 200, {'data': rendimiento(datos, ident), 'meta': {'note': NOTA_RENDIMIENTO}}
     if tipo == 'teams' and sub == 'matches':
         resultado = [m for m in datos['partidos'] if ident in (m['home_team_id'],m['away_team_id'])]
     elif tipo == 'teams' and sub == 'players':

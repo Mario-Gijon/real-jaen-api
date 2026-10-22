@@ -13,6 +13,10 @@ GRUPO_2 = {'unique_tournament_id': 17073, 'tournament_id': 94191, 'season_id': 9
 COPA = {'unique_tournament_id': 329, 'tournament_id': 150, 'season_id': 104108, 'competition': 'Copa del Rey'}
 GRUPO_1 = {'unique_tournament_id': 17073, 'tournament_id': 94190, 'season_id': 97382, 'competition': 'Primera Federacion, Group 1'}
 FINALIZADO, PENDIENTE, EN_COPA, EN_GRUPO_1 = 1001, 1002, 1003, 1004
+# Más partidos del Grupo 2 para el balance: empate y derrota en casa, finalizados sin marcador válido
+# (ausente, booleano, negativo), un estado desconocido y pendientes (uno con marcador, que no cuenta).
+EMPATE_CASA, DERROTA_CASA, SIN_MARCADOR, MARCADOR_BOOLEANO, MARCADOR_NEGATIVO = 1005, 1006, 1007, 1008, 1009
+EN_JUEGO, PENDIENTE_CON_MARCADOR, APLAZADO = 1010, 1011, 1012
 UNO, SOLO_COPA, SUPLENTE = 5001, 5002, 5003
 
 
@@ -70,6 +74,14 @@ def crear():
             partido(PENDIENTE, GRUPO_2, JAEN, RIVAL_B, 'notstarted', None, '2026-11-07T15:30:00+00:00', 11, ['event']),
             partido(EN_COPA, COPA, RIVAL_COPA, JAEN, 'finished', (1, 1), '2026-10-28T19:00:00+00:00', 1, ['event', 'lineups']),
             partido(EN_GRUPO_1, GRUPO_1, RIVAL_G1, JAEN, 'finished', (0, 0), '2026-09-14T17:00:00+00:00', 3, ['event']),
+            partido(EMPATE_CASA, GRUPO_2, JAEN, RIVAL_B, 'finished', (1, 1), '2026-09-06T17:00:00+00:00', 2, ['event']),
+            partido(DERROTA_CASA, GRUPO_2, JAEN, RIVAL_A, 'finished', (0, 3), '2026-09-20T17:00:00+00:00', 4, ['event']),
+            partido(SIN_MARCADOR, GRUPO_2, RIVAL_B, JAEN, 'finished', None, '2026-09-27T17:00:00+00:00', 5, ['event']),
+            partido(MARCADOR_BOOLEANO, GRUPO_2, RIVAL_A, JAEN, 'finished', (True, 0), '2026-10-04T17:00:00+00:00', 6, ['event']),
+            partido(MARCADOR_NEGATIVO, GRUPO_2, JAEN, RIVAL_B, 'finished', (-1, 2), '2026-10-11T17:00:00+00:00', 7, ['event']),
+            partido(EN_JUEGO, GRUPO_2, RIVAL_A, JAEN, 'inprogress', (0, 0), '2026-10-18T17:00:00+00:00', 8, ['event']),
+            partido(PENDIENTE_CON_MARCADOR, GRUPO_2, RIVAL_B, JAEN, 'notstarted', (0, 0), '2026-11-14T17:00:00+00:00', 12, ['event']),
+            partido(APLAZADO, GRUPO_2, JAEN, RIVAL_A, 'postponed', None, None, 13, ['event']),
         ],
         # La ficha guardada de UNO es la más reciente (la de Copa): la API debe rehacerla con el Grupo 2.
         'jugadores': [
@@ -101,7 +113,7 @@ def crear():
     }
     DESTINO.mkdir(exist_ok=True)
     for nombre, contenido in datos.items():
-        (DESTINO / f'{nombre}.json').write_text(json.dumps(contenido, ensure_ascii=False, indent=1) + '\n', encoding='utf-8')
+        (DESTINO / f'{nombre}.json').write_text(json.dumps(contenido, ensure_ascii=False, indent=1) + '\n', encoding='utf-8', newline='\n')
 
 
 if __name__ == '__main__':
