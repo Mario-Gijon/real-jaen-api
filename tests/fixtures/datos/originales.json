@@ -96,9 +96,200 @@
    "statistics": [
     {
      "period": "ALL",
-     "groups": []
+     "groups": [
+      {
+       "groupName": "Match overview",
+       "statisticsItems": [
+        {
+         "key": "ballPossession",
+         "name": "ballPossession",
+         "home": "40",
+         "away": "60",
+         "homeValue": 40,
+         "awayValue": 60
+        },
+        {
+         "key": "expectedGoals",
+         "name": "expectedGoals",
+         "home": "0.8",
+         "away": "1.5",
+         "homeValue": 0.8,
+         "awayValue": 1.5
+        },
+        {
+         "key": "totalShotsOnGoal",
+         "name": "totalShotsOnGoal",
+         "home": "9",
+         "away": "12",
+         "homeValue": 9,
+         "awayValue": 12
+        },
+        {
+         "key": "cornerKicks",
+         "name": "cornerKicks",
+         "home": "4",
+         "away": "5",
+         "homeValue": 4,
+         "awayValue": 5
+        }
+       ]
+      },
+      {
+       "groupName": "Shots",
+       "statisticsItems": [
+        {
+         "key": "expectedGoals",
+         "name": "expectedGoals",
+         "home": "0.8",
+         "away": "1.5",
+         "homeValue": 0.8,
+         "awayValue": 1.5
+        },
+        {
+         "key": "totalShotsOnGoal",
+         "name": "totalShotsOnGoal",
+         "home": "9",
+         "away": "12",
+         "homeValue": 9,
+         "awayValue": 12
+        },
+        {
+         "key": "shotsOnGoal",
+         "name": "shotsOnGoal",
+         "home": "3",
+         "away": "2",
+         "homeValue": 3,
+         "awayValue": 2
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "period": "1ST",
+     "groups": [
+      {
+       "groupName": "Match overview",
+       "statisticsItems": [
+        {
+         "key": "ballPossession",
+         "name": "ballPossession",
+         "home": "45",
+         "away": "55",
+         "homeValue": 45,
+         "awayValue": 55
+        },
+        {
+         "key": "expectedGoals",
+         "name": "expectedGoals",
+         "home": "0.3",
+         "away": "0.7",
+         "homeValue": 0.3,
+         "awayValue": 0.7
+        },
+        {
+         "key": "totalShotsOnGoal",
+         "name": "totalShotsOnGoal",
+         "home": "4",
+         "away": "6",
+         "homeValue": 4,
+         "awayValue": 6
+        },
+        {
+         "key": "shotsOnGoal",
+         "name": "shotsOnGoal",
+         "home": "1",
+         "away": "1",
+         "homeValue": 1,
+         "awayValue": 1
+        },
+        {
+         "key": "cornerKicks",
+         "name": "cornerKicks",
+         "home": "2",
+         "away": "2",
+         "homeValue": 2,
+         "awayValue": 2
+        }
+       ]
+      }
+     ]
     }
    ]
+  }
+ },
+ {
+  "event_id": 1005,
+  "key": "statistics",
+  "sub": "",
+  "fetched_at": "2026-10-21T12:00:00+00:00",
+  "payload": {
+   "statistics": [
+    {
+     "period": "ALL",
+     "groups": [
+      {
+       "groupName": "Match overview",
+       "statisticsItems": [
+        {
+         "key": "ballPossession",
+         "name": "ballPossession",
+         "home": "True",
+         "away": "45",
+         "homeValue": true,
+         "awayValue": 45
+        },
+        {
+         "key": "expectedGoals",
+         "name": "expectedGoals",
+         "home": "0.0",
+         "away": "0.9",
+         "homeValue": 0.0,
+         "awayValue": 0.9
+        },
+        {
+         "key": "totalShotsOnGoal",
+         "name": "totalShotsOnGoal",
+         "home": "0",
+         "away": "7",
+         "homeValue": 0,
+         "awayValue": 7
+        },
+        {
+         "key": "shotsOnGoal",
+         "name": "shotsOnGoal",
+         "home": "1",
+         "away": "2",
+         "homeValue": 1,
+         "awayValue": 2
+        }
+       ]
+      },
+      {
+       "groupName": "Shots",
+       "statisticsItems": [
+        {
+         "key": "shotsOnGoal",
+         "name": "shotsOnGoal",
+         "home": "2",
+         "away": "2",
+         "homeValue": 2,
+         "awayValue": 2
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  }
+ },
+ {
+  "event_id": 1006,
+  "key": "statistics",
+  "sub": "",
+  "fetched_at": "2026-10-21T12:00:00+00:00",
+  "payload": {
+   "statistics": []
   }
  },
  {

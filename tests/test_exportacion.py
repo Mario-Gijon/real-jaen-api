@@ -320,6 +320,21 @@ class RendimientoExportacion(unittest.TestCase):
                           (7, 'd', 3, 3), (8, 'w', 1, 0)])
         self.assertNotIn(COPA, {r['match']['match_id'] for r in c['results']})
 
+    def test_produccion_y_concesion_de_la_exportacion(self):
+        # Periodo ALL de las 8 estadísticas; Real Jaén local en J2, J4, J7 y J8 y visitante en el resto.
+        salida = consultar('/api/v1/teams/2841/performance')[1]['data']['competitions'][0]['output']
+        esperadas = {'goals': 12 / 8, 'goalsAgainst': 8 / 8, 'xg': 9.25 / 8, 'xgAgainst': 15.21 / 8, 'shots': 85 / 8,
+                     'shotsAgainst': 134 / 8, 'shotsOnTarget': 32 / 8, 'shotsOnTargetAgainst': 36 / 8,
+                     'possession': 399 / 8, 'corners': 30 / 8}
+        for indicador, valor in esperadas.items():
+            media = salida['season'][indicador]
+            self.assertEqual((media['matches'], media['of']), (8, 8), indicador)
+            self.assertAlmostEqual(media['value'], valor, places=9, msg=indicador)
+        self.assertEqual(salida['last3']['match_ids'], [16599748, 16599895, 16599928])
+        self.assertAlmostEqual(salida['last3']['values']['xg']['value'], (1.34 + 2.01 + 0.34) / 3, places=9)
+        self.assertAlmostEqual(salida['last3']['values']['possession']['value'], (49 + 58 + 45) / 3, places=9)
+        self.assertEqual(salida['undated'], 0)
+
 
 class ServidorHTTP(unittest.TestCase):
     """Arranca api.py de verdad (otro puerto, mismos datos) y consulta por HTTP."""

@@ -67,7 +67,7 @@ class Ambito(unittest.TestCase):
         self.assertEqual({m['tournament_id'] for m in partidos}, {94191})
         self.assertNotIn(crear.EN_COPA, {m['match_id'] for m in partidos})
         self.assertNotIn(crear.EN_GRUPO_1, {m['match_id'] for m in partidos})
-        self.assertEqual(len(partidos), 10)
+        self.assertEqual(len(partidos), 12)
 
     def test_copa_y_otro_grupo_no_se_sirven_ni_por_su_identificador(self):
         # El Grupo 1 comparte competición general (17073) y temporada: no basta con ellas.
@@ -94,7 +94,7 @@ class Ambito(unittest.TestCase):
     def test_los_datos_cargados_conservan_los_excluidos(self):
         # Excluir no es borrar: lo excluido sigue en los JSON de origen.
         partidos = json.loads((MUESTRA / 'partidos.json').read_text(encoding='utf-8'))
-        self.assertEqual(len(partidos), 12)
+        self.assertEqual(len(partidos), 14)
         self.assertEqual(DATOS['excluidos'], {crear.EN_COPA, crear.EN_GRUPO_1})
 
 
@@ -119,14 +119,14 @@ class Rendimiento(unittest.TestCase):
     def test_recuentos_por_estado(self):
         # Copa y Grupo 1, aunque finalizados y con marcador, no están en el ámbito.
         self.assertEqual(self.competicion()['matches'], {
-            'in_scope': 10, 'finished': 6, 'pending': 3, 'counted': 3,
+            'in_scope': 12, 'finished': 8, 'pending': 3, 'counted': 5,
             'finished_without_valid_score': 3, 'unknown_status': 1})
 
     def test_balance_casa_fuera_y_diferencia(self):
         c = self.competicion()
-        self.assertEqual(c['record'], {'played': 3, 'wins': 1, 'draws': 1, 'losses': 1,
-                                       'goals_for': 3, 'goals_against': 4, 'goal_difference': -1})
-        self.assertEqual(c['venues'], {'home': {'wins': 0, 'draws': 1, 'losses': 1}, 'away': {'wins': 1, 'draws': 0, 'losses': 0}})
+        self.assertEqual(c['record'], {'played': 5, 'wins': 3, 'draws': 1, 'losses': 1,
+                                       'goals_for': 6, 'goals_against': 4, 'goal_difference': 2})
+        self.assertEqual(c['venues'], {'home': {'wins': 1, 'draws': 1, 'losses': 1}, 'away': {'wins': 2, 'draws': 0, 'losses': 0}})
 
     def test_resultados_por_fecha_desde_el_lado_del_equipo(self):
         resultados = self.competicion()['results']
@@ -134,11 +134,69 @@ class Rendimiento(unittest.TestCase):
                           for r in resultados],
                          [(crear.FINALIZADO, 'away', crear.RIVAL_A, 2, 0, 'win'),
                           (crear.EMPATE_CASA, 'home', crear.RIVAL_B, 1, 1, 'draw'),
-                          (crear.DERROTA_CASA, 'home', crear.RIVAL_A, 0, 3, 'loss')])
+                          # Mismo instante (17:00Z y 19:00+02:00): decide el id, no la jornada ni el texto de la fecha.
+                          (crear.DERROTA_CASA, 'home', crear.RIVAL_A, 0, 3, 'loss'),
+                          (crear.MISMO_INSTANTE, 'away', crear.RIVAL_B, 1, 0, 'win'),
+                          # Sin fecha, al final.
+                          (crear.SIN_FECHA, 'home', crear.RIVAL_A, 2, 0, 'win')])
         # Ningún marcador inválido, pendiente o en juego entra como resultado (ni como 0-0).
         excluidos = {crear.SIN_MARCADOR, crear.MARCADOR_BOOLEANO, crear.MARCADOR_NEGATIVO, crear.EN_JUEGO,
                      crear.PENDIENTE_CON_MARCADOR, crear.APLAZADO, crear.PENDIENTE}
         self.assertFalse(excluidos & {r['match']['match_id'] for r in resultados})
+
+    def media(self, valor, partidos, de):
+        return {'value': valor, 'matches': partidos, 'of': de}
+
+    def assertMedias(self, recibidas, esperadas):
+        self.assertEqual(set(recibidas), set(esperadas))
+        for indicador, esperada in esperadas.items():
+            recibida = recibidas[indicador]
+            self.assertEqual((recibida['matches'], recibida['of']), (esperada['matches'], esperada['of']), indicador)
+            if esperada['value'] is None:
+                self.assertIsNone(recibida['value'], indicador)
+            else:
+                self.assertAlmostEqual(recibida['value'], esperada['value'], places=12, msg=indicador)
+
+    def test_produccion_y_concesion_de_la_temporada(self):
+        # 5 contados. Con estadísticas: FINALIZADO (visitante, completas) y EMPATE_CASA (local, parciales);
+        # DERROTA_CASA tiene la sección vacía y MISMO_INSTANTE y SIN_FECHA no la tienen: ausentes, nunca ceros.
+        m = self.media
+        self.assertMedias(self.competicion()['output']['season'], {
+            'goals': m(6 / 5, 5, 5), 'goalsAgainst': m(4 / 5, 5, 5),
+            'xg': m((1.5 + 0.0) / 2, 2, 5), 'xgAgainst': m((0.8 + 0.9) / 2, 2, 5),
+            'shots': m((12 + 0) / 2, 2, 5), 'shotsAgainst': m((9 + 7) / 2, 2, 5),
+            # Tiros a puerta de EMPATE_CASA contradictorios entre grupos: descartados en ambos lados.
+            'shotsOnTarget': m(2, 1, 5), 'shotsOnTargetAgainst': m(3, 1, 5),
+            # Posesión booleana no válida: sólo cuenta la de FINALIZADO (media de porcentajes, no suma).
+            'possession': m(60, 1, 5), 'corners': m(5, 1, 5),
+        })
+
+    def test_ultimos_3_primero_los_partidos_despues_la_cobertura(self):
+        salida = self.competicion()['output']
+        # Los tres contados con fecha más recientes; el sin fecha no entra y no se buscan anteriores para completar.
+        self.assertEqual(salida['last3']['match_ids'], [crear.EMPATE_CASA, crear.DERROTA_CASA, crear.MISMO_INSTANTE])
+        self.assertEqual(salida['undated'], 1)
+        m = self.media
+        self.assertMedias(salida['last3']['values'], {
+            'goals': m(2 / 3, 3, 3), 'goalsAgainst': m(4 / 3, 3, 3),
+            # Cero real de EMPATE_CASA: media 0 con dato, distinta de ausencia.
+            'xg': m(0.0, 1, 3), 'xgAgainst': m(0.9, 1, 3), 'shots': m(0, 1, 3), 'shotsAgainst': m(7, 1, 3),
+            'shotsOnTarget': m(None, 0, 3), 'shotsOnTargetAgainst': m(None, 0, 3),
+            'possession': m(None, 0, 3), 'corners': m(None, 0, 3),
+        })
+
+    def test_estadisticas_all_y_dominios(self):
+        originales = DATOS['originales']
+        self.assertEqual(api.estadisticas_all(originales, crear.FINALIZADO)['expectedGoals'], (0.8, 1.5))
+        self.assertIsNone(api.estadisticas_all(originales, crear.DERROTA_CASA))
+        self.assertIsNone(api.estadisticas_all(originales, crear.MISMO_INSTANTE))
+        self.assertNotIn('shotsOnGoal', api.estadisticas_all(originales, crear.EMPATE_CASA))
+        for clave, valor, valido in (('expectedGoals', 0.0, True), ('expectedGoals', -0.1, False), ('expectedGoals', float('nan'), False),
+                                     ('expectedGoals', float('inf'), False), ('expectedGoals', True, False), ('expectedGoals', '1.2', False),
+                                     ('totalShotsOnGoal', 0, True), ('totalShotsOnGoal', 1.5, False), ('totalShotsOnGoal', False, False),
+                                     ('ballPossession', 0, True), ('ballPossession', 100, True), ('ballPossession', 50.5, True),
+                                     ('ballPossession', 101, False), ('ballPossession', -1, False), ('cornerKicks', -1, False)):
+            self.assertIs(api.DOMINIOS[clave](valor), valido, (clave, valor))
 
     def test_marcador_valido(self):
         for valor, valido in ((0, True), (3, True), (True, False), (False, False), (-1, False), (1.0, False), ('1', False), (None, False)):
@@ -148,6 +206,9 @@ class Rendimiento(unittest.TestCase):
         # Sólo jugó en Copa: cero partidos, que no es un error.
         c = self.competicion(crear.RIVAL_COPA)
         self.assertEqual((c['matches']['in_scope'], c['record']['played'], c['results']), (0, 0, []))
+        # Sin partidos: medias ausentes, nunca 0.
+        self.assertEqual(c['output']['season']['xg'], {'value': None, 'matches': 0, 'of': 0})
+        self.assertEqual(c['output']['last3']['match_ids'], [])
         self.assertEqual(consultar('/api/v1/teams/1/performance'), (404, {'error': 'Entidad no encontrada'}))
 
 

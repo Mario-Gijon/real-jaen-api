@@ -1,6 +1,7 @@
 """API local de solo lectura. Python 3.10+. Sin dependencias."""
 import argparse
 import json
+import math
 from datetime import datetime, timezone
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -150,6 +151,84 @@ PENDIENTES = ('notstarted', 'postponed')
 NOTA_RENDIMIENTO = ('Resultados de los partidos finalizados observados en cada competición del ámbito; '
                     'no es necesariamente la temporada completa. Sin clasificación ni puntos.')
 
+# Producción y concesión por partido: indicador -> (clave del periodo ALL de `statistics`, lado). `own` es el valor
+# del lado del equipo; `opponent`, el del rival (lo que el equipo concede). Los goles salen del marcador.
+INDICADORES = {
+    'xg': ('expectedGoals', 'own'), 'xgAgainst': ('expectedGoals', 'opponent'),
+    'shots': ('totalShotsOnGoal', 'own'), 'shotsAgainst': ('totalShotsOnGoal', 'opponent'),
+    'shotsOnTarget': ('shotsOnGoal', 'own'), 'shotsOnTargetAgainst': ('shotsOnGoal', 'opponent'),
+    'possession': ('ballPossession', 'own'), 'corners': ('cornerKicks', 'own'),
+}
+ORDEN_INDICADORES = ('goals', 'xg', 'shots', 'shotsOnTarget', 'goalsAgainst', 'xgAgainst', 'shotsAgainst',
+                     'shotsOnTargetAgainst', 'possession', 'corners')
+
+def _numero(valor):
+    return type(valor) in (int, float) and math.isfinite(valor)
+
+# Dominio de cada clave: fuera de él, el valor no existe (nunca se convierte en cero).
+DOMINIOS = {
+    'expectedGoals': lambda v: _numero(v) and v >= 0,
+    'totalShotsOnGoal': lambda v: type(v) is int and v >= 0,
+    'shotsOnGoal': lambda v: type(v) is int and v >= 0,
+    'cornerKicks': lambda v: type(v) is int and v >= 0,
+    'ballPossession': lambda v: _numero(v) and 0 <= v <= 100,
+}
+
+def estadisticas_all(originales, ident):
+    """{clave: (local, visitante)} del periodo ALL de `statistics` (versión más reciente), sólo para las claves usadas.
+    None si no hay registro, está vacío o no tiene un único periodo ALL: nada de eso se convierte en ceros. Una clave
+    repetida (aparece en varios grupos) vale si todas sus apariciones coinciden; si no, se descarta."""
+    entrada = originales.get((ident, 'statistics'))
+    payload = entrada['registro'].get('payload') if entrada else None
+    if not isinstance(payload, dict) or not isinstance(payload.get('statistics'), list):
+        return None
+    todos = [p for p in payload['statistics'] if isinstance(p, dict) and p.get('period') == 'ALL']
+    if len(todos) != 1 or not isinstance(todos[0].get('groups'), list):
+        return None
+    valores, conflictos = {}, set()
+    for grupo in todos[0]['groups']:
+        for item in (grupo.get('statisticsItems') if isinstance(grupo, dict) else None) or []:
+            if not isinstance(item, dict) or item.get('key') not in DOMINIOS:
+                continue
+            par = (item.get('homeValue'), item.get('awayValue'))
+            if item['key'] in valores and valores[item['key']] != par:
+                conflictos.add(item['key'])
+            valores.setdefault(item['key'], par)
+    return {k: v for k, v in valores.items() if k not in conflictos}
+
+def valores_por_partido(originales, resultado):
+    """Cada indicador en un partido contado, desde el lado del equipo; None si falta o no es válido."""
+    stats = estadisticas_all(originales, resultado['match']['match_id'])
+    valores = {'goals': resultado['goals_for'], 'goalsAgainst': resultado['goals_against']}
+    for indicador, (clave, lado) in INDICADORES.items():
+        par = stats.get(clave) if stats else None
+        propio = 0 if resultado['side'] == 'home' else 1
+        valor = par[propio if lado == 'own' else 1 - propio] if par else None
+        valores[indicador] = valor if valor is not None and DOMINIOS[clave](valor) else None
+    return valores
+
+def medias(partidos):
+    """Media por partido de cada indicador sobre los partidos dados, con cuántos tienen dato (`matches`) de cuántos
+    (`of`). Sin ningún dato válido el valor es None, nunca 0. La posesión es la media aritmética de los porcentajes."""
+    salida = {}
+    for indicador in ORDEN_INDICADORES:
+        validos = [p['valores'][indicador] for p in partidos if p['valores'][indicador] is not None]
+        salida[indicador] = {'value': sum(validos) / len(validos) if validos else None,
+                             'matches': len(validos), 'of': len(partidos)}
+    return salida
+
+def inicio(partido):
+    """Instante de inicio, o None si falta o no se puede leer."""
+    try:
+        return datetime.fromisoformat(partido['kickoff_utc'].replace('Z', '+00:00')).timestamp()
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+def orden_cronologico(partido):
+    """Por instante real de inicio (nunca por jornada); a igual instante, por id. Sin fecha, al final."""
+    momento = inicio(partido)
+    return (momento is None, momento or 0, partido['match_id'])
+
 def marcador_valido(valor):
     """Entero no negativo. bool es subclase de int en Python: True/False no son marcadores."""
     return type(valor) is int and valor >= 0
@@ -161,7 +240,7 @@ def rendimiento(datos, ident):
     for c in datos['competiciones']:
         partidos = sorted((m for m in datos['partidos'] if ident in (m['home_team_id'], m['away_team_id'])
                            and (m['tournament_id'], m['season_id']) == (c['tournament_id'], c['season_id'])),
-                          key=lambda m: (m.get('kickoff_utc') is None, m.get('kickoff_utc') or '', m.get('round') or 0, m['match_id']))
+                          key=orden_cronologico)
         cuenta = {'in_scope': len(partidos), 'finished': 0, 'pending': 0, 'counted': 0,
                   'finished_without_valid_score': 0, 'unknown_status': 0}
         balance = {'played': 0, 'wins': 0, 'draws': 0, 'losses': 0, 'goals_for': 0, 'goals_against': 0}
@@ -191,8 +270,17 @@ def rendimiento(datos, ident):
             resultados.append({'match': m, 'side': lado, 'opponent_team_id': m['away_team_id'] if lado == 'home' else m['home_team_id'],
                                'goals_for': favor, 'goals_against': contra, 'result': resultado})
         balance['goal_difference'] = balance['goals_for'] - balance['goals_against']
+        # Producción y concesión: los mismos partidos que el balance. «Últimos 3» son los tres contados más recientes
+        # con fecha; la cobertura de cada media se calcula después, sin buscar partidos anteriores que la completen.
+        elegibles = [{'match_id': r['match']['match_id'], 'valores': valores_por_partido(datos['originales'], r)}
+                     for r in resultados]
+        con_fecha = [e for e, r in zip(elegibles, resultados) if inicio(r['match']) is not None]
+        ultimos = con_fecha[-3:]
+        produccion = {'season': medias(elegibles),
+                      'last3': {'match_ids': [e['match_id'] for e in ultimos], 'values': medias(ultimos)},
+                      'undated': len(elegibles) - len(con_fecha)}
         competiciones.append(dict({'name': c['nombre'], 'season': c.get('temporada')}, **{k: c[k] for k in CAMPOS_AMBITO},
-                                  matches=cuenta, record=balance, venues=lados, results=resultados))
+                                  matches=cuenta, record=balance, venues=lados, results=resultados, output=produccion))
     return {'team_id': ident, 'competitions': competiciones}
 
 def consultar(datos, ruta):

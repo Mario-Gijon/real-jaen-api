@@ -17,6 +17,17 @@ FINALIZADO, PENDIENTE, EN_COPA, EN_GRUPO_1 = 1001, 1002, 1003, 1004
 # (ausente, booleano, negativo), un estado desconocido y pendientes (uno con marcador, que no cuenta).
 EMPATE_CASA, DERROTA_CASA, SIN_MARCADOR, MARCADOR_BOOLEANO, MARCADOR_NEGATIVO = 1005, 1006, 1007, 1008, 1009
 EN_JUEGO, PENDIENTE_CON_MARCADOR, APLAZADO = 1010, 1011, 1012
+# Para el orden: MISMO_INSTANTE empieza a la vez que DERROTA_CASA (escrito con otro desfase horario) y tiene una
+# jornada mayor; SIN_FECHA está contado pero sin fecha.
+MISMO_INSTANTE, SIN_FECHA = 1013, 1014
+
+
+def item(clave, local, visitante):
+    return {'key': clave, 'name': clave, 'home': str(local), 'away': str(visitante), 'homeValue': local, 'awayValue': visitante}
+
+
+def estadisticas(ident, periodos, fetched_at='2026-10-21T12:00:00+00:00'):
+    return original(ident, 'statistics', {'statistics': [{'period': p, 'groups': g} for p, g in periodos]}, fetched_at)
 UNO, SOLO_COPA, SUPLENTE = 5001, 5002, 5003
 
 
@@ -82,6 +93,8 @@ def crear():
             partido(EN_JUEGO, GRUPO_2, RIVAL_A, JAEN, 'inprogress', (0, 0), '2026-10-18T17:00:00+00:00', 8, ['event']),
             partido(PENDIENTE_CON_MARCADOR, GRUPO_2, RIVAL_B, JAEN, 'notstarted', (0, 0), '2026-11-14T17:00:00+00:00', 12, ['event']),
             partido(APLAZADO, GRUPO_2, JAEN, RIVAL_A, 'postponed', None, None, 13, ['event']),
+            partido(MISMO_INSTANTE, GRUPO_2, RIVAL_B, JAEN, 'finished', (0, 1), '2026-09-20T19:00:00+02:00', 9, ['event']),
+            partido(SIN_FECHA, GRUPO_2, JAEN, RIVAL_A, 'finished', (2, 0), None, 10, ['event']),
         ],
         # La ficha guardada de UNO es la más reciente (la de Copa): la API debe rehacerla con el Grupo 2.
         'jugadores': [
@@ -103,7 +116,26 @@ def crear():
         ],
         'originales': [
             evento(FINALIZADO, GRUPO_2), evento(PENDIENTE, GRUPO_2), evento(EN_COPA, COPA), evento(EN_GRUPO_1, GRUPO_1),
-            original(FINALIZADO, 'statistics', {'statistics': [{'period': 'ALL', 'groups': []}]}),
+            # Visitante: lo propio es `away`. ALL y 1ST distintos (nunca se suman); una clave repetida con el mismo valor.
+            estadisticas(FINALIZADO, [
+                ('ALL', [{'groupName': 'Match overview', 'statisticsItems': [
+                    item('ballPossession', 40, 60), item('expectedGoals', 0.8, 1.5), item('totalShotsOnGoal', 9, 12),
+                    item('cornerKicks', 4, 5)]},
+                    {'groupName': 'Shots', 'statisticsItems': [
+                        item('expectedGoals', 0.8, 1.5), item('totalShotsOnGoal', 9, 12), item('shotsOnGoal', 3, 2)]}]),
+                ('1ST', [{'groupName': 'Match overview', 'statisticsItems': [
+                    item('ballPossession', 45, 55), item('expectedGoals', 0.3, 0.7), item('totalShotsOnGoal', 4, 6),
+                    item('shotsOnGoal', 1, 1), item('cornerKicks', 2, 2)]}]),
+            ]),
+            # Local: ceros reales (xG y tiros), posesión booleana (no válida), tiros a puerta contradictorios entre
+            # grupos (se descartan) y sin córners.
+            estadisticas(EMPATE_CASA, [('ALL', [
+                {'groupName': 'Match overview', 'statisticsItems': [
+                    item('ballPossession', True, 45), item('expectedGoals', 0.0, 0.9), item('totalShotsOnGoal', 0, 7),
+                    item('shotsOnGoal', 1, 2)]},
+                {'groupName': 'Shots', 'statisticsItems': [item('shotsOnGoal', 2, 2)]}])]),
+            # Sección guardada sin contenido: no son ceros.
+            original(DERROTA_CASA, 'statistics', {'statistics': []}),
             original(FINALIZADO, 'incidents', {'incidents': [{'incidentType': 'goal', 'time': 30, 'player': {'id': UNO}}]}),
             alineacion(FINALIZADO, [], [(uno, 10, False, stats_uno), (suplente, 20, True, {'totalShots': 0})],
                        '2026-10-21T12:00:00+00:00'),

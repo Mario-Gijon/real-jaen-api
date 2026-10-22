@@ -77,7 +77,10 @@ GET /api/v1/teams/{teamId}/performance
                  goal_difference},
         venues: {home|away: {wins, draws, losses}},
         results: [{match, side, opponent_team_id, goals_for, goals_against,
-                   result: win|draw|loss}]  (por fecha, del mas antiguo)]},
+                   result: win|draw|loss}]  (por fecha, del mas antiguo),
+        output: {season: {indicador: {value, matches, of}},
+                 last3: {match_ids, values: {indicador: {value, matches, of}}},
+                 undated}]},
        "meta": {"note"}}
   404 si el equipo no esta en equipos.json.
 Solo cuenta partidos del ambito con status finished y marcador valido: dos
@@ -87,6 +90,26 @@ finished_without_valid_score; notstarted y postponed son pending; cualquier otro
 estado es unknown_status. Sin clasificacion ni puntos: son los partidos
 observados, no necesariamente la temporada completa. Un equipo sin partidos en
 el ambito responde 200 con ceros.
+Orden: por instante real de kickoff_utc (no por jornada ni por el texto de la fecha);
+a igual instante, por match_id; sin fecha, al final.
+Produccion y concesion (output), sobre los mismos partidos contados que el balance:
+  goals / goalsAgainst            marcador (goals_for / goals_against)
+  xg / xgAgainst                  expectedGoals      (lado propio / rival)
+  shots / shotsAgainst            totalShotsOnGoal   (tiros totales)
+  shotsOnTarget / ...Against      shotsOnGoal        (tiros a puerta)
+  possession                      ballPossession     (lado propio)
+  corners                         cornerKicks        (lado propio)
+Las claves salen del periodo ALL de statistics (homeValue/awayValue segun el lado del
+equipo); nunca se suman 1ST y 2ND. Validas: xG numero finito >= 0; tiros, a puerta y
+corners enteros >= 0; posesion numero finito entre 0 y 100; nunca booleanos. Una
+clave repetida en varios grupos vale si coincide; si no, se descarta. Sin registro,
+vacio o sin un unico periodo ALL: sin dato (nunca ceros).
+Cada media = suma de los valores validos / numero de partidos con valor valido
+(matches), de los partidos considerados (of); sin valores validos, value null. La
+posesion es la media aritmetica de los porcentajes. Precision completa: se redondea
+solo al presentar. last3: los tres partidos contados con fecha mas recientes; la
+cobertura se calcula despues, sin buscar partidos anteriores. undated: contados sin
+fecha (entran en season, no en last3).
 Tras actualizar api.py hay que reiniciar el servicio (ver REINICIAR EL SERVICIO).
 
 DETALLE DE PARTIDO
