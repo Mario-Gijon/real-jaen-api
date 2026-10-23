@@ -220,6 +220,12 @@ def crear():
                        '2026-10-29T12:00:00+00:00'),
         ],
     }
+    # Manifiesto como el del importador: la muestra es la exportación propia del Real Jaén.
+    datos['exportaciones'] = {'format': 2, 'imported_at': '2026-10-22T09:00:00+00:00', 'followed_team_ids': [JAEN],
+                              'exports': [{'id': 'E1', 'file': 'muestra-sintetica.jsonl', 'sha256': None, 'followed_team_id': JAEN,
+                                           'records': len(datos['originales']), 'events': len({o['event_id'] for o in datos['originales']}),
+                                           'invalid_fetched_at': 0, 'fetched_from': '2026-10-21T12:00:00+00:00',
+                                           'fetched_to': '2026-10-29T12:00:00+00:00'}]}
     DESTINO.mkdir(exist_ok=True)
     for nombre, contenido in datos.items():
         (DESTINO / f'{nombre}.json').write_text(json.dumps(contenido, ensure_ascii=False, indent=1) + '\n', encoding='utf-8', newline='\n')

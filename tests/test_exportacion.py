@@ -123,7 +123,8 @@ class DetallePartido(unittest.TestCase):
             self.assertEqual(cuerpo['data'], original['payload'], seccion)
             self.assertEqual(cuerpo['meta'], {
                 'match_id': FINALIZADO, 'section': seccion, 'source': 'Sofascore', 'source_key': seccion,
-                'availability': 'stored', 'fetched_at': original['fetched_at'], 'versions': 1, 'note': api.NOTA_FETCHED_AT,
+                'availability': 'stored', 'fetched_at': original['fetched_at'], 'versions': 1, 'discrepancy': None,
+                'note': api.NOTA_FETCHED_AT,
             })
         # Identificadores de SofaScore intactos dentro del payload.
         alineaciones = consultar(f'/api/v1/matches/{FINALIZADO}/lineups')[1]['data']
@@ -149,16 +150,25 @@ class CasosConstruidos(unittest.TestCase):
     def registro(self, key, fetched_at, payload, event_id=FINALIZADO):
         return {'event_id': event_id, 'key': key, 'sub': '', 'fetched_at': fetched_at, 'payload': payload}
 
-    def test_varias_versiones_gana_la_mas_reciente_por_fetched_at(self):
+    def test_varias_versiones_sirve_la_que_selecciono_el_importador(self):
+        # La API no aplica otra política: sirve la marcada, aunque no sea la más reciente.
         datos = api.cargar(carpeta_con_originales([
-            self.registro('statistics', '2026-10-21T12:00:00+00:00', {'statistics': [{'period': 'NUEVA'}]}),
-            self.registro('statistics', '2026-10-20T12:00:00+00:00', {'statistics': [{'period': 'ANTIGUA'}]}),
-            self.registro('statistics', 'no-es-fecha', {'statistics': [{'period': 'ILEGIBLE'}]}),
+            dict(self.registro('statistics', '2026-10-21T12:00:00+00:00', {'statistics': [{'period': 'NUEVA'}]}), selected=False),
+            dict(self.registro('statistics', '2026-10-20T12:00:00+00:00', {'statistics': [{'period': 'ANTIGUA'}]}), selected=True),
+            dict(self.registro('statistics', 'no-es-fecha', {'statistics': [{'period': 'ILEGIBLE'}]}), selected=False),
         ]))
         estado, cuerpo = consultar(f'/api/v1/matches/{FINALIZADO}/statistics', datos)
         self.assertEqual(estado, 200)
-        self.assertEqual(cuerpo['data'], {'statistics': [{'period': 'NUEVA'}]})
-        self.assertEqual((cuerpo['meta']['fetched_at'], cuerpo['meta']['versions']), ('2026-10-21T12:00:00+00:00', 3))
+        self.assertEqual(cuerpo['data'], {'statistics': [{'period': 'ANTIGUA'}]})
+        self.assertEqual((cuerpo['meta']['fetched_at'], cuerpo['meta']['versions']), ('2026-10-20T12:00:00+00:00', 3))
+
+    def test_varias_versiones_sin_seleccion_no_se_cargan(self):
+        for registros in ([self.registro('statistics', '2026-10-21T12:00:00+00:00', {'statistics': [{'period': 'A'}]}),
+                           self.registro('statistics', '2026-10-20T12:00:00+00:00', {'statistics': [{'period': 'B'}]})],
+                          [dict(self.registro('statistics', '2026-10-21T12:00:00+00:00', {'statistics': [{'period': 'A'}]}), selected=True),
+                           dict(self.registro('statistics', '2026-10-20T12:00:00+00:00', {'statistics': [{'period': 'B'}]}), selected=True)]):
+            with self.assertRaises(ValueError):
+                api.cargar(carpeta_con_originales(registros))
 
     def test_contenido_vacio_se_distingue_de_seccion_no_almacenada(self):
         datos = api.cargar(carpeta_con_originales([
@@ -311,7 +321,7 @@ class RendimientoExportacion(unittest.TestCase):
         [c] = cuerpo['data']['competitions']
         self.assertEqual((estado, c['tournament_id'], c['season_id']), (200, 94191, 97382))
         self.assertEqual(c['matches'], {'in_scope': 37, 'finished': 8, 'pending': 29, 'counted': 8,
-                                        'finished_without_valid_score': 0, 'unknown_status': 0})
+                                        'finished_without_valid_score': 0, 'excluded_by_version_conflict': 0, 'unknown_status': 0})
         self.assertEqual(c['record'], {'played': 8, 'wins': 4, 'draws': 3, 'losses': 1,
                                        'goals_for': 12, 'goals_against': 8, 'goal_difference': 4})
         self.assertEqual(c['venues'], {'home': {'wins': 2, 'draws': 2, 'losses': 0}, 'away': {'wins': 2, 'draws': 1, 'losses': 1}})

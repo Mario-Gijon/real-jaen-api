@@ -62,6 +62,12 @@ class Ambito(unittest.TestCase):
             {'name': 'Primera Federación, Grupo 2', 'season': '26/27',
              'unique_tournament_id': 17073, 'tournament_id': 94191, 'season_id': 97382}])
 
+    def test_equipos_con_exportacion_propia_segun_el_manifiesto(self):
+        # Sólo el Real Jaén; los rivales observados en sus partidos no tienen exportación propia.
+        equipos = consultar('/api/v1/scope')[1]['data']['teams_with_own_export']
+        self.assertEqual([(e['team_id'], e['name']) for e in equipos], [(crear.JAEN, 'Real Jaén')])
+        self.assertEqual(equipos[0]['exports'][0]['file'], 'muestra-sintetica.jsonl')
+
     def test_solo_partidos_del_grupo_2(self):
         partidos = consultar(f'/api/v1/teams/{crear.JAEN}/matches')[1]['data']
         self.assertEqual({m['tournament_id'] for m in partidos}, {94191})
@@ -122,7 +128,7 @@ class Rendimiento(unittest.TestCase):
         # Copa y Grupo 1, aunque finalizados y con marcador, no están en el ámbito.
         self.assertEqual(self.competicion()['matches'], {
             'in_scope': 12, 'finished': 8, 'pending': 3, 'counted': 5,
-            'finished_without_valid_score': 3, 'unknown_status': 1})
+            'finished_without_valid_score': 3, 'excluded_by_version_conflict': 0, 'unknown_status': 1})
 
     def test_balance_casa_fuera_y_diferencia(self):
         c = self.competicion()

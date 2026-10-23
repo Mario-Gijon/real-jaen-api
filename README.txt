@@ -1,17 +1,104 @@
 API LOCAL REAL JAEN — Python 3.10+, sin instalar dependencias.
 
 NECESITA DATOS (no incluidos en el repositorio)
-La API sirve una exportacion de SofaScore ya importada. Esos datos no se versionan
+La API sirve exportaciones de SofaScore ya importadas. Esos datos no se versionan
 (.gitignore excluye datos/ y las exportaciones .jsonl): un clon NO arranca hasta
-que se proporcionan. datos/ debe contener la salida del importador:
+que se proporcionan. La carpeta de datos contiene la salida del importador:
   equipos.json, jugadores.json, partidos.json, jugador_partido.json  (obligatorios)
-  originales.json  (opcional: sin el, ninguna seccion de detalle figura almacenada)
-  resumen.json     (lo genera el importador; la API no lo lee)
-Para generarlos con el importador (proyecto aparte, sofascore_scraper/importador-real-jaen):
-  python importar.py real-jaen-raw_AAAA-MM-DD_xxxx.jsonl --salida datos_normalizados
-  y copia los JSON de datos_normalizados/ a datos/ de esta carpeta
-  (o arranca con --datos apuntando a datos_normalizados).
-El importador exige una carpeta de salida nueva y no modifica la exportacion.
+  originales.json      (opcional: sin el, ninguna seccion de detalle figura almacenada)
+  exportaciones.json   (manifiesto: procedencia y equipos con exportacion propia)
+  discrepancias.json   (versiones que no coinciden, conservadas)
+  resumen.json         (lo genera el importador; la API no lo lee)
+Una importacion anterior (sin manifiesto) sigue cargando, pero no declara ningun
+equipo con exportacion propia; si tiene secciones repetidas sin seleccion, no carga.
+
+IMPORTADOR (importar.py, en esta carpeta)
+Es la unica implementacion: sustituye a sofascore_scraper/importador-real-jaen/importar.py,
+que queda como copia historica sin mantener (no se ha modificado). api.py usa sus funciones
+de fechas y de datos maestros, asi que importador y API aplican las mismas reglas.
+  python importar.py --exportacion 2841=real-jaen-raw_AAAA-MM-DD.jsonl \
+                     --exportacion 24368=ud-ibiza-raw_AAAA-MM-DD.jsonl --salida datos_AAAA-MM-DD
+  python importar.py exportacion.jsonl --salida otra   (sin equipo seguido declarado)
+--exportacion EQUIPO=RUTA declara que esa exportacion es la propia del equipo EQUIPO (id de
+SofaScore). Se pueden combinar varias, tambien la misma dos veces. La carpeta de salida debe
+ser nueva: se escribe en <salida>.parcial y se renombra al terminar, asi que un fallo no
+deja datos a medias ni toca los activos. Las entradas no se modifican; no accede a Internet.
+Procedencia: originales.json conserva TODAS las lineas de entrada, cada una con export (E1,
+E2... del manifiesto), line, content_hash (SHA256 del payload canonico), fetched_instant
+(UTC) y fetched_at_valid; selected marca la version operativa de cada seccion. El
+manifiesto (exportaciones.json) guarda fichero, SHA256, equipo seguido, recuentos, rango
+de fetched_at y la fecha de importacion local (imported_at), distinta de la de obtencion.
+Politica de versiones (importar.seleccionar; la API sirve la marcada y no aplica otra):
+  - Contenido identico (misma huella) con otra fecha: no es una discrepancia.
+  - fetched_at se compara como instante (con su desfase); una fecha invalida o sin
+    desfase queda señalada (fetched_at_valid=false) y nunca gana a una valida.
+  - event: una version final (finished) prevalece sobre las preliminares (notstarted,
+    inprogress); un aplazado o cancelado anterior a la final no es conflicto. Es conflicto
+    de integridad un estado no final obtenido despues de una final o un cambio de
+    identidad (equipos, torneo, temporada): el partido lleva version_conflict y no entra
+    en agregados (excluded_by_version_conflict). Marcadores finales distintos: se usa el
+    final mas reciente y se informa (final_score_corrected); los totales pueden cambiar.
+  - lineups: una alineacion confirmada prevalece sobre una preliminar.
+  - Resto, y versiones comparables: la mas reciente es la operativa, sin afirmar que sea la
+    correcta; la discrepancia queda en discrepancias.json con todas las versiones.
+  - No se exige que estadisticas o incidencias se obtuvieran despues del final.
+Datos maestros (jugadores.json): campo a campo, el valor conocido mas reciente de todas las
+versiones de alineacion; una ausencia nunca borra un valor conocido; valores distintos se
+registran (player_attribute_values_differ). La ficha no lleva equipo: equipo y dorsal son
+relaciones por partido (jugador_partido).
+
+CALENDARIO SIN PAYLOAD (--calendario RUTA)
+Un partido que el scraper sólo conoce por el calendario de la jornada (sin payload raw: el raw no
+lo exporta y el scraper no pide el `event` de un pendiente conocido así) entra desde su dataset
+normalizado `events` (ssc export --dataset events --format jsonl --event ID ...):
+  python importar.py --exportacion ... --calendario grupo2-j38-ausentes-normalizado.jsonl --salida ...
+Cada fila se conserva en originales.json como registro `listing` (exportacion, linea, huella) y,
+si el partido no tiene `event` raw, entra en partidos.json con calendar_source "listing", sin
+secciones; tournament_id es el grupo (stage) y la temporada se nombra como la de los partidos raw
+con el mismo season_id. Si tiene `event` raw, el raw manda y la diferencia queda en
+discrepancias.json (listing_differs_from_event, sin conflicto de integridad). Un calendario no
+declara equipo seguido. La API confirma el ambito con la fila `listing` cuando no hay `event`.
+Motivo: el seguimiento de un equipo en el scraper lee una sola pagina de proximos partidos
+(events/next/0, 30 partidos); con un partido de Copa por delante, el ultimo de liga queda fuera.
+El parche local del scraper (abajo) corrige la paginacion para los seguimientos futuros, pero
+no da payload raw a esos partidos: un pendiente conocido por el calendario sigue sin `event`
+hasta que termine. Este complemento se conserva.
+
+PARCHE LOCAL DEL SCRAPER (paginas de proximos partidos)
+Repositorio: C:\Users\broke\dev\sofascore_scraper\sofascore_scraper, commit c697852 en la rama
+local real-jaen/follow-next-pages, sobre dd9f061 (main, sin cambios: igual que el original). Para
+sincronizar con la correccion, esa rama debe estar activa. Copia del parche fuera de Git:
+  C:\Users\broke\dev\sofascore_scraper\importador-real-jaen\parches\scraper-next-paginas_2026-10-22.patch
+Archivos: sofascore_scraper/services/follow_sync.py (list_follow lee next/0, next/1, ...),
+services/sync.py (motivos del FailedListing), tests/test_fx19_follow_sync.py (11 casos nuevos),
+docs/design/02-services.md y CHANGELOG.md. No toca frontend/package-lock.json (cambio ajeno previo).
+Comportamiento: sigue hasNextPage hasta false, 404 o pagina vacia; un partido cuenta una vez;
+como mucho MAX_NEXT_PAGES = 10 paginas. La lista es incompleta (se conservan los partidos ya
+leidos, failed_listings y trabajo `partial`, nunca exito completo) si llega al limite con mas
+paginas (page_limit), si una pagina anunciada no trae partidos nuevos (repeated_page), si una
+pagina posterior falla (motivo de la peticion: 403, 429, 5xx...), si llega mal formada (parse)
+o si tiene registros y ninguno se puede leer (unreadable_page). Solo hasNextPage false, 404 o
+una pagina sin partidos son final normal. Paginas pasadas, ventana, presupuesto de peticiones,
+pausas, cortacircuitos y politica de descarga (un pendiente solo con /event) no cambian.
+Tras actualizar el repositorio original:
+  0. main no lleva el parche: git switch main y git pull.
+  1. Si upstream ya lo corrige, en tests/test_fx19_follow_sync.py o en follow_sync.py aparecera
+     la lectura de next/1 y la rama se abandona; si no: git switch real-jaen/follow-next-pages y
+     git rebase main (si no aplica, revisar list_follow a mano con el commit o el .patch como guia).
+  2. Probar sin red: python -m pytest -q tests/test_fx19_follow_sync.py
+     (las pruebas de varias paginas fallan si falta la correccion).
+  3. Comprobacion real puntual, opcional: sincronizar un unico seguimiento de equipo con partido
+     de Copa pendiente y ver en el registro del trabajo /team/{id}/events/next/1.
+Limitaciones: el limite de 10 paginas es una salvaguarda sin medir con datos reales; una pagina
+con parte de sus registros ilegibles aporta los legibles y no marca la lista como incompleta
+(los ilegibles no se cuentan); un fallo de una pagina posterior a next/0 no lee las paginas
+pasadas (igual que antes con next/0); los partidos
+ya guardados como listing (los dos de J38) no reciben payload hasta terminar.
+
+COBERTURA
+GET /api/v1/scope publica teams_with_own_export: los equipos seguidos en el manifiesto,
+con sus exportaciones. Una exportacion propia no acredita un calendario ni unas
+estadisticas completas; los rivales que solo aparecen en partidos ajenos no figuran.
 
 ARRANCAR
   python api.py                       (lee datos/ y ambito.json de esta carpeta)
@@ -73,7 +160,7 @@ GET /api/v1/teams/{teamId}/performance
   200 {"data": {"team_id", "competitions": [una por entrada de ambito.json:
         name, season, unique_tournament_id, tournament_id, season_id,
         matches: {in_scope, finished, pending, counted,
-                  finished_without_valid_score, unknown_status},
+                  finished_without_valid_score, excluded_by_version_conflict, unknown_status},
         record: {played, wins, draws, losses, goals_for, goals_against,
                  goal_difference},
         venues: {home|away: {wins, draws, losses}},
@@ -169,13 +256,17 @@ tocan: el normalizado va al lado, con el origen de cada cifra.
   autogol ni una tanda, que es otro incidentType) y sus asistencias (assist1) deben
   coincidir con goals/goalAssist; si no, esa cifra queda sin dato y se anota
   goals_mismatch / assists_mismatch en issues. Nunca se suman las dos fuentes.
-  issues: participation_contradiction, stats_without_entry, events_without_entry,
+  Versiones de alineacion: si dos versiones posteriores al partido (las que traen minutos)
+  no coinciden para un jugador (suplente, minutos o estadisticas individuales), su
+  participacion queda unknown (lineup_versions_disagree) aunque una sea mas reciente.
+  issues: participation_contradiction, stats_without_entry, events_without_entry, lineup_versions_disagree,
           goals_mismatch, assists_mismatch, team_id_mismatch, source_team_mismatch.
   evidence: por cada incidencia de participacion o de goles/asistencias, el jugador, el
           partido, los campos en conflicto con sus valores originales (sin validar), las
-          fuentes (jugador_partido, originales:lineups, originales:incidents) y el
-          fetched_at de cada registro. Nada se resuelve a mano: queda para contrastarlo con
-          otras fuentes.
+          fuentes (jugador_partido, originales:lineups, originales:incidents), el
+          fetched_at de cada registro y todas las versiones de alineacion e incidencias del
+          partido (exportacion, linea, huella). Nada se resuelve a mano: queda para
+          contrastarlo con otras fuentes.
   Discrepancia pendiente (exportacion del 21-10): Francisco Gallego (1982588) en J4,
   Real Jaen 2-1 UD Ibiza (16599916). Suplente sin minutos ni entrada registrada (el lado
   cuadra sus 5 cambios), pero sus estadisticas traen touches, totalPass, accuratePass,
@@ -214,6 +305,8 @@ GET /api/v1/matches/{matchId}/statistics | /lineups | /incidents
       {"error": "Ruta inexistente"} para otra seccion.
   400 {"error": "Identificador invalido"} si matchId no es un entero.
 
+  meta.versions cuenta todas las versiones guardadas de la seccion; meta.discrepancy
+  resume la del importador ({reasons, integrity}) o es null.
   Disponibilidad:
   - stored: hay registro y tiene contenido.
   - empty: hay registro pero sin elementos de su categoria (payload vacio, o
@@ -221,10 +314,9 @@ GET /api/v1/matches/{matchId}/statistics | /lineups | /incidents
     lado). data trae el payload tal cual.
   - not_stored: no hay ningun registro de esa seccion para el partido (normal
     en partidos pendientes). data es null. No es un error: responde 200.
-  Si hay varias versiones de una seccion se sirve la de fetched_at mas
-  reciente (a igual fecha, la ultima del archivo; una fecha ilegible cuenta
-  como la mas antigua). fetched_at es la fecha en que se obtuvo el payload,
-  no la fecha de actualizacion de su contenido.
+  Si hay varias versiones de una seccion se sirve la que eligio el importador
+  (selected; ver IMPORTADOR). fetched_at es la fecha en que se obtuvo el
+  payload, no la fecha de actualizacion de su contenido.
   Los identificadores son los de SofaScore y el payload no se transforma:
   ningun valor ausente se convierte en cero.
 
@@ -236,6 +328,21 @@ Si no encuentras la terminal (Windows, PowerShell):
   python api.py
 Comprueba: http://127.0.0.1:8001/health
 
+PERSISTENCIA FUTURA
+Los JSON son una etapa del prototipo. Lo que este formato ya prepara para una base de datos:
+  - Datos maestros (jugadores.json: identidad, nacimiento, estatura, pie, pais) separados de
+    las relaciones por partido (jugador_partido: equipo, dorsal, lado) y de los datos
+    deportivos (partidos, originales). jugador-equipo-temporada y dorsales se derivan de
+    jugador_partido; hoy no hay tabla propia.
+  - Claves naturales de SofaScore (event_id, key, sub; match_id; player_id; team_id) para
+    reimportar sin duplicar; content_hash para versiones; export/line para procedencia.
+  - Una exportacion parcial no borra nada: cada importacion se hace desde todas las
+    exportaciones conservadas. Para actualizar se añade la nueva exportacion y se reimporta
+    a una carpeta nueva; los datos activos siguen disponibles si falla.
+  - fetched_at (obtencion) e imported_at (actualizacion local) son distintos.
+Decisiones que afectaran a la persistencia: la reimportacion completa (no incremental), la
+seleccion por seccion y el formato de discrepancias.json; la API carga todo en memoria.
+
 PRUEBAS
 Desde esta carpeta: python -m unittest discover -s tests -v
 No necesitan que el servicio del puerto 8001 este en marcha: arrancan api.py en un
@@ -243,6 +350,9 @@ puerto libre para comprobar las respuestas HTTP.
 - tests/test_api.py: muestra pequena y sintetica (tests/fixtures/datos, versionada;
   se regenera con python tests/fixtures/crear.py) con el ambito.json del proyecto.
   Funcionan en un clon sin datos/.
+- tests/test_importar.py: el importador con exportaciones sinteticas pequeñas (repeticion,
+  solapamiento, contenido identico y discrepante, desfases y fechas invalidas, estados,
+  alineaciones, jugador en varios equipos, datos maestros, cobertura) y como las sirve api.py.
 - tests/test_exportacion.py: la exportacion real de datos/ (recuentos incluidos). Sin
   datos/ se omiten. Usan los JSON sin modificarlos y construyen en una carpeta
   temporal los casos que no estan en la muestra (varias versiones, contenido vacio,

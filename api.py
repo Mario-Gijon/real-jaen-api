@@ -2,10 +2,13 @@
 import argparse
 import json
 import math
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
+
+# Las reglas de versiones y de datos maestros son las del importador: una sola implementación.
+from importar import ficha_combinada, ficha_de_entrada
 
 # Secciones de detalle de partido: ruta -> clave `key` de originales.json.
 SECCIONES = {'statistics': 'statistics', 'lineups': 'lineups', 'incidents': 'incidents'}
@@ -19,6 +22,10 @@ def cargar(carpeta, ambito=AMBITO):
     # Los originales son opcionales: sin ellos, ninguna sección de detalle figura como almacenada.
     ruta = carpeta / 'originales.json'
     datos['originales'] = indexar(json.loads(ruta.read_text(encoding='utf-8'))) if ruta.exists() else {}
+    # Manifiesto y discrepancias del importador (formato 2); una importación anterior no los tiene.
+    opcional = lambda nombre, defecto: json.loads((carpeta / nombre).read_text(encoding='utf-8')) if (carpeta / nombre).exists() else defecto
+    datos['exportaciones'] = opcional('exportaciones.json', None)
+    datos['discrepancias'] = opcional('discrepancias.json', [])
     return aplicar_ambito(datos, leer_ambito(ambito))
 
 def leer_ambito(ruta):
@@ -32,9 +39,14 @@ def leer_ambito(ruta):
     return competiciones
 
 def competicion_original(originales, ident):
-    """(unique_tournament_id, tournament_id, season_id) del registro `event` guardado, o None si no hay."""
+    """(unique_tournament_id, tournament_id, season_id) del registro `event` guardado o, si no lo hay, de la fila
+    `listing` de un calendario normalizado (tournament_id ahí es la competición general y stage el grupo); None si
+    no hay ninguno."""
     entrada = originales.get((ident, 'event'))
     if entrada is None:
+        listado = (originales.get((ident, 'listing')) or {}).get('registro', {}).get('payload')
+        if isinstance(listado, dict):
+            return (listado.get('tournament_id'), (listado.get('stage') or {}).get('id'), listado.get('season_id'))
         return None
     payload = entrada['registro'].get('payload')
     evento = payload.get('event', payload) if isinstance(payload, dict) else {}
@@ -51,23 +63,18 @@ def competicion_de(originales, partido, competiciones):
     return c
 
 def ficha_de_alineaciones(originales, ident):
-    """Ficha del jugador como la construye el importador, pero sólo desde estas alineaciones (la más reciente)."""
-    ficha = None
+    """Ficha del jugador como la construye el importador (`ficha_combinada`: campo a campo, el valor conocido más
+    reciente), pero sólo desde las versiones de estas alineaciones."""
+    observaciones = []
     for (_, key), entrada in originales.items():
         if key != 'lineups':
             continue
-        r = entrada['registro']
-        for lado in ('home', 'away'):
-            for e in ((r.get('payload') or {}).get(lado) or {}).get('players', []):
-                p = e.get('player') or {}
-                if p.get('id') != ident or (ficha and (r.get('fetched_at') or '') < (ficha['fetched_at'] or '')):
-                    continue
-                nacimiento = p.get('dateOfBirthTimestamp')
-                ficha = {'source': 'Sofascore', 'player_id': ident, 'name': p.get('name'), 'usual_position': p.get('position'),
-                         'country': (p.get('country') or {}).get('name'),
-                         'birth_date': datetime.fromtimestamp(nacimiento, timezone.utc).isoformat()[:10] if nacimiento is not None else None,
-                         'height_cm': p.get('height'), 'preferred_foot': p.get('preferredFoot'), 'fetched_at': r.get('fetched_at')}
-    return ficha
+        for r in entrada['todas']:
+            for lado in ('home', 'away'):
+                for e in ((r.get('payload') or {}).get(lado) or {}).get('players', []):
+                    if (e.get('player') or {}).get('id') == ident:
+                        observaciones.append((r.get('fetched_at'), ficha_de_entrada(e, r.get('fetched_at'))))
+    return ficha_combinada(observaciones)[0] if observaciones else None
 
 def aplicar_ambito(datos, competiciones):
     """Los datos que sirve la API, limitados a las competiciones permitidas; todas las rutas parten de aquí:
@@ -92,26 +99,36 @@ def aplicar_ambito(datos, competiciones):
                 competiciones=competiciones, excluidos={m['match_id'] for m in datos['partidos']} - incluidos,
                 jugadores_excluidos={p['player_id'] for p in datos['jugadores']} - {p['player_id'] for p in jugadores})
 
-def instante(fetched_at):
-    """fetched_at comparable; uno ilegible cuenta como el más antiguo."""
-    try:
-        return datetime.fromisoformat(fetched_at.replace('Z', '+00:00')).timestamp()
-    except (AttributeError, TypeError, ValueError):
-        return float('-inf')
-
 def indexar(registros):
-    """(event_id, key) -> {'registro': versión más reciente por fetched_at, 'versiones': n}. A igual fecha gana la última del archivo."""
-    indice = {}
+    """(event_id, key) -> {'registro': la versión operativa, 'versiones': n, 'todas': [versiones]}. La elige el
+    importador (`selected`, ver importar.seleccionar); la API no aplica otra política. Una importación sin marcas
+    (formato 1) sólo se admite si cada sección tiene una única versión."""
+    grupos = {}
     for r in registros:
-        clave = (r.get('event_id'), r.get('key'))
-        actual = indice.get(clave)
-        if actual is None:
-            indice[clave] = {'registro': r, 'versiones': 1}
-            continue
-        actual['versiones'] += 1
-        if instante(r.get('fetched_at')) >= instante(actual['registro'].get('fetched_at')):
-            actual['registro'] = r
+        grupos.setdefault((r.get('event_id'), r.get('key')), []).append(r)
+    indice = {}
+    for clave, versiones in grupos.items():
+        if any('selected' in v for v in versiones):
+            marcadas = [v for v in versiones if v.get('selected') is True]
+            if len(marcadas) != 1:
+                raise ValueError(f'originales.json: {clave} necesita exactamente una versión seleccionada por el importador')
+            elegida = marcadas[0]
+        elif len(versiones) == 1:
+            elegida = versiones[0]
+        else:
+            raise ValueError(f'originales.json: {clave} tiene {len(versiones)} versiones sin selección; impórtalo con importar.py')
+        indice[clave] = {'registro': elegida, 'versiones': len(versiones), 'todas': versiones}
     return indice
+
+def version(r):
+    """Procedencia de una versión de una sección (sin su contenido)."""
+    return {'export': r.get('export'), 'line': r.get('line'), 'content_hash': r.get('content_hash'),
+            'fetched_at': r.get('fetched_at'), 'selected': r.get('selected', True)}
+
+def discrepancia_de(datos, ident, key):
+    """La discrepancia que registró el importador para esa sección del partido, resumida; None si no hay."""
+    d = next((d for d in datos['discrepancias'] if d.get('event_id') == ident and d.get('key') == key), None)
+    return {'reasons': d['reasons'], 'integrity': d['integrity']} if d else None
 
 def vacia(seccion, payload):
     """Contenido vacío: el registro existe pero no trae elementos de esa categoría."""
@@ -144,7 +161,8 @@ def detalle_partido(datos, ident, partes):
     estado, entrada = disponibilidad(datos, ident, seccion)
     registro = entrada['registro'] if entrada else {}
     meta = {'match_id':ident,'section':seccion,'source':'Sofascore','source_key':SECCIONES[seccion],'availability':estado,
-            'fetched_at':registro.get('fetched_at'),'versions':entrada['versiones'] if entrada else 0,'note':NOTA_FETCHED_AT}
+            'fetched_at':registro.get('fetched_at'),'versions':entrada['versiones'] if entrada else 0,
+            'discrepancy':discrepancia_de(datos, ident, SECCIONES[seccion]),'note':NOTA_FETCHED_AT}
     respuesta = {'data':registro.get('payload'),'meta':meta}
     if seccion == 'lineups':
         # La participación de cada convocado según las reglas de esta fuente; el payload original no se toca.
@@ -248,7 +266,7 @@ def partidos_contados(datos, ident, c):
                        and (m['tournament_id'], m['season_id']) == (c['tournament_id'], c['season_id'])),
                       key=orden_cronologico)
     cuenta = {'in_scope': len(partidos), 'finished': 0, 'pending': 0, 'counted': 0,
-              'finished_without_valid_score': 0, 'unknown_status': 0}
+              'finished_without_valid_score': 0, 'excluded_by_version_conflict': 0, 'unknown_status': 0}
     resultados = []
     for m in partidos:
         if m['status'] in PENDIENTES:
@@ -258,6 +276,10 @@ def partidos_contados(datos, ident, c):
             cuenta['unknown_status'] += 1
             continue
         cuenta['finished'] += 1
+        # Versiones que se contradicen en la identidad o el estado del partido: señalado, nunca en los agregados.
+        if m.get('version_conflict') is True:
+            cuenta['excluded_by_version_conflict'] += 1
+            continue
         if not (marcador_valido(m.get('home_score')) and marcador_valido(m.get('away_score'))):
             cuenta['finished_without_valid_score'] += 1
             continue
@@ -331,6 +353,7 @@ def contexto_partido(datos, ident):
     incidencias no cuadran con el marcador o traen una clase de gol desconocida: entonces no se contrasta."""
     partido = next((m for m in datos['partidos'] if m['match_id'] == ident), {})
     alineacion = (datos['originales'].get((ident, 'lineups')) or {}).get('registro', {}).get('payload')
+    versiones = {k: [version(r) for r in (datos['originales'].get((ident, k)) or {}).get('todas', [])] for k in ('lineups', 'incidents')}
     incidencias = ((datos['originales'].get((ident, 'incidents')) or {}).get('registro', {}).get('payload') or {})
     incidencias = incidencias.get('incidents') if isinstance(incidencias, dict) else None
     confirmada = isinstance(alineacion, dict) and alineacion.get('confirmed') is True
@@ -365,7 +388,36 @@ def contexto_partido(datos, ident):
     contrastable = (lista is not None and all(c in CLASES_DE_GOL | {'ownGoal'} for c in clases)
                     and all(marcador_valido(v) for v in marcador) and len(clases) == sum(marcador))
     return {'alineacion_confirmada': confirmada, 'entradas': entradas, 'con_eventos': con_eventos, 'cobertura': cobertura,
-            'goles': goles if contrastable else None, 'asistencias': asistencias if contrastable else None}
+            'goles': goles if contrastable else None, 'asistencias': asistencias if contrastable else None,
+            'versiones': versiones, 'desacuerdos': desacuerdos_de_alineacion(datos, ident)}
+
+def desacuerdos_de_alineacion(datos, ident):
+    """Jugadores cuya participación difiere entre versiones distintas de la alineación posteriores al partido (las que
+    traen minutos de algún jugador; una instantánea previa no se compara): suplente, minutos o estadísticas
+    individuales. {jugador: [lo que dice cada versión]}. Una versión más reciente no resuelve el desacuerdo."""
+    todas = (datos['originales'].get((ident, 'lineups')) or {}).get('todas', [])
+    def jugadores(payload):
+        for lado in ('home', 'away'):
+            for e in ((payload or {}).get(lado) or {}).get('players') or []:
+                if isinstance(e, dict) and isinstance(e.get('player'), dict):
+                    yield e
+    unicas = list({r.get('content_hash', id(r)): r for r in todas}.values())
+    comparables = [r for r in unicas if any(isinstance((e.get('statistics') or {}).get('minutesPlayed'), int)
+                                             for e in jugadores(r.get('payload')))]
+    if len(comparables) < 2:
+        return {}
+    dichos = {}
+    for r in comparables:
+        vistos = {}
+        for e in jugadores(r.get('payload')):
+            stats = e.get('statistics') if isinstance(e.get('statistics'), dict) else {}
+            vistos[e['player'].get('id')] = {'substitute': e.get('substitute'), 'minutesPlayed': stats.get('minutesPlayed'),
+                                             'individual_statistics': sorted(set(stats) - ESTADISTICAS_DE_BANQUILLO - {'minutesPlayed'})}
+        for jugador in set(vistos) | set(dichos):
+            dichos.setdefault(jugador, []).append(dict(version(r), **(vistos.get(jugador) or {'listed': False})))
+    def firma(v):
+        return (v.get('listed', True), v.get('substitute'), v.get('minutesPlayed'), bool(v.get('individual_statistics')))
+    return {j: vs for j, vs in dichos.items() if len(vs) < len(comparables) or len({firma(v) for v in vs}) > 1}
 
 def valor(dato, origen):
     return {'value': dato, 'source': origen if dato is not None else None}
@@ -407,7 +459,8 @@ def actuacion(filas, partido, contexto):
     def evidencia(codigo, campos, fuentes):
         # Los valores tal como vienen en los registros (sin validar), para no perder la discrepancia.
         evidencias.append({'issue': codigo, 'match_id': filas[0].get('match_id'), 'player_id': jugador, 'fields': campos,
-                           'sources': fuentes, 'records': [r.get('fetched_at') for r in filas]})
+                           'sources': fuentes, 'records': [r.get('fetched_at') for r in filas],
+                           'versions': contexto['versiones']})
     def participacion_original():
         individuales = sorted(set().union(*(set(estadisticas_de(r)) for r in filas)) - ESTADISTICAS_DE_BANQUILLO)
         return {'substitute': [r.get('substitute') for r in filas], 'played': [r.get('played') for r in filas],
@@ -416,7 +469,13 @@ def actuacion(filas, partido, contexto):
                 'substitutions_cover_side': contexto['cobertura'].get(lado) if lado else None}
     FUENTES_PARTICIPACION = ['jugador_partido', 'originales:lineups', 'originales:incidents']
     confirmada, contradiccion = participacion(jugado, minutos)
-    if contradiccion or (jugado is False and (entra or (suplente is False and contexto['alineacion_confirmada']))):
+    if jugador in contexto['desacuerdos']:
+        # Las versiones de la alineación no dicen lo mismo de este jugador: ninguna gana por ser más reciente.
+        estado, base = 'unknown', 'lineup_versions_disagree'
+        incidencias.append('lineup_versions_disagree')
+        evidencia('lineup_versions_disagree', dict(participacion_original(), lineup_versions=contexto['desacuerdos'][jugador]),
+                  ['originales:lineups'])
+    elif contradiccion or (jugado is False and (entra or (suplente is False and contexto['alineacion_confirmada']))):
         estado, base = 'unknown', 'contradiction'
         incidencias.append('participation_contradiction')
         evidencia('participation_contradiction', participacion_original(), FUENTES_PARTICIPACION)
@@ -541,14 +600,29 @@ def acumulados_jugadores(datos, ident):
                                   players=jugadores))
     return {'team_id': ident, 'competitions': competiciones}
 
+NOTA_EXPORTACIONES = ('teams_with_own_export: equipos con una exportación propia declarada en el manifiesto del importador; '
+                      'no acredita que su calendario ni sus estadísticas estén completos.')
+
+def equipos_con_exportacion(datos):
+    """Equipos con exportación propia según el manifiesto (exportaciones.json); sin manifiesto, ninguno declarado."""
+    manifiesto = datos.get('exportaciones') or {}
+    nombres = {e['team_id']: e['name'] for e in datos['equipos']}
+    equipos = []
+    for equipo in manifiesto.get('followed_team_ids') or []:
+        propias = [e for e in manifiesto.get('exports') or [] if e.get('followed_team_id') == equipo]
+        equipos.append({'team_id': equipo, 'name': nombres.get(equipo),
+                        'exports': [{k: e.get(k) for k in ('file', 'sha256', 'fetched_from', 'fetched_to')} for e in propias]})
+    return equipos
+
 def consultar(datos, ruta):
     partes = ruta.strip('/').split('/')
     if ruta == '/health':
         return 200, {'data': {'status':'ok'}}
     if ruta == '/api/v1/scope':
         competiciones = [dict({'name': c['nombre'], 'season': c.get('temporada')}, **{k: c[k] for k in CAMPOS_AMBITO}) for c in datos['competiciones']]
-        return 200, {'data': {'competitions': competiciones},
-                     'meta': {'note': 'Sólo se sirven partidos, convocatorias y jugadores de estas competiciones.'}}
+        return 200, {'data': {'competitions': competiciones, 'teams_with_own_export': equipos_con_exportacion(datos)},
+                     'meta': {'note': 'Sólo se sirven partidos, convocatorias y jugadores de estas competiciones. '
+                                      + NOTA_EXPORTACIONES}}
     if len(partes) not in (4,5) or partes[:2] != ['api','v1'] or partes[2] not in ('teams','players','matches'):
         return 404, {'error': 'Ruta inexistente'}
     try:
