@@ -379,3 +379,61 @@ puerto libre para comprobar las respuestas HTTP.
   datos/ se omiten. Usan los JSON sin modificarlos y construyen en una carpeta
   temporal los casos que no estan en la muestra (varias versiones, contenido vacio,
   sin originales, otros grupos o temporadas).
+
+FICHAS INDIVIDUALES COMPLEMENTARIAS (opcional; no descarga desde el importador)
+  python importar.py --exportacion EQUIPO=raw.jsonl --calendario calendario.jsonl \
+                    --fichas-jugadores fichas.jsonl --salida carpeta_nueva
+--fichas-jugadores RUTA es repetible. Cada linea JSONL conserva el sobre:
+  {"player_id":1545211,"endpoint":"/player/1545211",
+   "fetched_at":"2026-10-23T12:44:55+00:00","payload":{"player":{"id":1545211,"preferredFoot":"Left"}}}
+payload es la respuesta ORIGINAL completa; el ejemplo anterior esta abreviado.
+Se exige identidad entera positiva coincidente en sobre, endpoint y payload.player.id,
+fecha ISO con zona horaria y tipos validos de los atributos personales admitidos.
+Endpoint es la ruta relativa consultada por el transporte del scraper.
+No se normalizan ni inventan valores de preferredFoot: la API del dashboard ya distingue
+Left/Right/Both (sin distinguir mayusculas) y muestra como desconocidos otros valores.
+
+La salida nueva guarda fichas_originales.json con TODAS las versiones, exportacion,
+linea, SHA256 canonico y fecha de obtencion; exportaciones.json incluye los ficheros
+complementarios, su SHA256 y rango de fechas. No se mezclan con originales de partidos.
+Un mismo fichero repetido conserva sus referencias de procedencia, sin duplicar jugadores,
+partidos ni convocatorias. No es una duplicacion deportiva.
+Solo se enriquecen jugadores ya observados en alineaciones y los campos name,
+usual_position, country, birth_date, height_cm y preferred_foot. Equipo, dorsal y
+estadisticas de la ficha nunca sustituyen relaciones de partido. Una ficha de un jugador
+no observado se conserva como evidencia sin crear pertenencia ni convocatorias.
+Todas las versiones participan en ficha_combinada: ultimo valor conocido por instante,
+ausencia/null no borra conocido y valores explicitos distintos generan discrepancia
+player_attribute_values_differ con valores y referencias de las versiones de origen.
+Al aplicar el ambito, la API conserva los complementos personales al reconstruir fichas
+desde alineaciones incluidas; nunca acredita pertenencia al equipo con la ficha personal.
+
+Tambien se admiten, en el mismo fichero o mezclados, los registros Slice que escribe
+el scraper con `ssc export --dataset player_profiles` (uno por jugador, con su payload):
+  {"owner_kind":"player","owner_id":1545211,"key":"player_profile","sub":null,
+   "state":"ok","has_payload":true,"fetched_at_utc":"2026-10-23T14:04:17Z",...,"payload":{...}}
+Se exige owner_kind player, key player_profile sin sub y owner_id entero positivo; el
+registro se convierte al sobre anterior (player_id=owner_id, endpoint /player/ID,
+fetched_at=fetched_at_utc) y se valida igual. Un registro sin ficha (404 o error sin
+version previa: has_payload false y payload null) no aporta datos: se cuenta en
+without_profile de exportaciones.json. payload sin has_payload es un error.
+
+Obtencion con el scraper (flujo normal; el importador no descarga):
+1. ssc --rate 1 fetch player --ids-file ids.txt   (una id por linea; # comenta)
+   Con SOFASCORE_CLIENT__MAX_CONCURRENT=1 para ir de una en una. Usa la sesion, los
+   limites, los reintentos, el puente de navegador y el cortacircuitos del scraper.
+   No crea seguimientos ni descarga partidos. --dry-run cuenta lo pendiente sin pedir.
+2. Las fichas validas guardadas no se vuelven a pedir: reanudar es repetir el comando.
+   Un error se reintenta en la siguiente ejecucion; un 404 queda registrado con fecha,
+   se pregunta otra vez una vez y despues solo con --refresh.
+3. --refresh pide de nuevo cada ficha dada; una ficha distinta se anade al historial
+   sin perder la anterior.
+4. ssc export --dataset player_profiles [--player ID ...] --out fichas.jsonl
+   Reimportar TODOS los raw, calendarios y complementos conservados a una carpeta nueva.
+   Revisar discrepancias antes de cambiar servicios. Arrancar con --ambito y
+   --sustituciones explicitos: importar no activa datos ni aplica decisiones locales.
+
+Pruebas: tests/test_fichas.py cubre identidad, estructura, zonas horarias, nulos,
+conflictos de valores, reimportacion, aislamiento de relaciones/deporte, reconstruccion
+por ambito y registros Slice del scraper (propietario, clave, identidad, sin ficha).
+Todas las pruebas de la API se ejecutan con unittest discover -s tests.

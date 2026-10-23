@@ -8,7 +8,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 
 # Las reglas de versiones y de datos maestros son las del importador: una sola implementación.
-from importar import ficha_combinada, ficha_de_entrada
+from importar import ficha_combinada, ficha_de_entrada, validar_ficha
 
 # Secciones de detalle de partido: ruta -> clave `key` de originales.json.
 SECCIONES = {'statistics': 'statistics', 'lineups': 'lineups', 'incidents': 'incidents'}
@@ -28,6 +28,9 @@ def cargar(carpeta, ambito=AMBITO, sustituciones=None):
     opcional = lambda nombre, defecto: json.loads((carpeta / nombre).read_text(encoding='utf-8')) if (carpeta / nombre).exists() else defecto
     datos['exportaciones'] = opcional('exportaciones.json', None)
     datos['discrepancias'] = opcional('discrepancias.json', [])
+    datos['fichas_originales'] = opcional('fichas_originales.json', [])
+    for r in datos['fichas_originales']:
+        validar_ficha(r)
     datos = aplicar_ambito(datos, leer_ambito(ambito))
     # Sin archivo de sustituciones, ninguna: los datos se sirven como los dejó el importador.
     return aplicar_sustituciones(datos, leer_sustituciones(sustituciones) if sustituciones else [])
@@ -66,7 +69,7 @@ def competicion_de(originales, partido, competiciones):
         return None
     return c
 
-def ficha_de_alineaciones(originales, ident):
+def ficha_de_alineaciones(originales, ident, fichas=()):
     """Ficha del jugador como la construye el importador (`ficha_combinada`: campo a campo, el valor conocido más
     reciente), pero sólo desde las versiones de estas alineaciones."""
     observaciones = []
@@ -78,6 +81,9 @@ def ficha_de_alineaciones(originales, ident):
                 for e in ((r.get('payload') or {}).get(lado) or {}).get('players', []):
                     if (e.get('player') or {}).get('id') == ident:
                         observaciones.append((r.get('fetched_at'), ficha_de_entrada(e, r.get('fetched_at'))))
+    # Las fichas personales no dependen del equipo/competición, pero no acreditan pertenencia.
+    observaciones.extend((r['fetched_at'], ficha_de_entrada(r['payload'], r['fetched_at']))
+                         for r in fichas if r['player_id'] == ident)
     return ficha_combinada(observaciones)[0] if observaciones else None
 
 def aplicar_ambito(datos, competiciones):
@@ -95,7 +101,7 @@ def aplicar_ambito(datos, competiciones):
             continue
         # La ficha guardada es la de la última alineación observada, quizá excluida: se rehace con las incluidas.
         if p['player_id'] in fuera:
-            p = ficha_de_alineaciones(originales, p['player_id'])
+            p = ficha_de_alineaciones(originales, p['player_id'], datos.get('fichas_originales', []))
             if p is None:
                 continue
         jugadores.append(p)

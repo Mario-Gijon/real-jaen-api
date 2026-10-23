@@ -235,7 +235,84 @@ def ficha_combinada(observaciones):
     return ficha, distintos
 
 
-def transformar(exportaciones, importado_en=None, calendarios=()):
+def validar_ficha(r):
+    """Sobre complementario de una ficha original; identidad y fecha explícitas, sin inferencias."""
+    if not isinstance(r, dict) or type(r.get('player_id')) is not int or r['player_id'] <= 0:
+        raise ValueError('player_id debe ser un entero positivo')
+    if r.get('endpoint') != f'/player/{r["player_id"]}':
+        raise ValueError('endpoint no coincide con player_id')
+    if instante(r.get('fetched_at')) is None:
+        raise ValueError('fetched_at debe llevar zona horaria')
+    payload = r.get('payload')
+    p = payload.get('player') if isinstance(payload, dict) else None
+    if not isinstance(p, dict) or type(p.get('id')) is not int or p['id'] != r['player_id']:
+        raise ValueError('payload.player.id no coincide con player_id')
+    for campo in ('name', 'position', 'preferredFoot'):
+        if p.get(campo) is not None and (not isinstance(p[campo], str) or not p[campo].strip()):
+            raise ValueError(f'player.{campo} debe ser texto no vacío o null')
+    if p.get('country') is not None:
+        c = p['country']
+        if not isinstance(c, dict) or (c.get('name') is not None and (not isinstance(c['name'], str) or not c['name'].strip())):
+            raise ValueError('player.country debe ser un objeto con name textual o null')
+    if p.get('height') is not None and (type(p['height']) is not int or p['height'] <= 0):
+        raise ValueError('player.height debe ser un entero positivo o null')
+    nacimiento = p.get('dateOfBirthTimestamp')
+    if nacimiento is not None:
+        if type(nacimiento) not in (int, float):
+            raise ValueError('player.dateOfBirthTimestamp debe ser numérico o null')
+        try:
+            fecha(nacimiento)
+        except (ValueError, OverflowError, OSError) as e:
+            raise ValueError('player.dateOfBirthTimestamp inválido') from e
+    return r
+
+
+def sobre_de_slice(r):
+    """Registro Slice de `ssc export --dataset player_profiles` → sobre de ficha (None si no trae ficha).
+    Exige propietario jugador y clave player_profile; un 404 o un error sin ficha previa no aporta datos."""
+    if r.get('owner_kind') != 'player':
+        raise ValueError('owner_kind debe ser player')
+    if r.get('key') != 'player_profile' or r.get('sub') is not None:
+        raise ValueError('key debe ser player_profile, sin sub')
+    if type(r.get('owner_id')) is not int or r['owner_id'] <= 0:
+        raise ValueError('owner_id debe ser un entero positivo')
+    if r.get('has_payload') is not True or r.get('payload') is None:
+        if r.get('payload') is not None:
+            raise ValueError('payload sin has_payload')
+        return None
+    return {'player_id': r['owner_id'], 'endpoint': f'/player/{r["owner_id"]}',
+            'fetched_at': r.get('fetched_at_utc'), 'payload': r['payload']}
+
+
+def leer_fichas(ruta, ident):
+    """JSONL de fichas: sobres complementarios (`player_id`, `endpoint`, `fetched_at`, `payload`) o registros
+    Slice del scraper (`owner_kind`, `owner_id`, `key`, ...); pueden mezclarse."""
+    registros, sin_ficha = [], 0
+    for numero, linea in enumerate(ruta.read_text(encoding='utf-8-sig').splitlines(), 1):
+        if not linea.strip():
+            continue
+        try:
+            r = json.loads(linea)
+            if isinstance(r, dict) and 'owner_kind' in r:
+                r = sobre_de_slice(r)
+                if r is None:
+                    sin_ficha += 1
+                    continue
+            r = validar_ficha(r)
+        except (ValueError, TypeError) as e:
+            raise ValueError(f'{ruta.name}, línea {numero}: {e}') from e
+        registros.append(dict(r, export=ident, line=numero, content_hash=huella(r['payload']),
+                              fetched_instant=utc(instante(r['fetched_at'])), fetched_at_valid=True))
+    instantes = [instante(r['fetched_at']) for r in registros]
+    return registros, {'id': ident, 'kind': 'player_profile', 'file': ruta.name,
+                       'sha256': hashlib.sha256(ruta.read_bytes()).hexdigest(), 'followed_team_id': None,
+                       'records': len(registros), 'events': 0, 'players': len({r['player_id'] for r in registros}),
+                       'invalid_fetched_at': 0, 'without_profile': sin_ficha,
+                       'fetched_from': utc(min(instantes)) if instantes else None,
+                       'fetched_to': utc(max(instantes)) if instantes else None}
+
+
+def transformar(exportaciones, importado_en=None, calendarios=(), fichas=()):
     """exportaciones: [(ruta, equipo_seguido | None)]; calendarios: [ruta] del dataset normalizado `events`.
     Devuelve los JSON de la carpeta de salida."""
     originales, manifiesto = [], []
@@ -248,6 +325,11 @@ def transformar(exportaciones, importado_en=None, calendarios=()):
         originales.extend(registros)
         manifiesto.append(info)
     grupos = {}
+    fichas_originales = []
+    for indice, ruta in enumerate(fichas, len(manifiesto) + 1):
+        registros, info = leer_fichas(ruta, f'E{indice}')
+        fichas_originales.extend(registros)
+        manifiesto.append(info)
     for r in originales:
         grupos.setdefault((r['event_id'], r['key'], r['sub']), []).append(r)
     seleccion, discrepancias = {}, []
@@ -351,13 +433,24 @@ def transformar(exportaciones, importado_en=None, calendarios=()):
                     'minutes_played': minutos, 'played': jugo,
                     'statistics': stats, 'fetched_at': r.get('fetched_at'),
                 }
+    # Sólo enriquece jugadores ya observados. Una ficha nunca crea convocatorias ni equipos.
+    for r in fichas_originales:
+        if r['player_id'] in observaciones:
+            observaciones[r['player_id']].append((r['fetched_at'], ficha_de_entrada(r['payload'], r['fetched_at'])))
     jugadores = []
     for pid, obs in observaciones.items():
         ficha, distintos = ficha_combinada(obs)
         jugadores.append(ficha)
         if distintos:
             discrepancias.append({'player_id': pid, 'key': 'player', 'reasons': ['player_attribute_values_differ'],
-                                  'integrity': False, 'values': distintos})
+                                  'integrity': False, 'values': distintos,
+                                  'versions': [dict(export=r['export'], line=r['line'], content_hash=r['content_hash'],
+                                                    fetched_at=r.get('fetched_at'), key=r.get('key', 'player_profile'))
+                                               for r in originales + fichas_originales
+                                               if (r.get('player_id') == pid if 'player_id' in r else r['key'] == 'lineups' and
+                                                   any((e.get('player') or {}).get('id') == pid
+                                                       for lado in ('home', 'away')
+                                                       for e in (r['payload'].get(lado) or {}).get('players', [])))]})
     jp = list(participaciones.values())
     seguidos = sorted({info['followed_team_id'] for info in manifiesto if info['followed_team_id'] is not None})
     resumen = {
@@ -383,7 +476,8 @@ def transformar(exportaciones, importado_en=None, calendarios=()):
     }
     importacion = {'format': FORMATO, 'imported_at': importado_en or datetime.now(timezone.utc).isoformat(timespec='seconds'),
                    'exports': manifiesto, 'followed_team_ids': seguidos}
-    return {'equipos': sorted(equipos.values(), key=lambda x: x['team_id']),
+    return {**({'fichas_originales': fichas_originales} if fichas else {}),
+            'equipos': sorted(equipos.values(), key=lambda x: x['team_id']),
             'jugadores': sorted(jugadores, key=lambda x: x['player_id']),
             'partidos': sorted(partidos.values(), key=lambda x: x['match_id']),
             'jugador_partido': sorted(jp, key=lambda x: (x['match_id'], x['team_id'], x['player_id'])),
@@ -409,6 +503,8 @@ def main():
     ap.add_argument('--calendario', type=Path, action='append', default=[], metavar='RUTA',
                     help='dataset normalizado `events` del scraper (repetible): partidos sin payload raw, sin equipo seguido')
     ap.add_argument('--salida', type=Path, default=Path('datos_normalizados'))
+    ap.add_argument('--fichas-jugadores', type=Path, action='append', default=[], metavar='RUTA',
+                    help='fichas individuales originales JSONL (repetible), sólo atributos personales')
     args = ap.parse_args()
     entradas = [(ruta, None) for ruta in args.entrada] + args.exportacion
     if not entradas:
@@ -416,7 +512,7 @@ def main():
     try:
         if args.salida.exists():
             raise ValueError('La carpeta de salida ya existe. Usa --salida con una carpeta nueva para no sobrescribir datos.')
-        datos = transformar(entradas, calendarios=args.calendario)
+        datos = transformar(entradas, calendarios=args.calendario, fichas=args.fichas_jugadores)
         # Se escribe en una carpeta temporal y se renombra al final: un fallo no deja una salida a medias.
         temporal = args.salida.with_name(args.salida.name + '.parcial')
         if temporal.exists():
