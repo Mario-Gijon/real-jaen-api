@@ -321,7 +321,7 @@ class RendimientoExportacion(unittest.TestCase):
         [c] = cuerpo['data']['competitions']
         self.assertEqual((estado, c['tournament_id'], c['season_id']), (200, 94191, 97382))
         self.assertEqual(c['matches'], {'in_scope': 37, 'finished': 8, 'pending': 29, 'counted': 8,
-                                        'finished_without_valid_score': 0, 'excluded_by_version_conflict': 0, 'unknown_status': 0})
+                                        'finished_without_valid_score': 0, 'excluded_by_version_conflict': 0, 'unknown_status': 0, 'replaced_locally': 0})
         self.assertEqual(c['record'], {'played': 8, 'wins': 4, 'draws': 3, 'losses': 1,
                                        'goals_for': 12, 'goals_against': 8, 'goal_difference': 4})
         self.assertEqual(c['venues'], {'home': {'wins': 2, 'draws': 2, 'losses': 0}, 'away': {'wins': 2, 'draws': 1, 'losses': 1}})

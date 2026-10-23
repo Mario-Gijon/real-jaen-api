@@ -128,7 +128,7 @@ class Rendimiento(unittest.TestCase):
         # Copa y Grupo 1, aunque finalizados y con marcador, no están en el ámbito.
         self.assertEqual(self.competicion()['matches'], {
             'in_scope': 12, 'finished': 8, 'pending': 3, 'counted': 5,
-            'finished_without_valid_score': 3, 'excluded_by_version_conflict': 0, 'unknown_status': 1})
+            'finished_without_valid_score': 3, 'excluded_by_version_conflict': 0, 'unknown_status': 1, 'replaced_locally': 0})
 
     def test_balance_casa_fuera_y_diferencia(self):
         c = self.competicion()

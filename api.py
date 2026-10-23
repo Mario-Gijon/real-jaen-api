@@ -2,7 +2,7 @@
 import argparse
 import json
 import math
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
@@ -16,8 +16,10 @@ NOTA_FETCHED_AT = 'fetched_at es la fecha en que se obtuvo el payload de la fuen
 # Competiciones que sirve esta versión (ver ambito.json). Una competición se identifica por los tres ids.
 AMBITO = Path(__file__).parent / 'ambito.json'
 CAMPOS_AMBITO = ('unique_tournament_id', 'tournament_id', 'season_id')
+NOTA_SUSTITUCION = ('Decisión local de esta instalación (archivo de sustituciones), no un dato de SofaScore: '
+                    'la fuente no publica el vínculo entre ambos eventos. Los dos se conservan íntegros.')
 
-def cargar(carpeta, ambito=AMBITO):
+def cargar(carpeta, ambito=AMBITO, sustituciones=None):
     datos = {n: json.loads((carpeta / (n+'.json')).read_text(encoding='utf-8')) for n in ('equipos','jugadores','partidos','jugador_partido')}
     # Los originales son opcionales: sin ellos, ninguna sección de detalle figura como almacenada.
     ruta = carpeta / 'originales.json'
@@ -26,7 +28,9 @@ def cargar(carpeta, ambito=AMBITO):
     opcional = lambda nombre, defecto: json.loads((carpeta / nombre).read_text(encoding='utf-8')) if (carpeta / nombre).exists() else defecto
     datos['exportaciones'] = opcional('exportaciones.json', None)
     datos['discrepancias'] = opcional('discrepancias.json', [])
-    return aplicar_ambito(datos, leer_ambito(ambito))
+    datos = aplicar_ambito(datos, leer_ambito(ambito))
+    # Sin archivo de sustituciones, ninguna: los datos se sirven como los dejó el importador.
+    return aplicar_sustituciones(datos, leer_sustituciones(sustituciones) if sustituciones else [])
 
 def leer_ambito(ruta):
     """Competiciones permitidas. Un ámbito ausente o incompleto impide arrancar: nunca se sirve todo por defecto."""
@@ -98,6 +102,73 @@ def aplicar_ambito(datos, competiciones):
     return dict(datos, partidos=partidos, jugador_partido=convocatorias, originales=originales, jugadores=jugadores,
                 competiciones=competiciones, excluidos={m['match_id'] for m in datos['partidos']} - incluidos,
                 jugadores_excluidos={p['player_id'] for p in datos['jugadores']} - {p['player_id'] for p in jugadores})
+
+def leer_sustituciones(ruta):
+    """Decisiones locales «este evento queda sustituido por este otro» (ver README.txt, SUSTITUCIONES LOCALES).
+    Comprueba el archivo por sí mismo: campos, autorreferencias, eventos sustituidos dos veces y cadenas o ciclos
+    (un evento vigente no puede estar sustituido). Cualquier error impide arrancar: nunca se aplica a medias."""
+    contenido = json.loads(Path(ruta).read_text(encoding='utf-8'))
+    lista = contenido.get('sustituciones') if isinstance(contenido, dict) else None
+    if not isinstance(lista, list):
+        raise ValueError(f'{ruta}: se esperaba una lista "sustituciones"')
+    texto = lambda v: isinstance(v, str) and v.strip()
+    for i, s in enumerate(lista):
+        donde = f'{ruta}, sustituciones[{i}]'
+        if not isinstance(s, dict) or any(type(s.get(k)) is not int or s[k] <= 0 for k in ('sustituido', 'vigente')):
+            raise ValueError(f'{donde}: "sustituido" y "vigente" deben ser identificadores enteros de evento')
+        procedencia = s.get('procedencia')
+        if not texto(s.get('motivo')) or not isinstance(procedencia, dict) or not texto(procedencia.get('decidido_por')):
+            raise ValueError(f'{donde}: faltan "motivo" o "procedencia.decidido_por"')
+        try:
+            date.fromisoformat(procedencia.get('fecha'))
+        except (TypeError, ValueError):
+            raise ValueError(f'{donde}: "procedencia.fecha" debe ser una fecha AAAA-MM-DD') from None
+        if s['sustituido'] == s['vigente']:
+            raise ValueError(f'{donde}: un evento no puede sustituirse a sí mismo ({s["sustituido"]})')
+    sustituidos = [s['sustituido'] for s in lista]
+    repetidos = sorted({e for e in sustituidos if sustituidos.count(e) > 1})
+    if repetidos:
+        raise ValueError(f'{ruta}: eventos sustituidos más de una vez (asignaciones contradictorias): {repetidos}')
+    encadenados = sorted(set(sustituidos) & {s['vigente'] for s in lista})
+    if encadenados:
+        raise ValueError(f'{ruta}: eventos que son a la vez sustituidos y vigentes (cadena o ciclo): {encadenados}')
+    return lista
+
+def aplicar_sustituciones(datos, sustituciones):
+    """Marca cada evento sustituido (`replaced_by`) y su vigente (`replaces`). Ambos deben ser partidos servidos de la
+    misma competición, con el mismo local y el mismo visitante, y el sustituido no puede estar finalizado (sus
+    resultados nunca se retiran así). No se borra nada: cambia sólo qué evento es el encuentro vigente."""
+    if not sustituciones:
+        return dict(datos, sustituciones=[])
+    partidos = {m['match_id']: m for m in datos['partidos']}
+    for s in sustituciones:
+        for papel in ('sustituido', 'vigente'):
+            if s[papel] not in partidos:
+                fuera = 'está fuera del ámbito servido' if s[papel] in datos['excluidos'] else 'no existe en la importación'
+                raise ValueError(f'sustitución {s["sustituido"]} -> {s["vigente"]}: el evento {papel} {s[papel]} {fuera}')
+        antiguo, vigente = partidos[s['sustituido']], partidos[s['vigente']]
+        for campo, nombre in (('tournament_id', 'competición'), ('season_id', 'temporada'),
+                              ('home_team_id', 'equipo local'), ('away_team_id', 'equipo visitante')):
+            if antiguo[campo] != vigente[campo]:
+                raise ValueError(f'sustitución {s["sustituido"]} -> {s["vigente"]}: no coincide {nombre} '
+                                 f'({antiguo[campo]} frente a {vigente[campo]})')
+        if antiguo['status'] == 'finished':
+            raise ValueError(f'sustitución {s["sustituido"]} -> {s["vigente"]}: el evento sustituido está finalizado')
+    decision = lambda s, otro: {'match_id': otro, 'decision': 'local', 'reason': s['motivo'],
+                                'decided_by': s['procedencia']['decidido_por'], 'decided_on': s['procedencia']['fecha'],
+                                'evidence': s['procedencia'].get('evidencia'), 'note': NOTA_SUSTITUCION}
+    marcados = {}
+    for s in sustituciones:
+        marcados[s['sustituido']] = dict(partidos[s['sustituido']], replaced_by=decision(s, s['vigente']))
+    for s in sustituciones:
+        vigente = marcados.get(s['vigente']) or dict(partidos[s['vigente']], replaces=[])
+        vigente['replaces'] = vigente['replaces'] + [decision(s, s['sustituido'])]
+        marcados[s['vigente']] = vigente
+    return dict(datos, partidos=[marcados.get(m['match_id'], m) for m in datos['partidos']], sustituciones=sustituciones)
+
+def vigente(partido):
+    """Un evento es un encuentro vigente salvo que una decisión local lo dé por sustituido."""
+    return 'replaced_by' not in partido
 
 def indexar(registros):
     """(event_id, key) -> {'registro': la versión operativa, 'versiones': n, 'todas': [versiones]}. La elige el
@@ -265,10 +336,15 @@ def partidos_contados(datos, ident, c):
     partidos = sorted((m for m in datos['partidos'] if ident in (m['home_team_id'], m['away_team_id'])
                        and (m['tournament_id'], m['season_id']) == (c['tournament_id'], c['season_id'])),
                       key=orden_cronologico)
-    cuenta = {'in_scope': len(partidos), 'finished': 0, 'pending': 0, 'counted': 0,
-              'finished_without_valid_score': 0, 'excluded_by_version_conflict': 0, 'unknown_status': 0}
+    # in_scope son los encuentros vigentes; los eventos sustituidos por decisión local se cuentan aparte.
+    sustituidos = sum(not vigente(m) for m in partidos)
+    cuenta = {'in_scope': len(partidos) - sustituidos, 'finished': 0, 'pending': 0, 'counted': 0,
+              'finished_without_valid_score': 0, 'excluded_by_version_conflict': 0, 'unknown_status': 0,
+              'replaced_locally': sustituidos}
     resultados = []
     for m in partidos:
+        if not vigente(m):
+            continue
         if m['status'] in PENDIENTES:
             cuenta['pending'] += 1
             continue
@@ -620,9 +696,15 @@ def consultar(datos, ruta):
         return 200, {'data': {'status':'ok'}}
     if ruta == '/api/v1/scope':
         competiciones = [dict({'name': c['nombre'], 'season': c.get('temporada')}, **{k: c[k] for k in CAMPOS_AMBITO}) for c in datos['competiciones']]
-        return 200, {'data': {'competitions': competiciones, 'teams_with_own_export': equipos_con_exportacion(datos)},
+        sustituidos = sum(not vigente(m) for m in datos['partidos'])
+        return 200, {'data': {'competitions': competiciones, 'teams_with_own_export': equipos_con_exportacion(datos),
+                              'matches': {'events': len(datos['partidos']), 'current': len(datos['partidos']) - sustituidos,
+                                          'replaced_locally': sustituidos},
+                              'local_replacements': [{'replaced': s['sustituido'], 'current': s['vigente'], 'reason': s['motivo'],
+                                                      'decided_by': s['procedencia']['decidido_por'],
+                                                      'decided_on': s['procedencia']['fecha']} for s in datos['sustituciones']]},
                      'meta': {'note': 'Sólo se sirven partidos, convocatorias y jugadores de estas competiciones. '
-                                      + NOTA_EXPORTACIONES}}
+                                      + NOTA_EXPORTACIONES + ' local_replacements: ' + NOTA_SUSTITUCION}}
     if len(partes) not in (4,5) or partes[:2] != ['api','v1'] or partes[2] not in ('teams','players','matches'):
         return 404, {'error': 'Ruta inexistente'}
     try:
@@ -646,7 +728,11 @@ def consultar(datos, ruta):
     if tipo == 'teams' and sub == 'player-stats':
         return 200, {'data': acumulados_jugadores(datos, ident), 'meta': {'note': NOTA_JUGADORES}}
     if tipo == 'teams' and sub == 'matches':
-        resultado = [m for m in datos['partidos'] if ident in (m['home_team_id'],m['away_team_id'])]
+        # El calendario del equipo: sus encuentros vigentes. Un evento sustituido sigue en /matches/{id}.
+        delequipo = [m for m in datos['partidos'] if ident in (m['home_team_id'],m['away_team_id'])]
+        resultado = [m for m in delequipo if vigente(m)]
+        apartados = [m['match_id'] for m in delequipo if not vigente(m)]
+        return 200, {'data':resultado,'meta':{'count':len(resultado),'replaced_locally':apartados}}
     elif tipo == 'teams' and sub == 'players':
         ids = {r['player_id'] for r in datos['jugador_partido'] if r['team_id']==ident}
         resultado = [{'player_id':p['player_id'],'name':p['name'],'usual_position':p['usual_position']} for p in datos['jugadores'] if p['player_id'] in ids]
@@ -665,8 +751,10 @@ def main():
     ap.add_argument('--datos',type=Path,default=Path(__file__).parent/'datos')
     ap.add_argument('--port',type=int,default=8001)
     ap.add_argument('--ambito',type=Path,default=AMBITO)
+    ap.add_argument('--sustituciones',type=Path,default=None,
+                    help='decisiones locales de eventos sustituidos (sin él, ninguna)')
     args=ap.parse_args()
-    datos=cargar(args.datos,args.ambito)
+    datos=cargar(args.datos,args.ambito,args.sustituciones)
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
             url=urlsplit(self.path)

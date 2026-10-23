@@ -103,7 +103,29 @@ estadisticas completas; los rivales que solo aparecen en partidos ajenos no figu
 ARRANCAR
   python api.py                       (lee datos/ y ambito.json de esta carpeta)
   python api.py --datos C:\ruta\datos_normalizados --ambito ambito.json --port 8001
+  python api.py ... --sustituciones correcciones\sustituciones.json   (decisiones locales, abajo)
 Abre http://127.0.0.1:8001/health y http://127.0.0.1:8001/api/v1/scope
+
+SUSTITUCIONES LOCALES (--sustituciones RUTA)
+Decisiones de esta instalacion, no datos de SofaScore: "el evento X queda sustituido por el Y"
+(p. ej. un aplazado que se jugo con otro id; la fuente no enlaza ambos). Sin --sustituciones no se
+aplica ninguna. Archivo: correcciones\sustituciones.json, aparte de las exportaciones y de la
+importacion, que no se tocan. Cada entrada: sustituido, vigente (ids de evento), motivo y
+procedencia {decidido_por, fecha AAAA-MM-DD, evidencia opcional}. Nunca se deducen por equipos,
+jornada, slug ni customId: solo cuentan las entradas escritas.
+Al arrancar se comprueba y, si algo falla, la API no arranca (nunca se aplica a medias): ids
+enteros; motivo y procedencia; sin autorreferencias; un evento sustituido una sola vez; ningun
+evento a la vez sustituido y vigente (sin cadenas ni ciclos); ambos eventos servidos (no
+inexistentes ni fuera del ambito); misma competicion, temporada, local y visitante; el sustituido
+no finalizado.
+Efecto: el sustituido deja de ser encuentro vigente y pendiente (matches.in_scope son los
+vigentes; matches.replaced_locally los sustituidos) y sale de /teams/{id}/matches
+(meta.replaced_locally); sigue en /matches/{id} con replaced_by (decision "local", motivo,
+procedencia, nota) y el vigente lleva replaces. /scope publica matches {events, current,
+replaced_locally} y local_replacements. Originales, convocatorias, resultados y estadisticas no
+cambian; las otras reglas de aplazamientos tampoco.
+Revertir una decision: borrar su entrada del archivo (o arrancar sin --sustituciones) y
+reiniciar la API. No hay que reimportar.
 
 Rutas:
 /health
