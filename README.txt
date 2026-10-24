@@ -378,6 +378,10 @@ PRUEBAS
 Desde esta carpeta: python -m unittest discover -s tests -v
 No necesitan que el servicio del puerto 8001 este en marcha: arrancan api.py en un
 puerto libre para comprobar las respuestas HTTP.
+Persistencia SQL (fase 1, solo esquema; docs/persistencia-sqlite.md): entorno propio
+  py -3.14 -m venv .venv  y  .venv\Scripts\python -m pip install -r requirements-sql.txt
+  .venv\Scripts\python -m unittest discover -s tests -v
+Sin esas dependencias, tests/test_persistencia.py se omite y el resto funciona igual.
 - tests/test_api.py: muestra pequena y sintetica (tests/fixtures/datos, versionada;
   se regenera con python tests/fixtures/crear.py) con el ambito.json del proyecto.
   Funcionan en un clon sin datos/.

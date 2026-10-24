@@ -766,6 +766,45 @@ Equivalencia antes/después, **byte a byte** (capturas fuera del repositorio):
 
 Suite: 139 pruebas correctas, 4 nuevas (`ExtraccionDeConvocatorias`).
 
+**Resultado de la fase 1 (sin commit, en revisión).**
+
+Entorno y dependencias:
+- `.venv` propio, creado con Python 3.14.4; SQLite 3.50.4.
+- `requirements-sql.txt`: SQLAlchemy 2.1.6 y alembic 1.20.1 (sus metadatos declaran Python 3.14),
+  más Mako 1.4.3, MarkupSafe 3.0.4 y typing_extensions 4.16.0.
+- El modo SQL exige Python ≥ 3.11 (SQLAlchemy 2.1). La API y el importador siguen sin dependencias.
+
+Código:
+- `persistencia/modelos.py`: 36 tablas.
+- `persistencia/sqlite.py`: conexión, claves foráneas comprobadas, transacciones y expresiones del
+  dialecto.
+- `alembic.ini` sin base por defecto.
+- `persistencia/migraciones/` con la revisión `0001`, en modo batch.
+- `tests/test_persistencia.py`.
+
+Diferencias y concreciones respecto al texto del diseño:
+- **Claves foráneas compuestas y diferidas hacia `section_selection`** desde `call_up`,
+  `team_match_stat`, `incident` y `match_state`: un derivado solo puede salir de la versión
+  seleccionada de su sección. Para ello esas tablas llevan la clave y el `sub` de la sección
+  (`lineup_key`/`lineup_sub`, `section_key`/`section_sub`, `source_key`/`source_sub`) con CHECK de
+  valor fijo. Son diferidas para que una reconstrucción cambie selección y derivados en la misma
+  transacción.
+- **`section_selection` y su historial** apuntan a la observación con FK compuesta
+  (`id`, `match_id`, `key`, `sub`).
+- **`call_up.statistics_kind`** (`object`, `null`, `absent`, `other`) distingue un `statistics`
+  ausente de uno `null`. `match_position` se guarda también como literal JSON.
+- **Índices por posición**: `team_match_stat` usa `period_index` en la clave, y `period` y `key`
+  pueden faltar (un ítem sin clave también es evidencia). `player_attribute_observation` incluye
+  `entry_index` en la clave. `discrepancy_value` lleva `ordinal`.
+- **`identity_decision_subject`** tiene una FK real por tipo de entidad y de identificador externo,
+  con CHECK de un sujeto. Además, cada entidad tiene **como mucho un id externo `origin`**.
+- **Competición opcional**: `season.competition_id` y `stage.competition_id` admiten NULL
+  (competición desconocida, nunca deducida).
+- **Motor de escritura**: toda transacción, también de lectura, es `BEGIN IMMEDIATE`, así que las
+  lecturas usarán el motor de solo lectura (`mode=ro`). El motor de escritura usa diario WAL.
+- **Identificadores**: el `uid` solo se comprueba por longitud (36). El formato canónico de los ids
+  de SofaScore se comprobará al importar, no en el esquema.
+
 **Primera implementación: fases 0 y 1.**
 - **Fase 0**: la separación de la extracción.
 - **Fase 1**:

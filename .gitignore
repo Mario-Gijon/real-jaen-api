@@ -5,6 +5,10 @@ datos_normalizados/
 resultado/
 *.jsonl
 *.jsonl.gz
+# Bases de la persistencia: siempre fuera del repositorio; esto solo evita versionarlas por descuido.
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
 
 # Copias de respaldo y capturas
 *.bak
