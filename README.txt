@@ -253,6 +253,14 @@ El equipo es el del lado (side) de la alineacion; un team_id o source_team_id di
 es una advertencia (issues), no un descarte.
 
 NORMALIZACION DE CONVOCATORIAS
+El resto de estadisticas individuales va en normalized.stats: {metrica: {value, source, rule,
+reason}}. source: reported (lo da la fuente, tambien un 0), derived (rule shots_partition: tiros a
+puerta 0 cuando las categorias fuera/bloqueados explicitas suman totalShots), calculated (rule ratio:
+precision de pase) o unused; sin valor, reason: not_reported, reported_null, invalid,
+duplicate_disagree, version_conflict, inconsistent, participation_unknown o not_applicable. Una
+ausencia nunca es 0 sin una relacion con valores explicitos; nunca se usa el total del equipo. Una
+incoherencia o un conflicto de versiones afecta solo a su grupo (incidencias stat_*). Reglas,
+evidencia e hipotesis: docs/normalizacion-estadisticas-individuales.md.
 Las mismas reglas para acumulados, /players/{id}/matches (campo normalized de cada
 fila) y /matches/{id}/lineups (normalized.players). Los registros originales no se
 tocan: el normalizado va al lado, con el origen de cada cifra.

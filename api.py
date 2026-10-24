@@ -471,27 +471,34 @@ def contexto_partido(datos, ident):
                     and all(marcador_valido(v) for v in marcador) and len(clases) == sum(marcador))
     return {'alineacion_confirmada': confirmada, 'entradas': entradas, 'con_eventos': con_eventos, 'cobertura': cobertura,
             'goles': goles if contrastable else None, 'asistencias': asistencias if contrastable else None,
-            'versiones': versiones, 'desacuerdos': desacuerdos_de_alineacion(datos, ident)}
+            'versiones': versiones, 'desacuerdos': desacuerdos_de_alineacion(datos, ident),
+            'conflictos_estadisticas': conflictos_de_estadisticas(datos, ident)}
+
+def jugadores_de_alineacion(payload):
+    for lado in ('home', 'away'):
+        for e in ((payload or {}).get(lado) or {}).get('players') or []:
+            if isinstance(e, dict) and isinstance(e.get('player'), dict):
+                yield e
+
+def alineaciones_comparables(datos, ident):
+    """Las versiones distintas de la alineación posteriores al partido: las que traen minutos de algún jugador (una
+    instantánea previa no se compara)."""
+    todas = (datos['originales'].get((ident, 'lineups')) or {}).get('todas', [])
+    unicas = list({r.get('content_hash', id(r)): r for r in todas}.values())
+    return [r for r in unicas if any(isinstance((e.get('statistics') or {}).get('minutesPlayed'), int)
+                                     for e in jugadores_de_alineacion(r.get('payload')))]
 
 def desacuerdos_de_alineacion(datos, ident):
-    """Jugadores cuya participación difiere entre versiones distintas de la alineación posteriores al partido (las que
-    traen minutos de algún jugador; una instantánea previa no se compara): suplente, minutos o estadísticas
-    individuales. {jugador: [lo que dice cada versión]}. Una versión más reciente no resuelve el desacuerdo."""
-    todas = (datos['originales'].get((ident, 'lineups')) or {}).get('todas', [])
-    def jugadores(payload):
-        for lado in ('home', 'away'):
-            for e in ((payload or {}).get(lado) or {}).get('players') or []:
-                if isinstance(e, dict) and isinstance(e.get('player'), dict):
-                    yield e
-    unicas = list({r.get('content_hash', id(r)): r for r in todas}.values())
-    comparables = [r for r in unicas if any(isinstance((e.get('statistics') or {}).get('minutesPlayed'), int)
-                                             for e in jugadores(r.get('payload')))]
+    """Jugadores cuya participación difiere entre versiones distintas de la alineación posteriores al partido:
+    suplente, minutos o estadísticas individuales. {jugador: [lo que dice cada versión]}. Una versión más reciente no
+    resuelve el desacuerdo."""
+    comparables = alineaciones_comparables(datos, ident)
     if len(comparables) < 2:
         return {}
     dichos = {}
     for r in comparables:
         vistos = {}
-        for e in jugadores(r.get('payload')):
+        for e in jugadores_de_alineacion(r.get('payload')):
             stats = e.get('statistics') if isinstance(e.get('statistics'), dict) else {}
             vistos[e['player'].get('id')] = {'substitute': e.get('substitute'), 'minutesPlayed': stats.get('minutesPlayed'),
                                              'individual_statistics': sorted(set(stats) - ESTADISTICAS_DE_BANQUILLO - {'minutesPlayed'})}
@@ -501,8 +508,163 @@ def desacuerdos_de_alineacion(datos, ident):
         return (v.get('listed', True), v.get('substitute'), v.get('minutesPlayed'), bool(v.get('individual_statistics')))
     return {j: vs for j, vs in dichos.items() if len(vs) < len(comparables) or len({firma(v) for v in vs}) > 1}
 
+def conflictos_de_estadisticas(datos, ident):
+    """Grupos de estadísticas (GRUPOS_ESTADISTICA, más `goles`) cuyas claves difieren en valor o en presencia entre
+    versiones comparables de la alineación: {jugador: {grupo: [versión con sus claves del grupo]}}. Ninguna versión
+    gana: ese grupo queda sin dato y las demás estadísticas del jugador no se tocan. Un jugador que falta en alguna
+    versión es un desacuerdo de participación (desacuerdos_de_alineacion), no de estadísticas."""
+    comparables = alineaciones_comparables(datos, ident)
+    if len(comparables) < 2:
+        return {}
+    vistas = {}
+    for r in comparables:
+        for e in jugadores_de_alineacion(r.get('payload')):
+            stats = e.get('statistics') if isinstance(e.get('statistics'), dict) else {}
+            vistas.setdefault(e['player'].get('id'), []).append((version(r), stats))
+    conflictos = {}
+    for jugador, dichas in vistas.items():
+        if len(dichas) < len(comparables):
+            continue
+        for grupo, claves in dict(GRUPOS_ESTADISTICA, goles=('goals',)).items():
+            firmas = [{c: s[c] for c in claves if c in s} for _, s in dichas]
+            if len({json.dumps(f, sort_keys=True) for f in firmas}) > 1:
+                conflictos.setdefault(jugador, {})[grupo] = [dict(v, statistics=f) for (v, _), f in zip(dichas, firmas)]
+    return conflictos
+
 def valor(dato, origen):
     return {'value': dato, 'source': origen if dato is not None else None}
+
+# Estadísticas individuales normalizadas (docs/normalizacion-estadisticas-individuales.md). Cada grupo reúne claves
+# relacionadas: una incoherencia, un duplicado que discrepa o un conflicto de versiones deja sin dato su grupo y no
+# toca los demás. Las relaciones entre categorías son una interpretación documentada, respaldada por la muestra
+# auditada, no una garantía de SofaScore.
+GRUPOS_ESTADISTICA = {
+    'tiros': ('totalShots', 'onTargetScoringAttempt', 'shotOffTarget', 'blockedScoringAttempt'),
+    'pases': ('totalPass', 'accuratePass'),
+    'regates': ('totalContest', 'wonContest'),
+    'xg': ('expectedGoals',), 'recuperaciones': ('ballRecovery',), 'perdidas': ('possessionLostCtrl',),
+    'duelos_ganados': ('duelWon',), 'duelos_perdidos': ('duelLost',), 'faltas': ('fouls',), 'paradas': ('saves',),
+    'valoracion': ('rating',),
+}
+GRUPO_DE_CLAVE = {clave: grupo for grupo, claves in GRUPOS_ESTADISTICA.items() for clave in claves}
+# Métrica publicada -> clave original (shotOffTarget y blockedScoringAttempt sólo intervienen en tiros a puerta).
+ESTADISTICAS = {
+    'shots': 'totalShots', 'shots_on_target': 'onTargetScoringAttempt', 'xg': 'expectedGoals',
+    'passes': 'totalPass', 'passes_accurate': 'accuratePass', 'dribbles': 'totalContest', 'dribbles_won': 'wonContest',
+    'ball_recoveries': 'ballRecovery', 'possession_lost': 'possessionLostCtrl', 'duels_won': 'duelWon',
+    'duels_lost': 'duelLost', 'fouls': 'fouls', 'saves': 'saves', 'rating': 'rating',
+}
+# No son recuentos: un no utilizado no tiene 0 de ellos, sino ningún valor.
+NO_RECUENTOS = {'expectedGoals', 'rating'}
+# Motivo de un grupo sin dato -> código de incidencia.
+INCIDENCIA_DE_MOTIVO = {'inconsistent': 'stat_inconsistent', 'version_conflict': 'stat_version_conflict',
+                        'duplicate_disagree': 'stat_duplicate_disagree', 'invalid': 'stat_invalid'}
+
+def valida(clave, v):
+    """Dominio de cada clave: recuentos enteros >= 0; xG número finito >= 0; valoración número finito entre 0 y 10."""
+    if clave in NO_RECUENTOS:
+        return type(v) in (int, float) and math.isfinite(v) and v >= 0 and (clave != 'rating' or v <= 10)
+    return entero_no_negativo(v)
+
+def dato(value, source=None, rule=None, reason=None):
+    return {'value': value, 'source': source, 'rule': rule, 'reason': None if value is not None else reason}
+
+def lectura(registros, clave):
+    """Lo que dicen de una clave los registros de una convocatoria: ('discrepa', None) si los duplicados no coinciden
+    (en valor o en presencia), ('ausente' | 'nula' | 'invalida', None) o ('valida', valor)."""
+    vistas = {json.dumps([clave in s, s.get(clave)]) for s in registros}
+    if len(vistas) > 1:
+        return 'discrepa', None
+    if clave not in registros[0]:
+        return 'ausente', None
+    v = registros[0][clave]
+    if v is None:
+        return 'nula', None
+    return ('valida', v) if valida(clave, v) else ('invalida', None)
+
+def estado_de_gol(registros, goles_incidencias, conflictos):
+    """(estado, goles fiables): 'positivo' si hay goles fiables (statistics.goals > 0 coherente con las incidencias
+    contrastables, o incidencias que se los atribuyen), 'dudoso' si la cifra de goles no es fiable (discrepa entre
+    duplicados o versiones, es inválida o contradice a las incidencias) y 'ninguno' en otro caso. La ausencia de goals
+    no prueba 0 goles: sólo deja de bloquear lo que es compatible con ella."""
+    estado, v = lectura(registros, 'goals')
+    if estado in ('discrepa', 'nula', 'invalida') or 'goles' in conflictos:
+        return 'dudoso', None
+    if estado == 'valida' and goles_incidencias is not None and v != goles_incidencias:
+        return 'dudoso', None
+    goles = v if estado == 'valida' else goles_incidencias or 0
+    return ('positivo', goles) if goles > 0 else ('ninguno', 0)
+
+def estadisticas_de_actuacion(registros, estado, conflictos, gol, conflicto_de_partido=False):
+    """Las estadísticas individuales de una convocatoria normalizadas: {métrica: {value, source, rule, reason}} y las
+    incidencias de sus grupos [(código, grupo, motivo)]. `registros` son los statistics de los registros duplicados;
+    `conflictos` los grupos que discrepan entre versiones; `gol` el estado_de_gol. source: `reported` (lo da la
+    fuente, también un 0), `derived` (fijado por una relación con valores explícitos del mismo registro; `rule`),
+    `calculated` (cociente; `rule`) o `unused` (0 de un no utilizado). Sin valor, `reason`: not_reported,
+    reported_null, invalid, duplicate_disagree, version_conflict, inconsistent, participation_unknown, not_applicable.
+    Nunca se usa una clave ausente como 0 ni el total del equipo."""
+    if estado == 'unknown' or conflicto_de_partido:
+        motivo = 'participation_unknown' if estado == 'unknown' else 'version_conflict'
+        return {m: dato(None, reason=motivo) for m in [*ESTADISTICAS, 'pass_accuracy']}, []
+    if estado == 'unused':
+        resultado = {m: dato(None, reason='not_applicable') if c in NO_RECUENTOS else dato(0, 'unused')
+                     for m, c in ESTADISTICAS.items()}
+        return dict(resultado, pass_accuracy=dato(None, reason='not_applicable')), []
+    leidas = {c: lectura(registros, c) for c in GRUPO_DE_CLAVE}
+    valor_de = lambda c: leidas[c][1] if leidas[c][0] == 'valida' else None
+    sin_dato = {}
+    for grupo, claves in GRUPOS_ESTADISTICA.items():
+        if grupo in conflictos:
+            sin_dato[grupo] = 'version_conflict'
+        elif any(leidas[c][0] == 'discrepa' for c in claves):
+            sin_dato[grupo] = 'duplicate_disagree'
+    # Coherencia con los valores explícitos y válidos (una suma inferior al total no es incoherencia: pueden faltar).
+    total, a_puerta = valor_de('totalShots'), valor_de('onTargetScoringAttempt')
+    complementos = [leidas[c] for c in ('shotOffTarget', 'blockedScoringAttempt')]
+    explicitos = sum(v for e, v in complementos if e == 'valida')
+    if total is not None and explicitos + (a_puerta or 0) > total:
+        sin_dato.setdefault('tiros', 'inconsistent')
+    # Si las categorías explícitas agotan el total, no hubo tiro a puerta: un gol fiable lo contradice, igual que
+    # más goles que tiros a puerta o que tiros.
+    agotan = (total is not None and leidas['onTargetScoringAttempt'][0] == 'ausente' and explicitos == total
+              and all(e in ('ausente', 'valida') for e, _ in complementos))
+    estado_gol, goles = gol
+    if estado_gol == 'positivo' and (agotan or any(v is not None and goles > v for v in (a_puerta, total))):
+        sin_dato.setdefault('tiros', 'inconsistent')
+    for grupo, ganados, intentos in (('pases', 'accuratePass', 'totalPass'), ('regates', 'wonContest', 'totalContest')):
+        if valor_de(ganados) is not None and valor_de(intentos) is not None and valor_de(ganados) > valor_de(intentos):
+            sin_dato.setdefault(grupo, 'inconsistent')
+    resultado, incidencias = {}, []
+    for metrica, clave in ESTADISTICAS.items():
+        grupo = GRUPO_DE_CLAVE[clave]
+        estado_clave, v = leidas[clave]
+        if grupo in sin_dato:
+            resultado[metrica] = dato(None, reason=sin_dato[grupo])
+        elif estado_clave == 'valida':
+            resultado[metrica] = dato(v, 'reported')
+        elif estado_clave == 'nula':
+            resultado[metrica] = dato(None, reason='reported_null')
+        elif estado_clave == 'invalida':
+            resultado[metrica] = dato(None, reason='invalid')
+            incidencias.append(('stat_invalid', grupo, [clave]))
+        elif metrica == 'shots_on_target' and agotan and estado_gol == 'ninguno':
+            resultado[metrica] = dato(0, 'derived', 'shots_partition')
+        else:
+            resultado[metrica] = dato(None, reason='not_reported')
+    for grupo, motivo in sin_dato.items():
+        incidencias.append((INCIDENCIA_DE_MOTIVO[motivo], grupo, list(GRUPOS_ESTADISTICA[grupo])))
+    # Un complemento inválido (no mostrado) también es una incidencia de su grupo.
+    for c in ('shotOffTarget', 'blockedScoringAttempt'):
+        if leidas[c][0] == 'invalida' and 'tiros' not in sin_dato:
+            incidencias.append(('stat_invalid', 'tiros', [c]))
+    pases, completados = resultado['passes'], resultado['passes_accurate']
+    if pases['value'] is not None and completados['value'] is not None:
+        resultado['pass_accuracy'] = (dato(completados['value'] / pases['value'] * 100, 'calculated', 'ratio')
+                                      if pases['value'] > 0 else dato(None, reason='not_applicable'))
+    else:
+        motivos = [m['reason'] for m in (pases, completados) if m['value'] is None]
+        resultado['pass_accuracy'] = dato(None, reason=next((m for m in motivos if m != 'not_reported'), 'not_reported'))
+    return resultado, incidencias
 
 def actuacion(filas, partido, contexto):
     """La convocatoria de un jugador en un partido, normalizada con las reglas de esta fuente (una sola vez para
@@ -598,13 +760,34 @@ def actuacion(filas, partido, contexto):
                       ['jugador_partido:statistics', 'originales:incidents'])
             return valor(None, None)
         return valor(dato, origen)
+    goles = contribucion('goals', contexto['goles'], 'goals_mismatch')
+    asistencias = contribucion('goalAssist', contexto['asistencias'], 'assists_mismatch')
+    registros = [estadisticas_de(r) for r in filas]
+    conflictos = contexto['conflictos_estadisticas'].get(jugador, {})
+    gol = estado_de_gol(registros, None if contexto['goles'] is None else contexto['goles'].get(jugador, 0), conflictos)
+    estadisticas, problemas = estadisticas_de_actuacion(registros, estado, conflictos, gol,
+                                                        conflicto_de_partido=partido.get('version_conflict') is True)
+    for codigo, grupo, claves_grupo in problemas:
+        if codigo not in incidencias:
+            incidencias.append(codigo)
+        campos = {f'statistics.{c}': [r.get(c) for r in registros] for c in claves_grupo}
+        fuentes = ['jugador_partido:statistics']
+        if codigo == 'stat_version_conflict':
+            campos['lineup_versions'] = conflictos[grupo]
+            fuentes = ['originales:lineups']
+        elif grupo == 'tiros':
+            campos.update({'statistics.goals': [r.get('goals') for r in registros],
+                           'incidents_goals': None if contexto['goles'] is None else contexto['goles'].get(jugador, 0)})
+            fuentes.append('originales:incidents')
+        evidencia(codigo, dict(campos, group=grupo), fuentes)
     return {
         'player_id': jugador, 'side': lado, 'team_id': equipo,
         'starter': None if suplente is None else not suplente,
         'participation': estado, 'basis': base,
         'minutes': valor(minutos, 'reported') if estado == 'played' else valor(0, 'unused') if estado == 'unused' else valor(None, None),
-        'goals': contribucion('goals', contexto['goles'], 'goals_mismatch'),
-        'assists': contribucion('goalAssist', contexto['asistencias'], 'assists_mismatch'),
+        'goals': goles,
+        'assists': asistencias,
+        'stats': estadisticas,
         'shirt_number': campo(lambda r: r.get('shirt_number'), entero_no_negativo),
         'duplicate_records': len(filas) - 1,
         'issues': incidencias,
