@@ -209,6 +209,53 @@ class Alineaciones(Base):
         self.assertEqual(api.actuaciones_del_partido(servidos, 100)[1]['participation'], 'played')
 
 
+class ExtraccionDeConvocatorias(Base):
+    """importar.extraer_convocatorias: la única extracción de convocatorias (importador JSON y futura carga SQL)."""
+
+    def registro(self, local, visitante):
+        return dict(linea(100, 'lineups', FIJO, alineacion(local, visitante)), export='E1', line=2)
+
+    def test_orden_tipos_nulos_y_claves_ausentes_tal_cual(self):
+        local = [entrada(7, JAEN, totalShots=True, blockedScoringAttempt=None, fouls='2'), entrada(2, JAEN, suplente=True, minutos=None)]
+        sin_stats = entrada(3, RIVAL)
+        del sin_stats['statistics'], sin_stats['shirtNumber']
+        filas, avisos = importar.extraer_convocatorias(self.registro(local, [sin_stats]),
+                                                       {'home_team_id': JAEN, 'away_team_id': RIVAL})
+        self.assertEqual(([f['player_id'] for f in filas], [f['side'] for f in filas]), ([7, 2, 3], ['home', 'home', 'away']))
+        self.assertEqual(avisos, [])
+        stats = filas[0]['statistics']
+        self.assertIs(stats['totalShots'], True)
+        self.assertEqual((stats['blockedScoringAttempt'], stats['fouls']), (None, '2'))
+        self.assertEqual(list(stats), list(local[0]['statistics']))
+        self.assertNotIn('onTargetScoringAttempt', stats)
+        self.assertEqual((filas[1]['minutes_played'], filas[1]['played']), (None, None))
+        self.assertEqual((filas[2]['statistics'], filas[2]['shirt_number'], filas[2]['minutes_played']), (None, None, None))
+        self.assertEqual((filas[0]['fetched_at'], filas[0]['source_team_id']), (FIJO, JAEN))
+
+    def test_el_equipo_es_el_del_lado_y_el_teamid_distinto_se_avisa(self):
+        filas, avisos = importar.extraer_convocatorias(self.registro([entrada(4, RIVAL)], []),
+                                                       {'home_team_id': JAEN, 'away_team_id': RIVAL})
+        self.assertEqual((filas[0]['team_id'], filas[0]['source_team_id']), (JAEN, RIVAL))
+        self.assertEqual(len(avisos), 1)
+
+    def test_extrae_los_repetidos_y_la_importacion_los_rechaza(self):
+        # La extracción no decide: devuelve las dos entradas. Rechazarlas es una regla de la importación.
+        filas, _ = importar.extraer_convocatorias(self.registro([entrada(1, JAEN), entrada(1, JAEN, minutos=10)], []),
+                                                  {'home_team_id': JAEN, 'away_team_id': RIVAL})
+        self.assertEqual([f['player_id'] for f in filas], [1, 1])
+        lineas = [linea(100, 'event', FIJO, evento(100, JAEN, RIVAL)),
+                  linea(100, 'lineups', FIJO, alineacion([entrada(1, JAEN), entrada(1, JAEN, minutos=10)], []))]
+        with self.assertRaisesRegex(ValueError, r'Jugador duplicado en alineación: \(100, 2841, 1\)'):
+            self.importar((self.exportacion('a.jsonl', lineas), JAEN))
+
+    def test_transformar_usa_la_misma_extraccion(self):
+        lineas = partido_basico()
+        datos = self.importar((self.exportacion('a.jsonl', lineas), JAEN))
+        [lineup] = [r for r in datos['originales'] if r['key'] == 'lineups']
+        filas, _ = importar.extraer_convocatorias(lineup, datos['partidos'][0])
+        self.assertEqual(sorted(filas, key=lambda f: (f['match_id'], f['team_id'], f['player_id'])), datos['jugador_partido'])
+
+
 class EquiposYJugadores(Base):
     def test_jugador_observado_en_varios_equipos(self):
         lineas = [linea(100, 'event', FIJO, evento(100, JAEN, RIVAL, ronda=1)),

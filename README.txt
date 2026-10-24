@@ -372,6 +372,7 @@ Los JSON son una etapa del prototipo. Lo que este formato ya prepara para una ba
   - fetched_at (obtencion) e imported_at (actualizacion local) son distintos.
 Decisiones que afectaran a la persistencia: la reimportacion completa (no incremental), la
 seleccion por seccion y el formato de discrepancias.json; la API carga todo en memoria.
+Diseno propuesto (SQLite, SQLAlchemy, Alembic; sin implementar): docs/persistencia-sqlite.md.
 
 PRUEBAS
 Desde esta carpeta: python -m unittest discover -s tests -v

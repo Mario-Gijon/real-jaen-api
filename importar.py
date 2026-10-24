@@ -312,6 +312,36 @@ def leer_fichas(ruta, ident):
                        'fetched_to': utc(max(instantes)) if instantes else None}
 
 
+def extraer_convocatorias(registro, partido):
+    """Las convocatorias de una alineación (registro `lineups` con su procedencia) del partido `partido`: una fila por
+    entrada de jugador, local y después visitante, en el orden del payload. El equipo es el del lado en el partido;
+    el teamId original se conserva aparte (source_team_id) y, si difiere, se avisa. statistics, dorsal, posición y
+    suplente se copian tal cual, con sus tipos, nulos y claves ausentes. Devuelve (filas, avisos).
+    No rechaza jugadores repetidos: eso es una regla de la importación (transformar); la API, al leer, une los
+    registros duplicados de formatos anteriores con sus propias reglas."""
+    mid = registro['event_id']
+    filas, avisos = [], []
+    for lado, campo in (('home', 'home_team_id'), ('away', 'away_team_id')):
+        tid = partido[campo]
+        for entrada in (registro['payload'].get(lado) or {}).get('players') or []:
+            pid = entrada['player']['id']
+            if entrada.get('teamId', tid) != tid:
+                avisos.append(f'Partido {mid}, jugador {pid}: teamId de origen {entrada.get("teamId")} difiere del lado de la alineación {tid}; se conserva el equipo del partido y el original.')
+            stats = entrada.get('statistics')
+            minutos = stats.get('minutesPlayed') if isinstance(stats, dict) else None
+            # La ausencia de minutos NO demuestra que un suplente no jugase.
+            jugo = minutos > 0 if isinstance(minutos, (int, float)) else None
+            filas.append({
+                'source': 'Sofascore', 'match_id': mid, 'team_id': tid, 'player_id': pid,
+                'side': lado, 'source_team_id': entrada.get('teamId'), 'substitute': entrada.get('substitute'),
+                'match_position': entrada.get('position'),
+                'shirt_number': entrada.get('shirtNumber'),
+                'minutes_played': minutos, 'played': jugo,
+                'statistics': stats, 'fetched_at': registro.get('fetched_at'),
+            })
+    return filas, avisos
+
+
 def transformar(exportaciones, importado_en=None, calendarios=(), fichas=()):
     """exportaciones: [(ruta, equipo_seguido | None)]; calendarios: [ruta] del dataset normalizado `events`.
     Devuelve los JSON de la carpeta de salida."""
@@ -412,27 +442,14 @@ def transformar(exportaciones, importado_en=None, calendarios=(), fichas=()):
         mid = r['event_id']
         if mid not in partidos:
             raise ValueError(f'Alineación sin partido: {mid}')
-        for lado, campo in (('home', 'home_team_id'), ('away', 'away_team_id')):
-            tid = partidos[mid][campo]
-            for entrada in (r['payload'].get(lado) or {}).get('players') or []:
-                pid = entrada['player']['id']
-                if entrada.get('teamId', tid) != tid:
-                    avisos.append(f'Partido {mid}, jugador {pid}: teamId de origen {entrada.get("teamId")} difiere del lado de la alineación {tid}; se conserva el equipo del partido y el original.')
-                clave = (mid, tid, pid)
-                if clave in participaciones:
-                    raise ValueError(f'Jugador duplicado en alineación: {clave}')
-                stats = entrada.get('statistics')
-                minutos = stats.get('minutesPlayed') if isinstance(stats, dict) else None
-                # La ausencia de minutos NO demuestra que un suplente no jugase.
-                jugo = minutos > 0 if isinstance(minutos, (int, float)) else None
-                participaciones[clave] = {
-                    'source': 'Sofascore', 'match_id': mid, 'team_id': tid, 'player_id': pid,
-                    'side': lado, 'source_team_id': entrada.get('teamId'), 'substitute': entrada.get('substitute'),
-                    'match_position': entrada.get('position'),
-                    'shirt_number': entrada.get('shirtNumber'),
-                    'minutes_played': minutos, 'played': jugo,
-                    'statistics': stats, 'fetched_at': r.get('fetched_at'),
-                }
+        convocatorias, avisos_alineacion = extraer_convocatorias(r, partidos[mid])
+        avisos.extend(avisos_alineacion)
+        for fila in convocatorias:
+            # Regla de la importación (no de la extracción): un jugador sólo una vez por lado en una alineación.
+            clave = (mid, fila['team_id'], fila['player_id'])
+            if clave in participaciones:
+                raise ValueError(f'Jugador duplicado en alineación: {clave}')
+            participaciones[clave] = fila
     # Sólo enriquece jugadores ya observados. Una ficha nunca crea convocatorias ni equipos.
     for r in fichas_originales:
         if r['player_id'] in observaciones:
