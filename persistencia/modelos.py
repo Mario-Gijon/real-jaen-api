@@ -482,9 +482,12 @@ class Discrepancy(Derivado, Base):
 
 
 class DiscrepancyReason(Base):
+    """Motivos de una discrepancia, en el orden en que los da la regla (forma parte de lo publicado)."""
     __tablename__ = 'discrepancy_reason'
     discrepancy_id: Mapped[int] = mapped_column(ForeignKey('discrepancy.id'), primary_key=True)
     reason: Mapped[str] = mapped_column(String, primary_key=True)
+    ordinal: Mapped[int] = mapped_column(Integer)
+    __table_args__ = (UniqueConstraint('discrepancy_id', 'ordinal'), CheckConstraint('ordinal >= 0', name='ordinal'))
 
 
 class DiscrepancyObservation(Base):
@@ -546,6 +549,8 @@ class MatchVersionIssue(Base):
     __tablename__ = 'match_version_issue'
     match_id: Mapped[int] = mapped_column(ForeignKey('match_state.match_id'), primary_key=True)
     reason: Mapped[str] = mapped_column(String, primary_key=True)
+    ordinal: Mapped[int] = mapped_column(Integer)
+    __table_args__ = (UniqueConstraint('match_id', 'ordinal'), CheckConstraint('ordinal >= 0', name='ordinal'))
 
 
 class TeamName(Derivado, Base):

@@ -805,6 +805,116 @@ Diferencias y concreciones respecto al texto del diseño:
 - **Identificadores**: el `uid` solo se comprueba por longitud (36). El formato canónico de los ids
   de SofaScore se comprobará al importar, no en el esquema.
 
+**Resultado de la fase 2 (sin commit, en revisión).**
+
+Comandos (en `.venv`):
+- `python -m persistencia cargar --importacion CARPETA --base RUTA.sqlite`
+- `python -m persistencia sustituciones --base RUTA.sqlite --archivo sustituciones.json --ambito ambito.json`
+
+Código:
+- `persistencia/carga.py`, `decisiones.py`, `reconstruccion.py` y `__main__.py`.
+- `importar.ensamblar`: las reglas de la importación sobre registros ya leídos, separadas de
+  `transformar` sin cambiar su comportamiento. Son la única implementación y la usa la carga.
+- Migración `0002`: `ordinal` en `discrepancy_reason` y `match_version_issue`, porque el orden de
+  `reasons` y `version_issues` se publica.
+
+Cómo funciona la carga:
+1. **Comprueba la carpeta**: formato 2, etiquetas y ficheros únicos, huellas, instantes, tipo de cada
+   registro y orden de ingestión. Después, `importar.ensamblar` sobre sus registros debe reproducir
+   **los nueve JSON** de la carpeta. Un `NaN` o un valor no representable en JSON se rechaza con su
+   motivo.
+2. **Crea el esquema solo con Alembic** en `<base>.parcial`. Identidad (`origin`, uid UUIDv5 de
+   `urn:api-real-jaen:identidad`), evidencia, declaraciones validadas y estado operativo se escriben
+   en una sola transacción, con las salidas de esas reglas.
+3. **Verifica la base**: integridad, claves foráneas, revisión de Alembic y reconstrucción
+   (`persistencia/reconstruccion.py`) de los nueve JSON, que debe ser igual a la carpeta.
+4. **Solo entonces** renombra a `<base>`. Ante cualquier fallo, incluido uno a mitad de la escritura,
+   borra el parcial y sus diarios.
+
+Destino:
+- se rechaza una ruta dentro de un repositorio (cualquier antecesor con `.git`);
+- se rechaza una ruta donde ya haya base, parcial o diarios.
+
+Sustituciones:
+- se validan con `api.leer_sustituciones` y `api.aplicar_sustituciones` sobre el ámbito indicado y
+  los partidos reconstruidos desde la base;
+- se guardan con motivo, procedencia, evidencia y fichero (`local_decisions`, etiqueta `D1`, sha256)
+  en una transacción;
+- un fallo queda como ejecución `failed`, sin decisiones;
+- el mismo fichero otra vez da `no_changes`.
+
+Base real: `C:\Users\broke\dev\datos-importados\base\real-jaen.sqlite`, desde `importacion-001`
+(que no cambia; sha256 de sus JSON comprobados antes y después). Carga en 9,4 s; los nueve JSON
+coinciden con la carpeta.
+
+| Tabla | Filas | Tabla | Filas |
+|---|---|---|---|
+| observation | 2338 (1806 + 532 fichas) | content | 1377 |
+| source_file | 25 (E1…E24, D1) | file_team_declaration | 21 |
+| match / match_state | 393 / 393 | section_selection | 873 |
+| team / team_name | 30 / 30 | player | 532 |
+| competition / season / stage | 3 / 3 / 3 | call_up | 3427 |
+| call_up_stat | 91 708 | team_match_stat | 9887 |
+| incident | 1916 | player_attribute_observation | 46 344 |
+| discrepancy | 0 | local_replacement | 2 |
+
+- Los dos `listing` conservan `fetched_at` nulo y la condición de inválido, sin fecha inventada.
+- Ningún contenido llegó con otro orden de claves.
+- **Comprobación extra (no es lectura SQL de la API)**: `api.consultar` sobre los datos reconstruidos
+  desde la base, con las sustituciones guardadas, da las 3217 respuestas **idénticas como texto** a
+  las del servicio JSON actual.
+
+Pruebas: `tests/test_carga.py`, 13 casos sintéticos:
+- conflictos de `event`, `lineups`, `statistics` y `listing`;
+- valores inválidos;
+- `statistics` ausente y `null`;
+- aviso de `teamId`;
+- fechas inválidas;
+- respuestas de la API iguales sobre base y carpeta;
+- sustituciones válidas, repetidas y rechazadas;
+- destino existente o en repositorio, huella manipulada, `NaN`, fallo a mitad de escritura,
+  reconstrucción distinta, carpeta sin formato 2.
+
+Suite: 177 pruebas con `.venv`; 177 con 37 omitidas sin dependencias.
+
+**Lector histórico frente a importación nueva**:
+- `api.cargar` (modo JSON) sigue leyendo carpetas con duplicados legados en `jugador_partido` y los
+  une con sus reglas.
+- La carga los **rechaza**: las reglas actuales no reproducen esa carpeta.
+- Una alineación con un jugador repetido también se rechaza (`Jugador duplicado en alineación`), como
+  en el importador.
+- El esquema puede representar duplicados; lo que decide es la regla de importación.
+
+Limitaciones pendientes:
+- Una carpeta con el mismo fichero dos veces (dos etiquetas, mismo sha256) se rechaza; ese caso
+  corresponde a la importación incremental.
+- Los ids no enteros y los textos de partido que no son texto se rechazan con su motivo, en lugar de
+  guardarse.
+- Una ficha de un jugador nunca visto en alineaciones se guarda como evidencia sin crear entidad (hoy
+  ninguna).
+- Solo se admite un primer fichero de sustituciones: añadir o revertir sobre decisiones activas queda
+  para más adelante.
+
+**Selección inicial**:
+- Cada fila de `section_selection` conserva su ejecución de origen (`run_id` = la carga inicial) y su
+  regla (`importar.seleccionar@2`).
+- `section_selection_history` empieza **vacío**: no se inventa historial anterior a la carga.
+- Cuando una importación posterior cambie una selección (fase 4), la fila anterior pasará al historial
+  con `valid_from_run` = su `run_id` y su misma regla.
+
+**Referencia del código** (`rule_set.code_ref`, `import_run.tool_version`):
+- `git:<commit completo>` si los archivos de código (`api.py`, `importar.py`, `alembic.ini`,
+  `requirements-sql.txt`, `persistencia/`) no tienen cambios sin confirmar.
+- Si los tienen, `git:<commit>+sha256:<agregada>`. `import_run.summary.codigo` guarda la huella de
+  cada archivo, y la agregada es el sha256 del listado `huella  ruta` (formato de `sha256sum`), que se
+  puede recalcular desde cualquier copia.
+- La base real se cargó antes de esta referencia y lleva `3fa4147-dirty`. Su equivalencia con el
+  código confirmado se comprueba cargando de nuevo con el commit de la fase 2 en una ruta temporal y
+  comparando el contenido (ver el resultado de la fase 3).
+- El motor de escritura abre `BEGIN IMMEDIATE` incluso para leer, así que `PRAGMA wal_checkpoint` no
+  puede ejecutarse con él. Al cerrar la última conexión de escritura SQLite integra y borra los
+  diarios.
+
 **Primera implementación: fases 0 y 1.**
 - **Fase 0**: la separación de la extracción.
 - **Fase 1**:

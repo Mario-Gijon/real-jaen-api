@@ -85,7 +85,7 @@ class Migraciones(unittest.TestCase):
         self.assertEqual({n for t, n, *_ in primero if t == 'table'}, TABLAS)
         motor = sqlite.crear_motor(base)
         with motor.connect() as c:
-            self.assertEqual(c.exec_driver_sql('SELECT version_num FROM alembic_version').scalar(), '0001')
+            self.assertEqual(c.exec_driver_sql('SELECT version_num FROM alembic_version').scalar(), '0002')
         motor.dispose()
         command.downgrade(configuracion(base), 'base')
         self.assertEqual(esquema(base), set())
@@ -405,7 +405,9 @@ class EstadoOperativo(Base):
         self.rechaza('match_state', **dict(partido, home_score='1-0'))
         self.acepta('match_state', **partido)
         self.assertEqual(self.valor('SELECT home_score FROM match_state'), 'true')
-        self.acepta('match_version_issue', match_id=1, reason='identity_changed')
+        self.acepta('match_version_issue', match_id=1, reason='identity_changed', ordinal=0)
+        self.rechaza('match_version_issue', match_id=1, reason='final_score_corrected', ordinal=0)
+        self.acepta('match_version_issue', match_id=1, reason='final_score_corrected', ordinal=1)
 
     def test_estadisticas_e_incidencias_de_la_seccion_seleccionada(self):
         item = dict(match_id=1, observation_id=5, period_index=0, group_index=0, item_index=0, period='ALL',
@@ -439,7 +441,8 @@ class EstadoOperativo(Base):
                     rule_set_id=1, run_id=1)
         self.acepta('discrepancy_value', discrepancy_id=2, field='country', ordinal=0, value_json='"Spain"')
         self.acepta('discrepancy_value', discrepancy_id=2, field='country', ordinal=1, value_json='"France"')
-        self.acepta('discrepancy_reason', discrepancy_id=1, reason='comparable_versions_differ')
+        self.acepta('discrepancy_reason', discrepancy_id=1, reason='comparable_versions_differ', ordinal=0)
+        self.rechaza('discrepancy_reason', discrepancy_id=1, reason='selected_without_valid_date', ordinal=-1)
         self.acepta('discrepancy_observation', discrepancy_id=1, observation_id=2)
         atributo = dict(observation_id=1, entry_index=0, external_player_id='966303', player_id=1, value_json='165')
         self.acepta('player_attribute_observation', field='height_cm', **atributo)

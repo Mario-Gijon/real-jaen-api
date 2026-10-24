@@ -378,10 +378,15 @@ PRUEBAS
 Desde esta carpeta: python -m unittest discover -s tests -v
 No necesitan que el servicio del puerto 8001 este en marcha: arrancan api.py en un
 puerto libre para comprobar las respuestas HTTP.
-Persistencia SQL (fase 1, solo esquema; docs/persistencia-sqlite.md): entorno propio
+Persistencia SQL (docs/persistencia-sqlite.md): entorno propio
   py -3.14 -m venv .venv  y  .venv\Scripts\python -m pip install -r requirements-sql.txt
   .venv\Scripts\python -m unittest discover -s tests -v
-Sin esas dependencias, tests/test_persistencia.py se omite y el resto funciona igual.
+Sin esas dependencias, tests/test_persistencia.py y tests/test_carga.py se omiten y el resto
+funciona igual. Carga inicial en una base nueva, fuera de los repositorios (la API aun no la lee):
+  .venv\Scripts\python -m persistencia cargar --importacion CARPETA --base RUTA.sqlite
+  .venv\Scripts\python -m persistencia sustituciones --base RUTA.sqlite --archivo SUSTITUCIONES.json --ambito ambito.json
+La carga solo admite carpetas que las reglas actuales del importador reproducen: una carpeta con
+duplicados legados en jugador_partido (que la API en modo JSON si lee y une) se rechaza.
 - tests/test_api.py: muestra pequena y sintetica (tests/fixtures/datos, versionada;
   se regenera con python tests/fixtures/crear.py) con el ambito.json del proyecto.
   Funcionan en un clon sin datos/.

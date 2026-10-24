@@ -354,12 +354,19 @@ def transformar(exportaciones, importado_en=None, calendarios=(), fichas=()):
         registros, info = leer_calendario(ruta, f'E{indice}')
         originales.extend(registros)
         manifiesto.append(info)
-    grupos = {}
     fichas_originales = []
     for indice, ruta in enumerate(fichas, len(manifiesto) + 1):
         registros, info = leer_fichas(ruta, f'E{indice}')
         fichas_originales.extend(registros)
         manifiesto.append(info)
+    return ensamblar(originales, manifiesto, fichas_originales, importado_en, con_fichas=bool(fichas))
+
+
+def ensamblar(originales, manifiesto, fichas_originales, importado_en=None, con_fichas=False):
+    """Las reglas de la importación sobre registros ya leídos (con su procedencia, en orden de lectura): versión
+    operativa de cada sección (`selected`, que se escribe en cada registro), discrepancias, partidos, equipos,
+    convocatorias y fichas. Es la única implementación: la usan transformar y la carga en la base."""
+    grupos = {}
     for r in originales:
         grupos.setdefault((r['event_id'], r['key'], r['sub']), []).append(r)
     seleccion, discrepancias = {}, []
@@ -493,7 +500,7 @@ def transformar(exportaciones, importado_en=None, calendarios=(), fichas=()):
     }
     importacion = {'format': FORMATO, 'imported_at': importado_en or datetime.now(timezone.utc).isoformat(timespec='seconds'),
                    'exports': manifiesto, 'followed_team_ids': seguidos}
-    return {**({'fichas_originales': fichas_originales} if fichas else {}),
+    return {**({'fichas_originales': fichas_originales} if con_fichas else {}),
             'equipos': sorted(equipos.values(), key=lambda x: x['team_id']),
             'jugadores': sorted(jugadores, key=lambda x: x['player_id']),
             'partidos': sorted(partidos.values(), key=lambda x: x['match_id']),
