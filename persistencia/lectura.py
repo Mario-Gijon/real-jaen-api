@@ -1,7 +1,9 @@
 """Lectura de la API desde la base SQLite (fase 3, docs/persistencia-sqlite.md 5.1).
 
 La base se abre solo en lectura (`mode=ro`: nunca se crea ni se modifica), se comprueba que su revisión de esquema es
-la de este código y que tiene una carga inicial confirmada, y se reconstruyen los mismos datos que lee el modo JSON
+la de este código, que tiene una carga inicial confirmada y que el estado vigente usa las versiones de reglas del
+código (si no, `persistencia reconstruir`; la comparación completa en seco, unos 3 s, queda para `verificar` y cada
+importación), y se reconstruyen los mismos datos que lee el modo JSON
 (persistencia.reconstruccion). A partir de ahí el camino es el de siempre: api.componer (fichas, ámbito,
 sustituciones guardadas en la base) y, al consultar, las reglas actuales de normalización y agregados. Todo se lee al
 arrancar; la conexión se cierra después (sin recarga en caliente).
@@ -18,6 +20,7 @@ import api
 from persistencia import reconstruccion, sqlite
 from persistencia.carga import configuracion_alembic
 from persistencia.decisiones import sustituciones_guardadas
+from persistencia.sincronizacion import reglas_desfasadas
 
 # Lo que la API necesita de la base: los mismos archivos que lee el modo JSON (resumen aparte).
 DATOS = ('equipos', 'jugadores', 'partidos', 'jugador_partido', 'exportaciones', 'discrepancias', 'fichas_originales')
@@ -46,6 +49,10 @@ def leer_base(ruta):
             revision = c.exec_driver_sql('SELECT version_num FROM alembic_version').scalar()
             if revision != esperada:
                 raise BaseNoUtilizable(f'{ruta} tiene la revisión de esquema {revision}; este código necesita {esperada}')
+            desfasadas = reglas_desfasadas(c)
+            if desfasadas:
+                raise BaseNoUtilizable(f'{ruta}: el estado guardado usa reglas que no son las de este código '
+                                       f'({", ".join(f"{n}@{v}" for n, v in desfasadas)}); ejecute `persistencia reconstruir`')
             try:
                 reconstruida = reconstruccion.salida_desde_base(c)
             except ValueError as e:

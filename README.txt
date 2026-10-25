@@ -387,10 +387,20 @@ puerto libre para comprobar las respuestas HTTP.
 Persistencia SQL (docs/persistencia-sqlite.md): entorno propio
   py -3.14 -m venv .venv  y  .venv\Scripts\python -m pip install -r requirements-sql.txt
   .venv\Scripts\python -m unittest discover -s tests -v
-Sin esas dependencias, tests/test_persistencia.py y tests/test_carga.py se omiten y el resto
-funciona igual. Carga inicial en una base nueva, fuera de los repositorios (la API aun no la lee):
+Sin esas dependencias, tests/test_persistencia.py, test_carga.py, test_lectura_sql.py y
+test_sincronizacion.py se omiten y el resto funciona igual. Base fuera de los repositorios:
   .venv\Scripts\python -m persistencia cargar --importacion CARPETA --base RUTA.sqlite
   .venv\Scripts\python -m persistencia sustituciones --base RUTA.sqlite --archivo SUSTITUCIONES.json --ambito ambito.json
+  .venv\Scripts\python -m persistencia importar --base RUTA.sqlite --exportacion EQUIPO=RUTA [--calendario RUTA] [--fichas-jugadores RUTA]
+  .venv\Scripts\python -m persistencia verificar --base RUTA.sqlite
+  .venv\Scripts\python -m persistencia reconstruir --base RUTA.sqlite [--confirmar]
+  .venv\Scripts\python -m persistencia migrar --base RUTA.sqlite
+  .venv\Scripts\python -m persistencia copiar --base RUTA.sqlite
+  .venv\Scripts\python -m persistencia restaurar --copia COPIA.sqlite --base RUTA.sqlite --confirmar
+Cada escritura en una base existente hace antes una copia verificada (en <carpeta de la base>\copias)
+y la base se verifica antes de confirmar.
+La API lee la base al arrancar: tras importar, reconstruir, migrar o restaurar, reiniciala.
+Importacion incremental y vigencia de convocatorias: docs/fase4-sincronizacion.md.
 La carga solo admite carpetas que las reglas actuales del importador reproducen: una carpeta con
 duplicados legados en jugador_partido (que la API en modo JSON si lee y une) se rechaza.
 - tests/test_api.py: muestra pequena y sintetica (tests/fixtures/datos, versionada;

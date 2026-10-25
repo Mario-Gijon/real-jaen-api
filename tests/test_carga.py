@@ -165,7 +165,7 @@ class CargaValida(Base):
         informe = cargar(self.importacion(), self.base, 'prueba')
         self.assertTrue(self.base.is_file())
         self.assertFalse(carga.parcial_de(self.base).exists())
-        self.assertEqual(informe['revision'], '0002')
+        self.assertEqual(informe['revision'], '0004')
         self.assertEqual(informe['comparados'], sorted(['discrepancias', 'equipos', 'exportaciones', 'jugador_partido', 'jugadores',
                                                         'originales', 'partidos', 'resumen']))
         # Referencia verificable del código: commit completo y, con cambios sin confirmar, sus huellas recalculables.
@@ -213,8 +213,10 @@ class CargaValida(Base):
         self.assertEqual(self.consulta("SELECT t.uid FROM team t JOIN team_external_id x ON x.entity_id = t.id "
                                        f"WHERE x.external_id = '{JAEN}'"),
                          [(str(uuid.uuid5(carga.ESPACIO_UID, f'sofascore:team:{JAEN}')),)])
-        # Índices extraídos tolerantes: lo que no tiene forma no se extrae (el original sigue completo).
-        self.assertEqual(self.consulta('SELECT count(*) FROM incident'), [(1,)])
+        # Convocatorias vigentes desde la carga; ninguna transición. La regla persistencia.carga ya no se registra.
+        self.assertEqual(self.consulta("SELECT DISTINCT status FROM call_up"), [('active',)])
+        self.assertEqual(self.consulta('SELECT count(*) FROM call_up_change'), [(0,)])
+        self.assertNotIn(('persistencia.carga',), self.consulta('SELECT name FROM rule_set'))
 
     def test_la_api_sobre_la_base_responde_igual_que_sobre_la_carpeta(self):
         carpeta = self.importacion()

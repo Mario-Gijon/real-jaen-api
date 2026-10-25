@@ -4,7 +4,12 @@ estas funciones en lugar de escribir PRAGMA, transacciones o SQL propio del moto
 SQLAlchemy no hace portable lo que hay aquí: cambiar de motor exigiría reescribir este módulo, revisar las migraciones
 (modo batch) y validar la equivalencia de los datos.
 """
+import hashlib
+import os
+import sqlite3
+
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 
 from sqlalchemy import create_engine, event, text
@@ -72,6 +77,151 @@ def transaccion_de_escritura(motor):
     """Una transacción de escritura completa: confirma al terminar sin error y deshace todo si falla."""
     with motor.begin() as conexion:
         yield conexion
+
+
+def preparar_migracion(conexion):
+    """El modo batch de Alembic recrea tablas (copia, borra la antigua y renombra). Con las claves foráneas activas,
+    borrar una tabla referenciada fallaría aunque la copia conserve las filas: se desactivan durante la migración
+    (fuera de transacción, como exige SQLite). Antes de confirmar se comprueban todas con comprobar_integridad."""
+    conexion.connection.driver_connection.execute('PRAGMA foreign_keys = OFF')
+
+
+# ─── Copias, verificación y restauración ─────────────────────────────────────────────────────────────────────
+
+ACOMPANANTES = ('-wal', '-shm', '-journal')
+
+
+class CopiaNoValida(RuntimeError):
+    """La copia o la base no pasan la verificación: no se sigue."""
+
+
+def _lectura(ruta):
+    return sqlite3.connect(f'{Path(ruta).resolve().as_uri()}?mode=ro', uri=True)
+
+
+def describir(ruta):
+    """Lo que identifica el contenido de una base: integridad, claves foráneas, revisión de esquema, filas por tabla
+    y una huella sha256 de todas las filas de todas las tablas (en orden de todas sus columnas)."""
+    c = _lectura(ruta)
+    try:
+        tablas = [t for (t,) in c.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' "
+                                          "ORDER BY name")]
+        huella, recuentos = hashlib.sha256(), {}
+        for tabla in tablas:
+            columnas = [fila[1] for fila in c.execute(f'PRAGMA table_info("{tabla}")')]
+            orden = ', '.join(f'"{x}"' for x in columnas)
+            filas = c.execute(f'SELECT {orden} FROM "{tabla}" ORDER BY {orden}').fetchall()
+            recuentos[tabla] = len(filas)
+            huella.update(f'{tabla}|{columnas}|'.encode())
+            for fila in filas:
+                huella.update(repr(fila).encode())
+        revision = c.execute('SELECT version_num FROM alembic_version').fetchone() if 'alembic_version' in tablas else None
+        return {'integridad': c.execute('PRAGMA integrity_check').fetchone()[0],
+                'claves_foraneas': c.execute('PRAGMA foreign_key_check').fetchall(),
+                'revision': revision[0] if revision else None, 'recuentos': recuentos, 'huella': huella.hexdigest()}
+    finally:
+        c.close()
+
+
+def revision(ruta):
+    """La revisión de Alembic de una base (None si no tiene), sin leer nada más."""
+    c = _lectura(ruta)
+    try:
+        if not c.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'alembic_version'").fetchone():
+            return None
+        fila = c.execute('SELECT version_num FROM alembic_version').fetchone()
+        return fila[0] if fila else None
+    finally:
+        c.close()
+
+
+def comprobar_copia(copia, esperado=None):
+    """Una copia íntegra, sin violaciones de claves foráneas y, si se da, con el mismo contenido que `esperado`."""
+    try:
+        obtenido = describir(copia)
+    except sqlite3.DatabaseError as e:
+        raise CopiaNoValida(f'{copia}: no es una base SQLite legible ({e})') from e
+    if obtenido['integridad'] != 'ok' or obtenido['claves_foraneas']:
+        raise CopiaNoValida(f'{copia}: integridad {obtenido["integridad"]}, claves foráneas {obtenido["claves_foraneas"][:3]}')
+    if esperado is not None and (obtenido['huella'], obtenido['revision']) != (esperado['huella'], esperado['revision']):
+        raise CopiaNoValida(f'{copia}: su contenido no coincide con el de origen')
+    return obtenido
+
+
+def copia_consistente(origen, destino):
+    """Copia con la API de copia de SQLite: una imagen coherente aunque haya lectores y diario WAL (copiar el archivo a
+    mano no lo garantiza). El destino no debe existir. La copia queda con diario `DELETE`: un solo archivo, sin -wal ni
+    -shm al abrirla en solo lectura (la conexión de escritura vuelve a WAL al abrirla, sqlite.preparar_conexion)."""
+    destino = Path(destino)
+    if any(p.exists() for p in (destino, *(destino.with_name(destino.name + s) for s in ACOMPANANTES))):
+        raise FileExistsError(f'Ya existe {destino}: una copia nunca sobrescribe nada')
+    destino.parent.mkdir(parents=True, exist_ok=True)
+    fuente, copia = _lectura(origen), sqlite3.connect(destino)
+    try:
+        fuente.backup(copia)
+        copia.execute('PRAGMA journal_mode = DELETE')
+    finally:
+        copia.close()
+        fuente.close()
+
+
+def crear_copia(base, motivo):
+    """Copia verificada de una base antes de modificarla, en `<carpeta de la base>/copias`. Devuelve su descripción."""
+    base = Path(base).resolve()
+    momento = datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S-%f')
+    destino = base.parent / 'copias' / f'{base.stem}.{momento}.{motivo}.sqlite'
+    copia_consistente(base, destino)
+    descripcion = comprobar_copia(destino, describir(base))
+    return {'ruta': str(destino), 'sha256_archivo': hashlib.sha256(destino.read_bytes()).hexdigest(),
+            'huella': descripcion['huella'], 'revision': descripcion['revision']}
+
+
+def archivos_en_uso(ruta):
+    """Archivos de la base (principal, -wal, -shm, -journal) que algún proceso tiene abiertos. En Windows se comprueba
+    abriéndolos sin compartir: una violación de uso compartido indica que otro proceso (o esta misma conexión) los usa.
+    En otros sistemas no se sabe comprobar y se trata como en uso (no se restaura)."""
+    ruta = Path(ruta)
+    archivos = [p for p in (ruta, *(ruta.with_name(ruta.name + s) for s in ACOMPANANTES)) if p.exists()]
+    if os.name != 'nt':
+        return [str(p) for p in archivos] or []
+    import ctypes
+    from ctypes import wintypes
+    kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+    kernel32.CreateFileW.restype = wintypes.HANDLE
+    kernel32.CreateFileW.argtypes = (wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID, wintypes.DWORD,
+                                     wintypes.DWORD, wintypes.HANDLE)
+    invalido, en_uso = wintypes.HANDLE(-1).value, []
+    for archivo in archivos:
+        manejador = kernel32.CreateFileW(str(archivo), 0x80000000, 0, None, 3, 0x80, None)  # GENERIC_READ, sin compartir
+        if manejador == invalido:
+            error = ctypes.get_last_error()
+            if error in (32, 33):  # ERROR_SHARING_VIOLATION, ERROR_LOCK_VIOLATION
+                en_uso.append(str(archivo))
+                continue
+            raise OSError(error, f'No se puede comprobar el uso de {archivo}')
+        kernel32.CloseHandle(manejador)
+    return en_uso
+
+
+def restaurar(copia, destino, revision_esperada):
+    """Sustituye el contenido de `destino` por el de `copia`, solo si ningún proceso usa el destino.
+    1. Verifica la copia (íntegra, claves foráneas, revisión del código).
+    2. Si el destino existe: copia verificada «antes-de-restaurar» (incluye lo que hubiera en su -wal).
+    3. Borra el destino y sus -wal/-shm: un -wal antiguo aplicado sobre el archivo restaurado lo corrompería.
+    4. Escribe la copia en el destino con la API de copia y comprueba que su contenido es el de la copia."""
+    copia, destino = Path(copia).resolve(), Path(destino).resolve()
+    origen = comprobar_copia(copia)
+    if origen['revision'] != revision_esperada:
+        raise CopiaNoValida(f'{copia} tiene la revisión {origen["revision"]}; este código necesita {revision_esperada}')
+    en_uso = archivos_en_uso(destino)
+    if en_uso:
+        raise CopiaNoValida(f'La base de destino está en uso ({", ".join(en_uso)}): cierre la API y cualquier otro proceso')
+    anterior = crear_copia(destino, 'antes-de-restaurar') if destino.exists() else None
+    for archivo in (destino, *(destino.with_name(destino.name + s) for s in ACOMPANANTES)):
+        archivo.unlink(missing_ok=True)
+    copia_consistente(copia, destino)
+    comprobar_copia(destino, origen)
+    return {'restaurada': str(destino), 'desde': str(copia), 'huella': origen['huella'], 'anterior': anterior}
 
 
 # ─── Expresiones SQL propias del dialecto, para las restricciones de los modelos ───────────────────────────────

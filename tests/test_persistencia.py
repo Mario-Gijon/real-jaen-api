@@ -25,7 +25,7 @@ if CON_SQL:
     from sqlalchemy import text
     from sqlalchemy.exc import IntegrityError, OperationalError
 
-    from persistencia import modelos, sqlite
+    from persistencia import modelos, sincronizacion, sqlite
 
 TABLAS = {
     'competition', 'season', 'stage', 'team', 'player', 'match',
@@ -34,7 +34,7 @@ TABLAS = {
     'import_run', 'source_file', 'import_run_file', 'file_team_declaration', 'content', 'observation',
     'rule_set', 'section_selection', 'section_selection_history', 'discrepancy', 'discrepancy_reason',
     'discrepancy_observation', 'discrepancy_value', 'match_state', 'match_version_issue', 'team_name', 'call_up',
-    'call_up_stat', 'team_match_stat', 'incident', 'player_attribute_observation', 'local_replacement',
+    'call_up_stat', 'call_up_change', 'player_attribute_observation', 'local_replacement',
 }
 H1, H2 = 'a' * 64, 'b' * 64
 
@@ -85,7 +85,7 @@ class Migraciones(unittest.TestCase):
         self.assertEqual({n for t, n, *_ in primero if t == 'table'}, TABLAS)
         motor = sqlite.crear_motor(base)
         with motor.connect() as c:
-            self.assertEqual(c.exec_driver_sql('SELECT version_num FROM alembic_version').scalar(), '0002')
+            self.assertEqual(c.exec_driver_sql('SELECT version_num FROM alembic_version').scalar(), '0004')
         motor.dispose()
         command.downgrade(configuracion(base), 'base')
         self.assertEqual(esquema(base), set())
@@ -359,24 +359,51 @@ class EstadoOperativo(Base):
         self.rechaza('section_selection', match_id=1, key='lineups', observation_id=2, versions=1, rule_set_id=1, run_id=1)
         self.acepta('section_selection', match_id=2, key='lineups', observation_id=3, versions=1, rule_set_id=1, run_id=1)
 
-    def test_una_convocatoria_solo_sale_de_la_alineacion_seleccionada(self):
+    def test_una_convocatoria_sale_de_una_alineacion_de_su_partido(self):
         self.acepta('call_up', id=1, **self.convocatoria())
-        # La otra versión (observación 2) no es la operativa: se rechaza al confirmar (clave diferida).
-        self.rechaza('call_up', id=2, **self.convocatoria(lineup_observation_id=2, entry_index=1))
         self.rechaza('call_up', id=2, **self.convocatoria(lineup_key='event', lineup_observation_id=4))
-        self.rechaza('call_up', id=2, **self.convocatoria(match_id=2, lineup_observation_id=3))
+        self.rechaza('call_up', id=2, **self.convocatoria(match_id=2, lineup_observation_id=1, external_player_id='2'))
+        # Otra versión de la alineación del partido (observación 6) cabe en el esquema: así se conserva una retirada
+        # con su última alineación. Que las activas salgan de la seleccionada se comprueba en código.
+        self.acepta('observation', id=6, source_file_id=1, line=6, kind='section', provider='sofascore',
+                    external_event_id='100', key='lineups', fetched_at_valid=False, content_hash=H2, match_id=1)
+        self.acepta('call_up', id=2, **self.convocatoria(lineup_observation_id=6, external_player_id='2'))
+        with self.motor.connect() as c:
+            self.assertEqual(sincronizacion.convocatorias_fuera_de_seleccion(c), [2])
+        with self.motor.begin() as c:
+            c.exec_driver_sql("UPDATE call_up SET status = 'retired', retired_in_run = 1 WHERE id = 2")
+        with self.motor.connect() as c:
+            self.assertEqual(sincronizacion.convocatorias_fuera_de_seleccion(c), [])
+            # Retirada sin su transición en call_up_change: incoherente.
+            self.assertEqual(sincronizacion.vigencias_incoherentes(c), [2])
+        self.acepta('call_up_change', call_up_id=2, run_id=1, change='retired', lineup_observation_id=1)
+        with self.motor.connect() as c:
+            self.assertEqual(sincronizacion.vigencias_incoherentes(c), [])
+        self.rechaza('call_up_change', call_up_id=2, run_id=1, change='borrada')
 
-    def test_duplicados_legados_representables_y_entrada_unica(self):
+    def test_vigencia_de_una_convocatoria(self):
+        self.rechaza('call_up', id=1, **self.convocatoria(status='vigente'))
+        self.rechaza('call_up', id=1, **self.convocatoria(status='retired'))
+        self.rechaza('call_up', id=1, **self.convocatoria(retired_in_run=1))
+        self.acepta('call_up', id=1, **self.convocatoria(status='retired', retired_in_run=1))
+        self.assertEqual(self.valor('SELECT count(*) FROM call_up_vigente'), 0)
+        self.acepta('call_up', id=2, **self.convocatoria(external_player_id='2', entry_index=1))
+        self.assertEqual(self.valor('SELECT id FROM call_up_vigente'), 2)
+
+    def test_una_convocatoria_por_partido_lado_y_jugador(self):
         self.acepta('call_up', id=1, **self.convocatoria())
-        # El mismo jugador dos veces en el mismo partido: lo rechaza la importación, no el esquema.
-        self.acepta('call_up', id=2, **self.convocatoria(entry_index=1))
+        # El mismo jugador dos veces en el mismo lado de un partido: ni la importación ni el esquema lo admiten (la
+        # clave de sincronización). El modo JSON sigue leyendo carpetas legadas con duplicados.
+        self.rechaza('call_up', id=2, **self.convocatoria(entry_index=1))
+        self.rechaza('call_up', id=2, **self.convocatoria(entry_index=1, status='retired', retired_in_run=1))
+        self.acepta('call_up', id=2, **self.convocatoria(entry_index=1, side='away'))
         self.rechaza('call_up', id=3, **self.convocatoria(external_player_id='1'))
-        self.rechaza('call_up', id=3, **self.convocatoria(entry_index=2, side='neutral'))
-        self.rechaza('call_up', id=3, **self.convocatoria(entry_index=2, played=2))
-        self.rechaza('call_up', id=3, **self.convocatoria(entry_index=2, statistics_kind='vacio'))
+        self.rechaza('call_up', id=3, **self.convocatoria(entry_index=2, side='neutral', external_player_id='3'))
+        self.rechaza('call_up', id=3, **self.convocatoria(entry_index=2, played=2, external_player_id='3'))
+        self.rechaza('call_up', id=3, **self.convocatoria(entry_index=2, statistics_kind='vacio', external_player_id='3'))
         self.acepta('call_up', id=3, **self.convocatoria(entry_index=2, statistics_kind='absent', substitute='null',
-                                                         shirt_number='"19"', played=None))
-        self.rechaza('call_up', id=4, **self.convocatoria(entry_index=3, substitute='sí'))
+                                                         shirt_number='"19"', played=None, external_player_id='3'))
+        self.rechaza('call_up', id=4, **self.convocatoria(entry_index=3, substitute='sí', external_player_id='4'))
 
     def test_estadisticas_originales_con_su_tipo_y_su_posicion(self):
         self.acepta('call_up', id=1, **self.convocatoria())
@@ -409,27 +436,22 @@ class EstadoOperativo(Base):
         self.rechaza('match_version_issue', match_id=1, reason='final_score_corrected', ordinal=0)
         self.acepta('match_version_issue', match_id=1, reason='final_score_corrected', ordinal=1)
 
-    def test_estadisticas_e_incidencias_de_la_seccion_seleccionada(self):
-        item = dict(match_id=1, observation_id=5, period_index=0, group_index=0, item_index=0, period='ALL',
-                    key='totalShotsOnGoal', home_value='2', away_value='true', rule_set_id=1, run_id=1)
-        self.acepta('team_match_stat', **item)
-        # Un ítem sin clave ni valores también es evidencia de la sección.
-        self.acepta('team_match_stat', **dict(item, item_index=1, key=None, home_value=None, away_value=None))
-        self.rechaza('team_match_stat', **dict(item, observation_id=4, item_index=2))
-        self.rechaza('incident', match_id=1, observation_id=5, seq=0, rule_set_id=1, run_id=1)
+    def test_extracciones_sin_uso_retiradas(self):
+        # 0003: team_match_stat e incident ya no existen; los originales de esas secciones siguen en content.
+        with self.motor.connect() as c:
+            tablas = {t for (t,) in c.exec_driver_sql("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        self.assertFalse({'team_match_stat', 'incident'} & tablas)
+        self.assertEqual(self.valor("SELECT payload_text FROM content WHERE hash = :h", h=H2), '{"confirmed":false}')
 
-    def test_una_reconstruccion_cambia_seleccion_y_derivados_en_una_transaccion(self):
+    def test_cambiar_la_seleccion_deja_las_convocatorias_fuera_hasta_sincronizar(self):
         self.acepta('call_up', id=1, **self.convocatoria())
         self.acepta('observation', id=6, source_file_id=1, line=6, kind='section', provider='sofascore',
                     external_event_id='100', key='lineups', fetched_at_valid=False, content_hash=H2, match_id=1)
         with self.motor.begin() as c:
             c.exec_driver_sql('UPDATE section_selection SET observation_id = 6 WHERE match_id = 1 AND "key" = \'lineups\'')
+            self.assertEqual(sincronizacion.convocatorias_fuera_de_seleccion(c), [1])
             c.exec_driver_sql('UPDATE call_up SET lineup_observation_id = 6 WHERE id = 1')
-        # Cambiar la selección sin rehacer sus derivados no se confirma.
-        with self.assertRaises(IntegrityError):
-            with self.motor.begin() as c:
-                c.exec_driver_sql('UPDATE section_selection SET observation_id = 1 WHERE match_id = 1 AND "key" = \'lineups\'')
-        self.assertEqual(self.valor('SELECT lineup_observation_id FROM call_up WHERE id = 1'), 6)
+            self.assertEqual(sincronizacion.convocatorias_fuera_de_seleccion(c), [])
 
     def test_discrepancias_y_atributos(self):
         self.acepta('discrepancy', id=1, kind='section', match_id=1, key='lineups', integrity=False,

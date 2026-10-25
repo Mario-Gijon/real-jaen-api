@@ -191,7 +191,32 @@ def verificar_carpeta(datos):
 
 # ─── Escritura ───────────────────────────────────────────────────────────────────────────────────────────────────
 
+class Filas:
+    """Las filas que escribiría la carga, por tabla y en orden de dependencias (el de su primera aparición): las
+    inserta la carga inicial y las compara la sincronización. Un solo código calcula ambas."""
+
+    def __init__(self):
+        self.tablas = {}
+
+    def agregar(self, tabla, filas):
+        self.tablas.setdefault(tabla, []).extend(filas)
+
+    def de(self, tabla):
+        return self.tablas.get(tabla, [])
+
+
+# Reglas materializadas: (nombre, versión, descripción). Cambiar una versión exige `persistencia reconstruir`.
+REGLAS = (
+    ('importar.seleccionar', str(importar.FORMATO), 'versión operativa de cada sección y discrepancias'),
+    ('importar.ensamblar', str(importar.FORMATO), 'partidos, equipos, fichas y discrepancias de atributos'),
+    ('importar.extraer_convocatorias', '1', 'convocatorias de una alineación'),
+)
+
+
 def insertar(c, tabla, filas):
+    if isinstance(c, Filas):
+        c.agregar(tabla, filas)
+        return
     if not filas:
         return
     columnas = list(filas[0])
@@ -233,17 +258,28 @@ def texto_o_nulo(valor, que):
 
 
 def escribir(c, datos, salida, origen):
+    """Carga inicial: la ejecución 1 y todas las filas de filas_de_carga, en una transacción."""
     referencia = referencia_del_codigo()
-    codigo = referencia['texto']
     c.execute(text("INSERT INTO import_run (id, kind, started_at, status, tool_version, command) "
-                   "VALUES (1, 'initial_load', :t, 'running', :v, :cmd)"), {'t': ahora(), 'v': codigo, 'cmd': origen['comando']})
-    run = 1
+                   "VALUES (1, 'initial_load', :t, 'running', :v, :cmd)"),
+              {'t': ahora(), 'v': referencia['texto'], 'cmd': origen['comando']})
+    filas, totales = filas_de_carga(datos, salida, 1, referencia['texto'])
+    for tabla, lista in filas.tablas.items():
+        insertar(c, tabla, lista)
+    informe = {'origen': {'carpeta': origen['carpeta'], 'format': datos['exportaciones']['format'],
+                          'imported_at': datos['exportaciones'].get('imported_at')},
+               'resumen': salida['resumen'], 'codigo': referencia, **totales}
+    c.execute(text("UPDATE import_run SET status = 'committed', finished_at = :t, summary = :s WHERE id = 1"),
+              {'t': ahora(), 's': literal(informe)})
+
+
+def filas_de_carga(datos, salida, run, codigo):
+    """Todas las filas (identidad, evidencia, declaraciones y estado operativo) que corresponden a la salida de
+    importar.ensamblar, sin escribir nada. Los ids de entidad se numeran desde 1 en orden de aparición; la
+    sincronización los traduce a los de la base por su id externo."""
+    c = Filas()
     reglas = {}
-    for i, (nombre, version, descripcion) in enumerate((
-            ('importar.seleccionar', str(importar.FORMATO), 'versión operativa de cada sección y discrepancias'),
-            ('importar.ensamblar', str(importar.FORMATO), 'partidos, equipos, fichas y discrepancias de atributos'),
-            ('importar.extraer_convocatorias', '1', 'convocatorias de una alineación'),
-            ('persistencia.carga', '1', 'extracción de estadísticas de equipo, incidencias, nombres y atributos')), 1):
+    for i, (nombre, version, descripcion) in enumerate(REGLAS, 1):
         insertar(c, 'rule_set', [dict(id=i, name=nombre, version=version, code_ref=codigo, description=descripcion)])
         reglas[nombre] = i
     ident = Identidades(c, run)
@@ -371,15 +407,9 @@ def escribir(c, datos, salida, origen):
                                             for i, m in enumerate(p['version_issues'])])
     escribir_nombres(c, salida, seleccion, partidos, ident, observacion, reglas, run)
     totales = escribir_convocatorias(c, seleccion, partidos, ident, observacion, reglas, run)
-    escribir_secciones(c, seleccion, ident, observacion, reglas, run)
     escribir_atributos(c, originales, fichas, ident, observacion)
     escribir_discrepancias(c, salida['discrepancias'], ident, observacion, reglas, run)
-    informe = {'origen': {'carpeta': origen['carpeta'], 'format': datos['exportaciones']['format'],
-                          'imported_at': datos['exportaciones'].get('imported_at')},
-               'resumen': salida['resumen'], 'contenidos_con_otro_orden_de_claves': orden_distinto, 'codigo': referencia,
-               **totales}
-    c.execute(text("UPDATE import_run SET status = 'committed', finished_at = :t, summary = :s WHERE id = :r"),
-              {'t': ahora(), 's': literal(informe), 'r': run})
+    return c, dict(totales, contenidos_con_otro_orden_de_claves=orden_distinto)
 
 
 def escribir_nombres(c, salida, seleccion, partidos, ident, observacion, reglas, run):
@@ -435,7 +465,7 @@ def escribir_convocatorias(c, seleccion, partidos, ident, observacion, reglas, r
                 shirt_number=literal(entrada['shirtNumber']) if 'shirtNumber' in entrada else None,
                 minutes_played=literal(stats['minutesPlayed']) if isinstance(stats, dict) and 'minutesPlayed' in stats else None,
                 match_position=literal(entrada['position']) if 'position' in entrada else None,
-                played=fila['played'], statistics_kind=tipo,
+                played=fila['played'], statistics_kind=tipo, status='active', retired_in_run=None,
                 rule_set_id=reglas['importar.extraer_convocatorias'], run_id=run))
             if tipo == 'object':
                 estadisticas.extend(dict(call_up_id=ident_convocatoria, key=k, ordinal=i, value_json=literal(v))
@@ -443,56 +473,6 @@ def escribir_convocatorias(c, seleccion, partidos, ident, observacion, reglas, r
     insertar(c, 'call_up', convocatorias)
     insertar(c, 'call_up_stat', estadisticas)
     return {'convocatorias': len(convocatorias), 'valores_de_estadisticas': len(estadisticas)}
-
-
-def _id_externo(objeto):
-    valor = objeto.get('id') if isinstance(objeto, dict) else None
-    return str(valor) if type(valor) is int else None
-
-
-def escribir_secciones(c, seleccion, ident, observacion, reglas, run):
-    """Índices extraídos de las secciones `statistics` e `incidents` seleccionadas. Lo que no tiene la forma esperada
-    no se extrae: el original sigue completo en `content` y es lo que se sirve."""
-    items, incidencias = [], []
-    texto = lambda v: v if isinstance(v, str) else None
-    for (evento, clave, sub), r in seleccion.items():
-        base = dict(match_id=ident.de('match', evento), section_sub=sub, observation_id=observacion[(r['export'], r['line'])],
-                    rule_set_id=reglas['persistencia.carga'], run_id=run)
-        if clave == 'statistics':
-            periodos = r['payload'].get('statistics')
-            for pi, periodo in enumerate(periodos if isinstance(periodos, list) else []):
-                grupos = periodo.get('groups') if isinstance(periodo, dict) else None
-                for gi, grupo in enumerate(grupos if isinstance(grupos, list) else []):
-                    lista = grupo.get('statisticsItems') if isinstance(grupo, dict) else None
-                    for ii, item in enumerate(lista if isinstance(lista, list) else []):
-                        if not isinstance(item, dict):
-                            continue
-                        items.append(dict(base, section_key='statistics', period_index=pi, group_index=gi, item_index=ii,
-                                          period=texto(periodo.get('period')), group_name=texto(grupo.get('groupName')),
-                                          key=texto(item.get('key')), statistics_type=texto(item.get('statisticsType')),
-                                          **{col: literal(item[k]) if k in item else None for col, k in (
-                                              ('home_value', 'homeValue'), ('away_value', 'awayValue'),
-                                              ('home_total', 'homeTotal'), ('away_total', 'awayTotal'))}))
-        elif clave == 'incidents':
-            lista = r['payload'].get('incidents')
-            for seq, i in enumerate(lista if isinstance(lista, list) else []):
-                if not isinstance(i, dict):
-                    continue
-                externos = {campo: _id_externo(i.get(origen)) for campo, origen in (
-                    ('external_player_id', 'player'), ('external_assist1_id', 'assist1'),
-                    ('external_player_in_id', 'playerIn'), ('external_player_out_id', 'playerOut'))}
-                incidencias.append(dict(
-                    base, section_key='incidents', seq=seq, incident_type=texto(i.get('incidentType')),
-                    incident_class=texto(i.get('incidentClass')),
-                    is_home=literal(i['isHome']) if 'isHome' in i else None,
-                    time=literal(i['time']) if 'time' in i else None,
-                    added_time=literal(i['addedTime']) if 'addedTime' in i else None, **externos,
-                    player_id=ident.de('player', externos['external_player_id']),
-                    assist1_player_id=ident.de('player', externos['external_assist1_id']),
-                    player_in_id=ident.de('player', externos['external_player_in_id']),
-                    player_out_id=ident.de('player', externos['external_player_out_id'])))
-    insertar(c, 'team_match_stat', items)
-    insertar(c, 'incident', incidencias)
 
 
 def escribir_atributos(c, originales, fichas, ident, observacion):
@@ -563,11 +543,14 @@ def cargar(carpeta, ruta_base, comando=None):
     parcial = parcial_de(ruta)
     ruta.parent.mkdir(parents=True, exist_ok=True)
     motor = None
+    from persistencia import sincronizacion  # importa este módulo
     try:
         command.upgrade(configuracion_alembic(parcial), 'head')
         motor = sqlite.crear_motor(parcial)
         with motor.begin() as c:
             escribir(c, datos, salida, {'carpeta': str(carpeta), 'comando': comando})
+            # Obligatoria antes de confirmar cualquier escritura (sincronizacion.exigir_coherencia).
+            sincronizacion.exigir_coherencia(c)
         with motor.connect() as c:
             if sqlite.comprobar_integridad(c):
                 raise CargaRechazada('La base tiene filas que violan claves foráneas')

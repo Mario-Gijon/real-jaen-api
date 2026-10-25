@@ -1,7 +1,9 @@
 # Persistencia de api-real-jaen: diseño (SQLite, SQLAlchemy, Alembic)
 
-**Estado: diseño aprobado como orientación, revisado con precisiones (24-10-2026). Sin implementar:**
-no hay modelos, migraciones, dependencias ni base de datos.
+**Estado: diseño aprobado como orientación, revisado con precisiones (24-10-2026).** Fases 0 a 3 implementadas
+(resultados en la sección 6). La revisión crítica de simplicidad tras la fase 3 está en
+`docs/revision-simplicidad-persistencia.md`. Fase 4 (importación incremental con sincronización completa) implementada
+sin activar en la base real: `docs/fase4-sincronizacion.md`.
 
 Decisiones acordadas:
 - SQLite al principio, SQLAlchemy como ORM y Alembic para migraciones; uso individual.

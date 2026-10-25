@@ -69,30 +69,56 @@ def fichas_originales(c):
     return registros
 
 
+def ejecuciones_de_estado(c):
+    """Ejecuciones que fijaron el estado operativo (carga inicial, importaciones, reconstrucciones), de la última a la
+    primera, con su informe. Una `running` solo puede ser la de la transacción en curso."""
+    filas = c.exec_driver_sql("""SELECT id, kind, finished_at, summary FROM import_run
+                                 WHERE kind IN ('initial_load', 'import', 'rebuild') AND status <> 'failed'
+                                 ORDER BY id DESC""").fetchall()
+    return [(i, tipo, fin, json.loads(informe) if informe else {}) for i, tipo, fin, informe in filas]
+
+
+def resumen_vigente(c):
+    """El resumen del importador de la última ejecución que fijó el estado (resumen.json)."""
+    for _i, tipo, _fin, informe in ejecuciones_de_estado(c):
+        if 'resumen' in informe:
+            return informe['resumen']
+    return informe_de_carga(c)['resumen']
+
+
+def importado_en(c):
+    """imported_at del manifiesto: el de la última ejecución que añadió evidencia (la carga inicial conserva el de su
+    carpeta). La API no lo publica."""
+    for _i, tipo, _fin, informe in ejecuciones_de_estado(c):
+        if tipo == 'import' and 'imported_at' in informe:
+            return informe['imported_at']
+    return informe_de_carga(c)['origen']['imported_at']
+
+
 def exportaciones(c):
-    """exportaciones.json: el manifiesto de la carga inicial, en el orden en que se presentaron los ficheros."""
+    """exportaciones.json: todos los ficheros de evidencia en orden de ingestión (source_file.id), con su etiqueta y el
+    nombre de su primera presentación, y una entrada por cada declaración activa de equipo (en orden de declaración;
+    sin declaraciones, una entrada sin equipo). Cada equipo lista así sus ficheros (api.equipos_con_exportacion)."""
     informe = informe_de_carga(c)
     filas = c.exec_driver_sql("""
         SELECT f.id, f.label, f.kind, f.sha256, f.records, f.events, f.players, f.invalid_fetched_at, f.without_profile,
-               f.fetched_from, f.fetched_to, rf.presented_name
-        FROM import_run_file rf JOIN source_file f ON f.id = rf.source_file_id JOIN import_run r ON r.id = rf.run_id
-        WHERE r.kind = 'initial_load' ORDER BY rf.position""").mappings().all()
+               f.fetched_from, f.fetched_to,
+               (SELECT rf.presented_name FROM import_run_file rf JOIN import_run r ON r.id = rf.run_id
+                WHERE rf.source_file_id = f.id AND r.status <> 'failed' ORDER BY rf.run_id, rf.position LIMIT 1) AS presented_name
+        FROM source_file f WHERE f.kind IN ('raw', 'listing', 'player_profile') ORDER BY f.id""").mappings().all()
     declaraciones = {}
     for archivo, equipo in c.exec_driver_sql("SELECT source_file_id, external_team_id FROM file_team_declaration "
                                              "WHERE status = 'active' ORDER BY id"):
         declaraciones.setdefault(archivo, []).append(int(equipo))
     exports = []
     for f in filas:
-        equipos = declaraciones.get(f['id'], [])
-        if len(equipos) > 1:
-            raise ValueError(f'{f["label"]}: varias declaraciones de equipo no caben en el formato de exportaciones.json')
-        comun = {'id': f['label'], 'file': f['presented_name'], 'sha256': f['sha256'],
-                 'followed_team_id': equipos[0] if equipos else None, 'records': f['records'], 'events': f['events'],
-                 'invalid_fetched_at': f['invalid_fetched_at'], 'fetched_from': f['fetched_from'], 'fetched_to': f['fetched_to']}
+        comun = {'id': f['label'], 'file': f['presented_name'], 'sha256': f['sha256'], 'followed_team_id': None,
+                 'records': f['records'], 'events': f['events'], 'invalid_fetched_at': f['invalid_fetched_at'],
+                 'fetched_from': f['fetched_from'], 'fetched_to': f['fetched_to']}
         if f['kind'] == 'player_profile':
             comun.update(players=f['players'], without_profile=f['without_profile'])
-        exports.append(dict(comun, kind=f['kind']))
-    return {'format': informe['origen']['format'], 'imported_at': informe['origen']['imported_at'], 'exports': exports,
+        exports.extend(dict(comun, followed_team_id=equipo, kind=f['kind']) for equipo in declaraciones.get(f['id'], [None]))
+    return {'format': informe['origen']['format'], 'imported_at': importado_en(c), 'exports': exports,
             'followed_team_ids': sorted({e['followed_team_id'] for e in exports if e['followed_team_id'] is not None})}
 
 
@@ -136,14 +162,17 @@ def partidos(c):
 
 
 def jugador_partido(c):
+    """Las convocatorias vigentes. Se leen solo de la vista call_up_vigente: una retirada no cuenta en ningún partido,
+    acumulado ni ficha (sus estadísticas siguen en call_up_stat, pero no se leen)."""
     estadisticas = {}
-    for convocatoria, clave, valor in c.exec_driver_sql("SELECT call_up_id, key, value_json FROM call_up_stat "
-                                                        "ORDER BY call_up_id, ordinal"):
+    for convocatoria, clave, valor in c.exec_driver_sql("""SELECT s.call_up_id, s.key, s.value_json FROM call_up_stat s
+                                                           JOIN call_up_vigente u ON u.id = s.call_up_id
+                                                           ORDER BY s.call_up_id, s.ordinal"""):
         estadisticas.setdefault(convocatoria, {})[clave] = json.loads(valor)
     filas = c.exec_driver_sql("""
         SELECT u.*, m.external_id AS external_match_id, t.external_id AS external_side_team_id, o.fetched_at_raw,
                ct.payload_text
-        FROM call_up u
+        FROM call_up_vigente u
         JOIN match_external_id m ON m.entity_id = u.match_id AND m.status = 'origin'
         JOIN team_external_id t ON t.entity_id = u.team_id AND t.status = 'origin'
         JOIN observation o ON o.id = u.lineup_observation_id JOIN content ct ON ct.hash = o.content_hash""").mappings().all()
@@ -241,7 +270,7 @@ def salida_desde_base(c, con_fichas=True):
     """Los JSON del importador (resumen aparte) tal como los reconstruye la base."""
     salida = {'equipos': equipos(c), 'jugadores': jugadores(c), 'partidos': partidos(c),
               'jugador_partido': jugador_partido(c), 'originales': originales(c), 'discrepancias': discrepancias(c),
-              'exportaciones': exportaciones(c), 'resumen': informe_de_carga(c)['resumen']}
+              'exportaciones': exportaciones(c), 'resumen': resumen_vigente(c)}
     if con_fichas:
         salida['fichas_originales'] = fichas_originales(c)
     return salida

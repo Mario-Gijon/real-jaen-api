@@ -3,7 +3,9 @@
 Las decisiones se validan con las mismas funciones que aplica la API al arrancar (api.leer_sustituciones y
 api.aplicar_sustituciones, sobre los partidos del ámbito indicado) y se guardan con motivo, procedencia, evidencia y
 el fichero del que salen (sha256). Todo en una transacción: si algo falla no se guarda ninguna decisión y queda
-registrada la ejecución fallida. Un fichero ya incorporado no se vuelve a aplicar. La gestión de decisiones sobre
+registrada la ejecución fallida. Antes se hace una copia verificada de la base y, antes de confirmar, la
+verificación obligatoria de toda escritura (sincronizacion.exigir_coherencia). Un fichero ya incorporado no se
+vuelve a aplicar. La gestión de decisiones sobre
 otras ya activas (revertir, añadir) queda para más adelante.
 """
 import hashlib
@@ -31,12 +33,16 @@ def cargar_sustituciones(ruta_base, archivo, ambito, comando=None):
         competiciones = api.leer_ambito(ambito)
     except (ValueError, OSError) as e:
         raise DecisionRechazada(str(e)) from e
+    from persistencia import sincronizacion
+    copia = sqlite.crear_copia(ruta, 'antes-de-sustituciones')
     motor = sqlite.crear_motor(ruta)
     try:
         try:
             with motor.begin() as c:
-                return aplicar(c, lista, competiciones, archivo, sha, comando)
-        except (ValueError, KeyError) as e:
+                informe = aplicar(c, lista, competiciones, archivo, sha, comando)
+                sincronizacion.exigir_coherencia(c)
+                return dict(informe, copia=copia['ruta'])
+        except (ValueError, KeyError, sincronizacion.EstadoIncoherente) as e:
             with motor.begin() as c:
                 c.execute(text("INSERT INTO import_run (kind, started_at, finished_at, status, tool_version, command, error) "
                                "VALUES ('decisions', :t, :t, 'failed', :v, :cmd, :e)"),

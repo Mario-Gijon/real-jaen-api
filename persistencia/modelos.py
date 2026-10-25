@@ -11,7 +11,8 @@ NULL de SQL = clave ausente; 'null' = null explícito; 'true', '1', '"4"', '-1',
 restricciones protegen la forma del estado operativo, nunca el contenido de la evidencia: un valor inválido o
 contradictorio de la fuente se puede guardar.
 """
-from sqlalchemy import (Boolean, CheckConstraint, Date, ForeignKey, ForeignKeyConstraint, Index, Integer, MetaData,
+from sqlalchemy import (DDL, Boolean, CheckConstraint, Date, ForeignKey, ForeignKeyConstraint, Index, Integer, MetaData,
+                        event,
                         String, Text, UniqueConstraint, text)
 from sqlalchemy.orm import DeclarativeBase, Mapped, declared_attr, mapped_column
 
@@ -562,9 +563,16 @@ class TeamName(Derivado, Base):
 
 
 class CallUp(Derivado, Base):
-    """Cada entrada de jugador de la alineación seleccionada (lo que hoy es jugador_partido), extraída con
-    importar.extraer_convocatorias. Sin unicidad por jugador y partido: no repetirlo es una regla de la importación,
-    y los duplicados legados deben poder representarse."""
+    """Cada convocatoria de un jugador en un partido y un lado (lo que hoy es jugador_partido), extraída con
+    importar.extraer_convocatorias de la alineación seleccionada. Su identidad es (partido, lado, jugador): única, y su
+    id se conserva aunque cambie la versión de la alineación.
+
+    Vigencia: `active` mientras la alineación seleccionada la incluye. Si una versión posterior deja de incluirla pasa
+    a `retired` (no se borra ni se reutiliza su id) y conserva la última alineación que la incluía y sus estadísticas:
+    es solo su último estado, no su historial, que está completo en las observaciones. Si reaparece, se reactiva la
+    misma fila. Las transiciones quedan en call_up_change. Que toda convocatoria activa salga de la alineación
+    seleccionada se comprueba antes de confirmar cada escritura (persistencia.sincronizacion.problemas_de_estado):
+    SQLite no admite claves foráneas condicionales. Las lecturas usan la vista call_up_vigente."""
     __tablename__ = 'call_up'
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     match_id: Mapped[int] = mapped_column(ForeignKey('match.id'))
@@ -583,9 +591,15 @@ class CallUp(Derivado, Base):
     match_position: Mapped[str | None] = mapped_column(Text)
     played: Mapped[bool | None] = booleano('played', nullable=True)
     statistics_kind: Mapped[str] = mapped_column(String)
+    # Al final, como las añade la migración 0004.
+    status: Mapped[str] = mapped_column(String, server_default=text("'active'"), sort_order=10)
+    retired_in_run: Mapped[int | None] = mapped_column(ForeignKey('import_run.id'), sort_order=11)
     __table_args__ = (
-        seleccion_de(['match_id', 'lineup_key', 'lineup_sub', 'lineup_observation_id'], 'fk_call_up_selection'),
+        observacion_de(['lineup_observation_id', 'match_id', 'lineup_key', 'lineup_sub'], 'fk_call_up_lineup_observation'),
         UniqueConstraint('lineup_observation_id', 'side', 'entry_index'),
+        UniqueConstraint('match_id', 'side', 'external_player_id'),
+        CheckConstraint(en('status', ('active', 'retired')), name='status'),
+        CheckConstraint("(status = 'retired') = (retired_in_run IS NOT NULL)", name='retired'),
         CheckConstraint("lineup_key = 'lineups'", name='lineup_key'),
         CheckConstraint(en('side', ('home', 'away')), name='side'),
         CheckConstraint('entry_index >= 0', name='entry_index'),
@@ -615,60 +629,26 @@ class CallUpStat(Base):
     )
 
 
-class TeamMatchStat(Derivado, Base):
-    """Cada ítem del `statistics` seleccionado, por posición: periodo, grupo e ítem. Se conservan claves repetidas
-    entre grupos e ítems sin clave; los valores, con su tipo."""
-    __tablename__ = 'team_match_stat'
-    match_id: Mapped[int] = mapped_column(ForeignKey('match.id'), primary_key=True)
-    section_key: Mapped[str] = mapped_column(String, server_default=text("'statistics'"))
-    section_sub: Mapped[str] = mapped_column(String, server_default=text("''"))
-    observation_id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    period_index: Mapped[int] = mapped_column(Integer, primary_key=True)
-    group_index: Mapped[int] = mapped_column(Integer, primary_key=True)
-    item_index: Mapped[int] = mapped_column(Integer, primary_key=True)
-    period: Mapped[str | None] = mapped_column(String)
-    group_name: Mapped[str | None] = mapped_column(String)
-    key: Mapped[str | None] = mapped_column(String)
-    statistics_type: Mapped[str | None] = mapped_column(String)
-    home_value: Mapped[str | None] = mapped_column(Text)
-    away_value: Mapped[str | None] = mapped_column(Text)
-    home_total: Mapped[str | None] = mapped_column(Text)
-    away_total: Mapped[str | None] = mapped_column(Text)
+class CallUpChange(Base):
+    """Cada transición de vigencia de una convocatoria (retirada o reactivación), con la ejecución y la alineación
+    seleccionada que la provocan (NULL si el partido ya no tiene alineación seleccionada)."""
+    __tablename__ = 'call_up_change'
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    call_up_id: Mapped[int] = mapped_column(ForeignKey('call_up.id'))
+    run_id: Mapped[int] = mapped_column(ForeignKey('import_run.id'))
+    change: Mapped[str] = mapped_column(String)
+    lineup_observation_id: Mapped[int | None] = mapped_column(ForeignKey('observation.id'))
     __table_args__ = (
-        seleccion_de(['match_id', 'section_key', 'section_sub', 'observation_id'], 'fk_team_match_stat_selection'),
-        CheckConstraint("section_key = 'statistics'", name='section_key'),
-        *json('home_value', 'away_value', 'home_total', 'away_total'),
-        Index('ix_team_match_stat_key', 'key'),
+        CheckConstraint(en('change', ('retired', 'reactivated')), name='change'),
+        Index('ix_call_up_change_call_up_id', 'call_up_id'),
     )
 
 
-class Incident(Derivado, Base):
-    """Cada incidencia seleccionada, con ids externos como texto y sus entidades resueltas al lado."""
-    __tablename__ = 'incident'
-    match_id: Mapped[int] = mapped_column(ForeignKey('match.id'), primary_key=True)
-    section_key: Mapped[str] = mapped_column(String, server_default=text("'incidents'"))
-    section_sub: Mapped[str] = mapped_column(String, server_default=text("''"))
-    observation_id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    seq: Mapped[int] = mapped_column(Integer, primary_key=True)
-    incident_type: Mapped[str | None] = mapped_column(String)
-    incident_class: Mapped[str | None] = mapped_column(String)
-    is_home: Mapped[str | None] = mapped_column(Text)
-    time: Mapped[str | None] = mapped_column(Text)
-    added_time: Mapped[str | None] = mapped_column(Text)
-    external_player_id: Mapped[str | None] = mapped_column(String)
-    external_assist1_id: Mapped[str | None] = mapped_column(String)
-    external_player_in_id: Mapped[str | None] = mapped_column(String)
-    external_player_out_id: Mapped[str | None] = mapped_column(String)
-    player_id: Mapped[int | None] = mapped_column(ForeignKey('player.id'))
-    assist1_player_id: Mapped[int | None] = mapped_column(ForeignKey('player.id'))
-    player_in_id: Mapped[int | None] = mapped_column(ForeignKey('player.id'))
-    player_out_id: Mapped[int | None] = mapped_column(ForeignKey('player.id'))
-    __table_args__ = (
-        seleccion_de(['match_id', 'section_key', 'section_sub', 'observation_id'], 'fk_incident_selection'),
-        CheckConstraint("section_key = 'incidents'", name='section_key'),
-        CheckConstraint('seq >= 0', name='seq'),
-        *json('is_home', 'time', 'added_time'),
-    )
+# Única puerta de lectura de convocatorias: solo las vigentes. La reconstrucción (y con ella todas las rutas y
+# agregados de la API) lee de aquí; las retiradas solo las ven la sincronización y la verificación.
+VISTA_CONVOCATORIAS_VIGENTES = "CREATE VIEW call_up_vigente AS SELECT * FROM call_up WHERE status = 'active'"
+event.listen(Base.metadata, 'after_create', DDL(VISTA_CONVOCATORIAS_VIGENTES))
+event.listen(Base.metadata, 'before_drop', DDL('DROP VIEW IF EXISTS call_up_vigente'))
 
 
 class PlayerAttributeObservation(Base):
