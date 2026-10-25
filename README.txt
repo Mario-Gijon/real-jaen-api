@@ -105,6 +105,12 @@ ARRANCAR
   python api.py --datos C:\ruta\datos_normalizados --ambito ambito.json --port 8001
   python api.py ... --sustituciones correcciones\sustituciones.json   (decisiones locales, abajo)
 Abre http://127.0.0.1:8001/health y http://127.0.0.1:8001/api/v1/scope
+--almacen json (predeterminado) es todo lo anterior. Modo SQL, solo con la base de la persistencia
+(entorno .venv con requirements-sql.txt; docs/persistencia-sqlite.md):
+  .venv\Scripts\python api.py --almacen sql --base C:\ruta\real-jaen.sqlite --ambito ambito.json --port 8001
+Lee solo esa base, en solo lectura, con su revision de esquema y sus sustituciones guardadas; no
+admite --datos ni --sustituciones. Si la base falta, no es de este esquema o no se puede leer, la API
+no arranca: nunca crea una base ni recurre a los JSON. Mismas rutas, contratos y respuestas.
 
 SUSTITUCIONES LOCALES (--sustituciones RUTA)
 Decisiones de esta instalacion, no datos de SofaScore: "el evento X queda sustituido por el Y"

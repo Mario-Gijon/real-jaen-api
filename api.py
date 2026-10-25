@@ -29,11 +29,16 @@ def cargar(carpeta, ambito=AMBITO, sustituciones=None):
     datos['exportaciones'] = opcional('exportaciones.json', None)
     datos['discrepancias'] = opcional('discrepancias.json', [])
     datos['fichas_originales'] = opcional('fichas_originales.json', [])
+    # Sin archivo de sustituciones, ninguna: los datos se sirven como los dejó el importador.
+    return componer(datos, leer_ambito(ambito), leer_sustituciones(sustituciones) if sustituciones else [])
+
+def componer(datos, competiciones, sustituciones):
+    """Los datos que sirve la API a partir de lo almacenado (carpeta JSON o base SQL, con los mismos campos y los
+    originales ya indexados): fichas validadas, ámbito y sustituciones locales. Un solo camino para ambos modos."""
     for r in datos['fichas_originales']:
         validar_ficha(r)
-    datos = aplicar_ambito(datos, leer_ambito(ambito))
-    # Sin archivo de sustituciones, ninguna: los datos se sirven como los dejó el importador.
-    return aplicar_sustituciones(datos, leer_sustituciones(sustituciones) if sustituciones else [])
+    datos = aplicar_ambito(datos, competiciones)
+    return aplicar_sustituciones(datos, sustituciones)
 
 def leer_ambito(ruta):
     """Competiciones permitidas. Un ámbito ausente o incompleto impide arrancar: nunca se sirve todo por defecto."""
@@ -935,15 +940,40 @@ def consultar(datos, ruta):
         return 404, {'error':'Ruta inexistente'}
     return 200, {'data':resultado,'meta':{'count':len(resultado)}}
 
+def datos_de_sql(ap, args):
+    """Modo SQL: solo la base SQLite indicada, en solo lectura y con su revisión de esquema; las sustituciones son
+    las guardadas en ella. Si falta, no es compatible o no se lee, la API no arranca: nunca crea una base ni recurre
+    a los JSON. Las dependencias (requirements-sql.txt) solo se importan aquí."""
+    if args.base is None:
+        ap.error('--almacen sql necesita --base RUTA')
+    if args.datos is not None or args.sustituciones is not None:
+        ap.error('--almacen sql lee solo la base: no admite --datos ni --sustituciones (las sustituciones están en la base)')
+    try:
+        from persistencia.lectura import BaseNoUtilizable, cargar_desde_base
+    except ImportError as e:
+        ap.exit(1, f'El modo SQL necesita las dependencias de requirements-sql.txt (entorno .venv): {e}\n')
+    try:
+        return cargar_desde_base(args.base, args.ambito)
+    except BaseNoUtilizable as e:
+        ap.exit(1, f'Base no utilizable: {e}\n')
+
 def main():
     ap=argparse.ArgumentParser(description=__doc__)
-    ap.add_argument('--datos',type=Path,default=Path(__file__).parent/'datos')
+    ap.add_argument('--almacen',choices=('json','sql'),default='json',
+                    help='json (predeterminado): carpeta de importación; sql: solo la base de --base')
+    ap.add_argument('--datos',type=Path,default=None,help='carpeta de importación (modo json; por defecto datos/)')
+    ap.add_argument('--base',type=Path,default=None,help='base SQLite (solo modo sql)')
     ap.add_argument('--port',type=int,default=8001)
     ap.add_argument('--ambito',type=Path,default=AMBITO)
     ap.add_argument('--sustituciones',type=Path,default=None,
-                    help='decisiones locales de eventos sustituidos (sin él, ninguna)')
+                    help='decisiones locales de eventos sustituidos (modo json; sin él, ninguna)')
     args=ap.parse_args()
-    datos=cargar(args.datos,args.ambito,args.sustituciones)
+    if args.almacen=='sql':
+        datos=datos_de_sql(ap,args)
+    else:
+        if args.base is not None:
+            ap.error('--base solo se usa con --almacen sql')
+        datos=cargar(args.datos or Path(__file__).parent/'datos',args.ambito,args.sustituciones)
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
             url=urlsplit(self.path)
@@ -958,7 +988,7 @@ def main():
             self.send_header('Cache-Control','no-store')
             self.end_headers()
             self.wfile.write(cuerpo)
-    print(f'API: http://127.0.0.1:{args.port} — Ctrl+C para detener',flush=True)
+    print(f'API: http://127.0.0.1:{args.port} (almacén {args.almacen}) — Ctrl+C para detener',flush=True)
     servidor=ThreadingHTTPServer(('127.0.0.1',args.port),Handler)
     try:servidor.serve_forever()
     except KeyboardInterrupt:pass

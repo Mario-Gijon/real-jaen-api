@@ -766,7 +766,7 @@ Equivalencia antes/después, **byte a byte** (capturas fuera del repositorio):
 
 Suite: 139 pruebas correctas, 4 nuevas (`ExtraccionDeConvocatorias`).
 
-**Resultado de la fase 1 (sin commit, en revisión).**
+**Resultado de la fase 1 (commit `3fa4147`).**
 
 Entorno y dependencias:
 - `.venv` propio, creado con Python 3.14.4; SQLite 3.50.4.
@@ -805,7 +805,7 @@ Diferencias y concreciones respecto al texto del diseño:
 - **Identificadores**: el `uid` solo se comprueba por longitud (36). El formato canónico de los ids
   de SofaScore se comprobará al importar, no en el esquema.
 
-**Resultado de la fase 2 (sin commit, en revisión).**
+**Resultado de la fase 2 (commit `d59de16`).**
 
 Comandos (en `.venv`):
 - `python -m persistencia cargar --importacion CARPETA --base RUTA.sqlite`
@@ -914,6 +914,61 @@ Limitaciones pendientes:
 - El motor de escritura abre `BEGIN IMMEDIATE` incluso para leer, así que `PRAGMA wal_checkpoint` no
   puede ejecutarse con él. Al cerrar la última conexión de escritura SQLite integra y borra los
   diarios.
+
+**Resultado de la fase 3 (confirmada).**
+
+Arranque:
+- `api.py --almacen json` (predeterminado, sin cambios; sin dependencias).
+- `api.py --almacen sql --base RUTA [--ambito ...]`:
+  - solo la base, abierta en solo lectura (`mode=ro`): nunca la crea ni la modifica;
+  - comprueba la revisión de Alembic (`head`) y la carga inicial confirmada;
+  - las sustituciones salen de la base;
+  - rechaza `--datos` y `--sustituciones`, y `--base` sin `--almacen sql`;
+  - una base inexistente, ajena, de otra revisión, ilegible o sin carga impide el arranque con un
+    mensaje claro (código 1), sin recurrir a JSON;
+  - sin las dependencias, lo dice y no arranca.
+
+Código:
+- `persistencia/lectura.py` (`cargar_desde_base`): reconstruye con `persistencia.reconstruccion` y
+  compone con `api.componer`, separado de `api.cargar` para que ambos modos compartan fichas, ámbito y
+  sustituciones.
+- Normalización, agregados, contratos, identificadores, orden, cobertura y errores son los mismos
+  porque las funciones son las mismas.
+- Todo se lee al arrancar (1,3 s con la base real) y la conexión se cierra.
+
+Validación con la base real (`real-jaen.sqlite`, sin modificarla):
+- **Equivalencia de contenido**: una carga nueva con el código confirmado de la fase 2 (`d59de16`) en
+  una ruta temporal da las 37 tablas idénticas, salvo fechas, comando y referencia de código. La base
+  real (cargada con `3fa4147-dirty`) es lo que produce ese commit.
+- **Equivalencia en proceso**: las 3217 rutas en modo SQL son idénticas como texto a las del modo
+  JSON con la importación activa y `correcciones/sustituciones.json`, incluidos `normalized.stats`,
+  evidencia y sustituciones.
+- **HTTP**: instancias temporales en 8031 (SQL) y 8032 (JSON), sin tocar el 8001. 3219 rutas (con
+  errores y una consulta con parámetros) iguales en estado, tipo de contenido y bytes.
+- **Dashboard**: copia temporal de `rj-analyst` fuera del repositorio (sin `.next`, `.env*` ni `.git`;
+  `node_modules` enlazado), compilada con `next build --webpack` porque Turbopack rechaza un
+  `node_modules` enlazado fuera de la raíz. Dos `next start` (3131 contra JSON, 3132 contra SQL), con
+  `DATA_MODE` y `LOCAL_DATA_API_URL` por proceso. Inicio, Equipos (rendimiento, plantilla del Real
+  Jaén y de UD Ibiza), ficha de Moha Keita, Partidos y el partido sustituido, a 1440 y 390 px: mismo
+  texto visible en ambas instancias, sin errores de página ni desbordamiento.
+
+Pruebas (`tests/test_lectura_sql.py`, 11):
+- todas las rutas iguales entre JSON y SQL con conflictos, valores inválidos, ausencias y
+  sustituciones;
+- normalización y evidencia idénticas;
+- errores de arranque: argumentos, base inexistente (no se crea), archivo que no es base, base ajena,
+  otra revisión, sin carga inicial, sustituciones fuera del ámbito;
+- muestra por HTTP en un puerto libre;
+- mensaje sin dependencias.
+
+Suite: 188 pruebas; con `.venv`, 187 y 1 omitida; sin dependencias, 141 y 47 omitidas. La salida del
+importador y las respuestas JSON siguen idénticas a la captura de la fase 0.
+
+Notas:
+- Con el diario WAL, leer la base en solo lectura deja junto a ella `-shm` y un `-wal` vacío.
+  Es el funcionamiento normal de SQLite: no cambia datos y la siguiente conexión de escritura los
+  integra y borra.
+- El modo SQL no se ha activado en el servicio del puerto 8001.
 
 **Primera implementación: fases 0 y 1.**
 - **Fase 0**: la separación de la extracción.
