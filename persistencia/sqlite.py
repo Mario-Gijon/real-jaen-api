@@ -7,8 +7,10 @@ SQLAlchemy no hace portable lo que hay aquí: cambiar de motor exigiría reescri
 import hashlib
 import os
 import sqlite3
+import tempfile
 
-from contextlib import contextmanager
+from persistencia.bloqueo import exclusivo
+from contextlib import closing, contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -148,6 +150,7 @@ def comprobar_copia(copia, esperado=None):
     return obtenido
 
 
+@exclusivo('origen')
 def copia_consistente(origen, destino):
     """Copia con la API de copia de SQLite: una imagen coherente aunque haya lectores y diario WAL (copiar el archivo a
     mano no lo garantiza). El destino no debe existir. La copia queda con diario `DELETE`: un solo archivo, sin -wal ni
@@ -156,15 +159,12 @@ def copia_consistente(origen, destino):
     if any(p.exists() for p in (destino, *(destino.with_name(destino.name + s) for s in ACOMPANANTES))):
         raise FileExistsError(f'Ya existe {destino}: una copia nunca sobrescribe nada')
     destino.parent.mkdir(parents=True, exist_ok=True)
-    fuente, copia = _lectura(origen), sqlite3.connect(destino)
-    try:
+    with closing(_lectura(origen)) as fuente, closing(sqlite3.connect(destino)) as copia:
         fuente.backup(copia)
         copia.execute('PRAGMA journal_mode = DELETE')
-    finally:
-        copia.close()
-        fuente.close()
 
 
+@exclusivo('base')
 def crear_copia(base, motivo):
     """Copia verificada de una base antes de modificarla, en `<carpeta de la base>/copias`. Devuelve su descripción."""
     base = Path(base).resolve()
@@ -179,11 +179,11 @@ def crear_copia(base, motivo):
 def archivos_en_uso(ruta):
     """Archivos de la base (principal, -wal, -shm, -journal) que algún proceso tiene abiertos. En Windows se comprueba
     abriéndolos sin compartir: una violación de uso compartido indica que otro proceso (o esta misma conexión) los usa.
-    En otros sistemas no se sabe comprobar y se trata como en uso (no se restaura)."""
+    Comprobación adicional en Windows; en POSIX no detecta programas externos. No sustituye al bloqueo cooperativo."""
     ruta = Path(ruta)
     archivos = [p for p in (ruta, *(ruta.with_name(ruta.name + s) for s in ACOMPANANTES)) if p.exists()]
     if os.name != 'nt':
-        return [str(p) for p in archivos] or []
+        return []  # La coordinación portable la mantiene bloqueo.bloquear, no los archivos abiertos.
     import ctypes
     from ctypes import wintypes
     kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
@@ -203,12 +203,12 @@ def archivos_en_uso(ruta):
     return en_uso
 
 
+@exclusivo('destino')
+@exclusivo('copia')
 def restaurar(copia, destino, revision_esperada):
-    """Sustituye el contenido de `destino` por el de `copia`, solo si ningún proceso usa el destino.
-    1. Verifica la copia (íntegra, claves foráneas, revisión del código).
-    2. Si el destino existe: copia verificada «antes-de-restaurar» (incluye lo que hubiera en su -wal).
-    3. Borra el destino y sus -wal/-shm: un -wal antiguo aplicado sobre el archivo restaurado lo corrompería.
-    4. Escribe la copia en el destino con la API de copia y comprueba que su contenido es el de la copia."""
+    """Con exclusividad sobre destino y copia: prepara y verifica la nueva imagen, conserva una copia anterior,
+    integra el WAL del destino y cierra SQLite antes de retirar acompañantes. Reemplazo atómico del principal;
+    si falla antes del reemplazo, el estado lógico anterior permanece. Requiere cerrar programas externos."""
     copia, destino = Path(copia).resolve(), Path(destino).resolve()
     origen = comprobar_copia(copia)
     if origen['revision'] != revision_esperada:
@@ -216,11 +216,34 @@ def restaurar(copia, destino, revision_esperada):
     en_uso = archivos_en_uso(destino)
     if en_uso:
         raise CopiaNoValida(f'La base de destino está en uso ({", ".join(en_uso)}): cierre la API y cualquier otro proceso')
-    anterior = crear_copia(destino, 'antes-de-restaurar') if destino.exists() else None
-    for archivo in (destino, *(destino.with_name(destino.name + s) for s in ACOMPANANTES)):
-        archivo.unlink(missing_ok=True)
-    copia_consistente(copia, destino)
-    comprobar_copia(destino, origen)
+    if copia == destino:
+        raise CopiaNoValida('La copia y el destino deben ser distintos')
+    # Todo lo que puede fallar al leer/copiar/verificar se hace antes de sustituir el destino.
+    fd, nombre = tempfile.mkstemp(prefix=destino.name + '.restauracion-', suffix='.sqlite', dir=destino.parent)
+    os.close(fd)
+    preparada = Path(nombre)
+    preparada.unlink()  # copia_consistente exige un destino nuevo; el nombre es privado y aleatorio.
+    try:
+        copia_consistente(copia, preparada)
+        comprobar_copia(preparada, origen)
+        anterior = crear_copia(destino, 'antes-de-restaurar') if destino.exists() else None
+        if destino.exists():
+            # Integra el WAL antes de quitar acompañantes. Si falla el reemplazo, la base anterior conserva
+            # todos sus datos en el archivo principal. Nunca se elimina un WAL con cambios pendientes.
+            c = sqlite3.connect(destino.as_uri() + '?mode=rw', uri=True)
+            try:
+                if c.execute('PRAGMA wal_checkpoint(TRUNCATE)').fetchone()[0] != 0:
+                    raise CopiaNoValida('La base está en uso: no se pudo integrar su WAL')
+            finally:
+                c.close()
+        if archivos_en_uso(destino):
+            raise CopiaNoValida('La base está en uso por un programa externo')
+        for sufijo in ACOMPANANTES:
+            destino.with_name(destino.name + sufijo).unlink(missing_ok=True)
+        os.replace(preparada, destino)
+        comprobar_copia(destino, origen)
+    finally:
+        preparada.unlink(missing_ok=True)
     return {'restaurada': str(destino), 'desde': str(copia), 'huella': origen['huella'], 'anterior': anterior}
 
 

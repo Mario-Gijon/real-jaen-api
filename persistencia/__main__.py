@@ -32,6 +32,7 @@ from persistencia import sincronizacion  # noqa: E402
 from persistencia.carga import CargaRechazada, cargar  # noqa: E402
 from persistencia.decisiones import DecisionRechazada, cargar_sustituciones  # noqa: E402
 from persistencia.sqlite import CopiaNoValida
+from persistencia.bloqueo import BaseEnUso  # noqa: E402
 
 # Órdenes tras las que la API (que lee la base al arrancar) debe reiniciarse.
 CAMBIAN_LA_BASE = ('importar', 'reconstruir', 'sustituciones', 'restaurar', 'migrar')
@@ -93,7 +94,7 @@ def main():
             if not args.confirmar:
                 ap.error('restaurar sustituye la base: añade --confirmar')
             informe = sincronizacion.restaurar(args.copia, args.base, args.revision)
-    except (CargaRechazada, DecisionRechazada, CopiaNoValida) as e:
+    except (CargaRechazada, DecisionRechazada, CopiaNoValida, BaseEnUso) as e:
         ap.exit(1, f'Rechazado: {e}\n')
     print(json.dumps(informe, ensure_ascii=False, indent=2))
     if args.orden == 'verificar' and not informe['ok']:

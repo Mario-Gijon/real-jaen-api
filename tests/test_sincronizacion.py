@@ -6,6 +6,7 @@ carpeta del modo JSON. Requieren requirements-sql.txt; sin SQLAlchemy se omiten.
 """
 import importlib.util
 import json
+import os
 import re
 import shutil
 import sqlite3
@@ -503,8 +504,9 @@ class CopiasYRestauracion(Base):
         abierta = sqlite3.connect(self.base)
         abierta.execute('SELECT 1').fetchone()
         try:
-            with self.assertRaisesRegex(CopiaNoValida, 'en uso'):
-                sincronizacion.restaurar(copia['ruta'], self.base)
+            if os.name == 'nt':
+                with self.assertRaisesRegex(CopiaNoValida, 'en uso'):
+                    sincronizacion.restaurar(copia['ruta'], self.base)
         finally:
             abierta.close()
         self.assertEqual(sqlite.describir(self.base)['huella'], actual)
@@ -548,8 +550,9 @@ class Migraciones(Base):
         abierta = sqlite3.connect(self.base)
         abierta.execute('SELECT 1').fetchone()
         try:
-            with self.assertRaisesRegex(CargaRechazada, 'en uso'):
-                sincronizacion.migrar(self.base)
+            if os.name == 'nt':
+                with self.assertRaisesRegex(CargaRechazada, 'en uso'):
+                    sincronizacion.migrar(self.base)
         finally:
             abierta.close()
         self.assertEqual(sqlite.revision(self.base), '0002')

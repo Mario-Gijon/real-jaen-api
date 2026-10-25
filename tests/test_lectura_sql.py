@@ -4,6 +4,7 @@ Equivalencia de todas las rutas entre modo JSON y modo SQL con casos sintéticos
 ausencias, sustituciones), errores de arranque y una muestra por HTTP en un puerto libre. Bases temporales fuera del
 repositorio. Sin requirements-sql.txt se omiten, salvo la comprobación del mensaje del modo SQL sin dependencias.
 """
+from contextlib import closing
 import importlib.util
 import json
 import os
@@ -110,12 +111,12 @@ class ErroresDeArranque(BaseCarga):
 
     def test_base_sqlite_ajena_o_de_otra_revision(self):
         self.base.parent.mkdir(parents=True)
-        with sqlite3.connect(self.base) as c:
+        with closing(sqlite3.connect(self.base)) as c, c:
             c.execute('CREATE TABLE otra (x INTEGER)')
         self.comprobar(arrancar('--almacen', 'sql', '--base', self.base, '--port', '1'), 1, 'sin revisión de esquema')
         cargar(self.importacion(), self.tmp / 'valida.sqlite')
         shutil.copy(self.tmp / 'valida.sqlite', self.tmp / 'antigua.sqlite')
-        with sqlite3.connect(self.tmp / 'antigua.sqlite') as c:
+        with closing(sqlite3.connect(self.tmp / 'antigua.sqlite')) as c, c:
             c.execute("UPDATE alembic_version SET version_num = '0001'")
         with self.assertRaisesRegex(BaseNoUtilizable, 'revisión de esquema 0001; este código necesita 0004'):
             cargar_desde_base(self.tmp / 'antigua.sqlite', AMBITO)

@@ -41,7 +41,8 @@ Lo que no cambia:
 4. Si algo falla, rollback completo. La ejecución queda `failed`, con su error, en una transacción aparte, y la copia
    de seguridad se conserva.
 
-La API sigue sin recarga en caliente: tras importar, se reinicia para servir el estado nuevo.
+La API sigue sin recarga en caliente: hay que cerrarla antes de importar y arrancarla después.
+El bloqueo cooperativo impide importar mientras una API SQL nueva mantenga esa base reservada (sección 11).
 
 ---
 
@@ -214,19 +215,19 @@ porque crea una base nueva.
 
 1. Verifica la copia (6.1) y que su revisión es la del código (`--revision` permite otra a propósito: marcha atrás de
    una migración junto con el código de esa revisión).
-2. **Exige que ningún proceso use la base de destino**: en Windows, la base, su `-wal`, su `-shm` y su `-journal` se
-   abren sin compartir; si alguno está abierto por otro proceso, se detiene sin tocar nada. En otros sistemas no se
-   sabe comprobar y se trata como en uso.
-3. Copia la base actual aparte, también verificada, con el motivo `antes-de-restaurar`: la restauración también se
-   puede deshacer.
-4. Borra `B` y sus `-wal`, `-shm` y `-journal` (un `-wal` antiguo aplicado sobre el archivo restaurado lo
-   corrompería) y escribe la copia en `B` con la API de copia. Nunca renombra encima de una base abierta.
-5. Verifica `B` contra la huella de la copia.
-6. Avisa de que la API debe reiniciarse.
+2. **Adquiere exclusividad cooperativa** sobre destino y copia antes de comprobarlos. Mientras la API SQL
+   mantiene su bloqueo, la restauración se rechaza sin crear copias ni tocar SQLite. En Windows se mantiene además
+   la comprobación puntual de archivos abiertos; no es una garantía frente a programas externos (sección 11).
+3. Prepara la copia en un archivo temporal en el directorio del destino, con la API de copia de SQLite, y la verifica.
+4. Copia la base actual aparte, también verificada, con el motivo `antes-de-restaurar`.
+5. Integra el WAL actual con `wal_checkpoint(TRUNCATE)`; si está ocupado, se rechaza. Cierra las conexiones antes
+   de retirar los acompañantes `-wal`, `-shm` y `-journal`, siempre con el bloqueo cooperativo mantenido.
+6. Sustituye el principal con `os.replace` de la imagen preparada y verifica el resultado. No borra primero el
+   principal. Un fallo anterior al reemplazo conserva el estado lógico anterior; puede haberse integrado su WAL.
+   Tras el reemplazo hay una imagen completa, y la copia `antes-de-restaurar` permite volver al estado previo.
 
-La API en modo SQL lee la base al arrancar y **cierra la conexión**: con la API en marcha la base no figura en uso.
-Por eso el procedimiento (sección 10) exige parar la API antes; si no se para, la restauración no la rompe, pero sigue
-sirviendo los datos anteriores hasta reiniciarla. `migrar` hace la misma comprobación de uso.
+La API cierra su conexión SQLite después de cargar, pero **mantiene el bloqueo de coordinación durante toda su
+vida**. Migrar/restaurar no dependen de detectar esa conexión. No se ha añadido recarga en caliente.
 
 ---
 
@@ -324,7 +325,7 @@ nuevo lado es otra fila con su propio id (el siguiente), o se reactiva la de ese
 - La huella de contenido ordena las filas por todas sus columnas (no solo por clave primaria): igual de determinista
   y válida para tablas sin clave primaria.
 - Las copias quedan con diario `DELETE` (un solo archivo): abrirlas en solo lectura no deja `-wal`/`-shm`.
-- Restauración y migración comprueban puntualmente los archivos abiertos en Windows (6.2).
+- Restauración y migración mantienen exclusividad cooperativa (6.2 y 11); en Windows también comprueban archivos abiertos.
 - Una ejecución fallida se registra en otra transacción: tras un fallo la base es idéntica a la copia **salvo** esa
   fila de `import_run` (la prueba compara todas las tablas menos `import_run` e `import_run_file`).
 - `reconstruir` solo crea filas de `rule_set` para (nombre, versión) que no existen; si el código cambia sin cambiar
@@ -338,7 +339,7 @@ nuevo lado es otra fila con su propio id (el siguiente), o se reactiva la de ese
 
 ### 9.3 Resultados
 
-**Resultados previos comunicados por Claude.**
+**Resultados previos comunicados por Claude (anteriores al bloqueo; no son la validación de la sección 11).**
 
 **Suite** (`.venv`, Python 3.14.4, SQLAlchemy 2.1.6, Alembic 1.20.1): 210 pruebas, OK (1 omitida, previa), ~30 s.
 `tests/test_sincronizacion.py` (21 pruebas, ~7 s) cubre los casos de la sección 7:
@@ -379,9 +380,8 @@ lectura de ficheros, sincronización (~3,3 s) y verificación antes de confirmar
 
 ### 9.4 Límites
 
-- La comprobación de uso solo existe en Windows; en otros sistemas `restaurar` y `migrar` se niegan siempre.
-- Comprueba los archivos abiertos en ese instante: un proceso que abra la base justo después no se detecta. La API no
-  mantiene la base abierta tras arrancar (6.2): hay que pararla antes.
+- El bloqueo coordina nuestras herramientas, no programas SQLite externos: hay que cerrarlos antes del mantenimiento.
+- Windows usa `msvcrt.locking`; Linux/POSIX usa `fcntl.flock`. Validación y límites de rutas: sección 11.
 - Cada escritura cuesta dos sincronizaciones en seco más la propia (~11 s en la base real); crece con la evidencia.
 - Una convocatoria retirada solo guarda su último estado (9.1); el historial está en las observaciones.
 - No hay orden para retirar declaraciones de equipo ni para revertir sustituciones (fuera de alcance).
@@ -417,3 +417,126 @@ Base activa: `C:\Users\broke\dev\datos-importados\base\real-jaen.sqlite` (revisi
 Tras activar, una importación nueva sería
 `.venv\Scripts\python -m persistencia importar --base C:\Users\broke\dev\datos-importados\base\real-jaen.sqlite --exportacion EQUIPO=RUTA …`,
 con la API cerrada antes de comenzar y arrancándola después de terminar.
+
+
+## 11. Coordinación entre procesos (25-10-2026)
+
+Implementada en `persistencia/bloqueo.py`, sin dependencias SQL: un bloqueo exclusivo no bloqueante sobre un byte
+(`msvcrt.locking`, Windows) o el archivo (`fcntl.flock`, Linux/POSIX). Archivo `<base>.lock`, junto a la base;
+**nunca se borra al liberar**. Su existencia no indica uso: lo decide el bloqueo del sistema operativo. El SO lo
+libera al cerrar el descriptor o terminar inesperadamente el proceso. No hay PID persistido, caducidad ni limpieza
+manual de bloqueos. La reentrada solo se permite en el hilo y proceso propietarios para llamadas anidadas.
+
+- API SQL: adquiere antes de cargar la instantánea y mantiene hasta salir, incluidos fallos de carga o arranque.
+  Solo una API por base. La conexión SQLite sigue cerrándose después de cargar; el bloqueo permanece.
+- `cargar`, `importar`, `reconstruir` (también en seco), `sustituciones`, `migrar`, `restaurar`, `copiar` y `verificar`:
+  exclusividad antes de sus comprobaciones, copias, escrituras y verificaciones. Alembic directo también coordina.
+  La carga inicial reserva además su archivo parcial. Los lectores públicos SQL reservan durante la lectura.
+- Si está reservado: rechazo inmediato «Base en uso», sin copias ni cambios en la base. No espera, recarga ni reinicia.
+- Rutas: `Path.resolve()` y `os.path.normcase()` unifican relativas/absolutas, `.`/`..`, enlaces simbólicos/junctions
+  resolubles y mayúsculas en Windows. No se admiten alias mediante enlaces duros, nombres cortos 8.3 u otras rutas
+  no normalizadas por esas funciones; usar una única ruta canónica. No cambiar enlaces durante el uso.
+- La carpeta debe permitir crear/abrir el `.lock`, incluso para la API de solo lectura. En un contenedor futuro,
+  todos los procesos deben compartir **el directorio de la base**, incluido el mismo `.lock`, en un sistema de
+  archivos local con bloqueos compatibles. No se valida coordinación entre hosts, sistemas operativos distintos
+  ni sistemas de archivos de red. No se ha implementado Docker.
+- Es **cooperativo**: coordina nuestros comandos/API, no cualquier programa que abra SQLite ni llamadas directas
+  a motores/conexiones de bajo nivel. Cerrar herramientas externas antes de migrar/restaurar. El sondeo adicional
+  de Windows no elimina carreras con programas que ignoren el bloqueo.
+
+**Activación** (procedimiento, no ejecutado sobre la base activa):
+
+1. Cerrar de forma controlada la API anterior y los programas externos que usen la base. Las versiones anteriores
+   no participan en este protocolo: no basta con ejecutar un comando nuevo contra una API antigua.
+2. Con el entorno SQL, ejecutar `python -m persistencia migrar --base B` y después
+   `python -m persistencia verificar --base B`. Migrar conserva la copia `antes-de-migrar-0002` al subir a `0004`.
+3. Arrancar `python api.py --almacen sql --base B --ambito ambito.json --port 8001`.
+4. Para cada importación: cerrar API, importar, verificar, arrancar API. Si hay rechazo por uso, identificar al
+   propietario y esperar su fin/cierre controlado. **No borrar `.lock`, WAL ni SHM para forzar la operación.**
+
+**Recuperación**:
+
+- Caída de API/comando: el SO libera automáticamente. Comprobar que no quede un hijo ejecutando la herramienta
+  (en Windows, un lanzador de entorno virtual puede crear un hijo). Verificar antes de volver a servir.
+- Importación fallida: rollback de la operación; puede quedar la ejecución `failed` de auditoría. La copia previa
+  se conserva. No se reinicia la API automáticamente.
+- Restauración fallida antes del reemplazo: permanece el estado lógico previo. Si se interrumpe durante el
+  reemplazo, comprobar qué revisión y contenido tiene B; la sustitución es de una imagen completa. Conservar los
+  temporales que pudiera dejar una terminación abrupta para inspección; no activarlos por su nombre.
+- Para volver a una copia: cerrar API y herramientas externas y ejecutar
+  `python -m persistencia restaurar --copia C --base B --confirmar [--revision 0002]`.
+  Se conserva además `antes-de-restaurar`; verificar/servir con el código compatible con la revisión restaurada.
+  El código actual exige `0004`: para `0002`, usar el código de fase 3 tras restaurar, sin descartar este trabajo local.
+
+**Validación propia del cambio (Windows, 25-10-2026)**, focalizadas antes de la suite:
+
+| Ejecución | Resultado |
+|---|---|
+| `test_bloqueo.py`, con `-W error::ResourceWarning` | 12 pruebas: 11 correctas, 1 omitida (symlink sin privilegios). Incluye API real, cierre normal, terminación del árbol propio de pruebas, caída con transacción sin confirmar, operaciones tras liberar, restauración con fallo inyectado y junctions |
+| `test_lectura_sql.py`, con `-W error::ResourceWarning` | 11 pruebas: 10 correctas, 1 omitida (solo sin dependencias). Las dos conexiones SQLite del test se cierran explícitamente con `closing` |
+| `test_sincronizacion.py` | 21 correctas; rollback, migraciones, copias y restauración en bases temporales |
+| `.venv\Scripts\python -B -m unittest discover -s tests -v` | 222 pruebas: 220 correctas, 2 omitidas (caso sin dependencias y symlink sin privilegios), 49,4 s |
+| `python -B -m unittest discover -s tests -v`, Python global sin SQLAlchemy ni Alembic | 222 pruebas: 147 correctas, 75 omitidas, 5,6 s; modo JSON operativo sin dependencias SQL |
+
+Linux/POSIX: implementación con `fcntl.flock` preparada, **validación de ejecución pendiente**. El único WSL
+registrado es `docker-desktop`, sin Python disponible; el motor Docker no estaba accesible. No se instalaron
+intérpretes ni dependencias, ni se implementó Docker. Pendientes allí: ejecutar las mismas pruebas focalizadas y
+suites, incluida la prueba de symlinks. Las comprobaciones adicionales de archivos abiertos solo se prueban en
+Windows: en POSIX la garantía es cooperativa.
+
+Los registros de las suites están fuera del repositorio: `%TEMP%\rj-bloqueo-suite-sql.log` y
+`%TEMP%\rj-bloqueo-suite-sin-sql.log`. La suite SQL muestra el aviso de deprecación previo del adaptador de fechas
+SQLite, ajeno a esta tarea; no se ha cambiado esa política. Todas las bases de estas pruebas son temporales;
+no se ha modificado, migrado ni restaurado la base activa.
+
+
+## 12. Comandos PowerShell con rutas absolutas (revisados antes de confirmar)
+
+Procedimiento para ejecutar manualmente, **no ejecutado sobre la base activa**. Cerrar primero la API y los
+programas externos; no se incluye ningún comando para detenerlos. Las ayudas de `migrar`, `verificar`, `restaurar`
+y `api.py` se han consultado sin indicar ninguna base. Se usa `persistencia\__main__.py` con ruta absoluta para
+no depender del directorio actual. Cada orden siguiente ocupa una única línea de PowerShell.
+
+**1. Migrar con copia previa**. Conservar `$migracionRJ` en esta sesión; su campo `copia` es la ruta absoluta exacta
+que devuelve el comando, sin seleccionar una copia por fecha ni inventar su nombre. La copia se crea y verifica
+antes de migrar. La operación esperada es `0002` → `0004`.
+
+```powershell
+$migracionRJ = (& 'C:\Users\broke\dev\api-real-jaen\.venv\Scripts\python.exe' -B 'C:\Users\broke\dev\api-real-jaen\persistencia\__main__.py' migrar --base 'C:\Users\broke\dev\datos-importados\base\real-jaen.sqlite' | ConvertFrom-Json); if ($LASTEXITCODE -ne 0) { throw 'La migración ha fallado; no continúe.' }; $migracionRJ
+```
+
+**2. Verificar** (antes de arrancar la API, pues también reserva la base):
+
+```powershell
+& 'C:\Users\broke\dev\api-real-jaen\.venv\Scripts\python.exe' -B 'C:\Users\broke\dev\api-real-jaen\persistencia\__main__.py' verificar --base 'C:\Users\broke\dev\datos-importados\base\real-jaen.sqlite'
+```
+
+**3. Arrancar SQL**, solo tras verificar correctamente:
+
+```powershell
+& 'C:\Users\broke\dev\api-real-jaen\.venv\Scripts\python.exe' -B 'C:\Users\broke\dev\api-real-jaen\api.py' --almacen sql --base 'C:\Users\broke\dev\datos-importados\base\real-jaen.sqlite' --ambito 'C:\Users\broke\dev\api-real-jaen\ambito.json' --port 8001
+```
+
+**4. Recuperar `0002`**, con API y herramientas externas cerradas. Ejecutar con el código nuevo, que incorpora
+`restaurar`; el código de fase 3 no tiene ese comando. En la misma sesión de migración:
+
+```powershell
+if ($migracionRJ.desde -ne '0002' -or -not $migracionRJ.copia) { throw 'Indique la copia exacta antes-de-migrar-0002; falta el informe de migración en esta sesión.' }; & 'C:\Users\broke\dev\api-real-jaen\.venv\Scripts\python.exe' -B 'C:\Users\broke\dev\api-real-jaen\persistencia\__main__.py' restaurar --copia $migracionRJ.copia --base 'C:\Users\broke\dev\datos-importados\base\real-jaen.sqlite' --confirmar --revision 0002
+```
+
+Si se cerró la sesión, usar la ruta absoluta exacta de la copia anotada en la salida de migración como valor de
+`--copia`; no escoger automáticamente la más reciente. La restauración comprueba integridad y revisión, conserva
+`antes-de-restaurar` y verifica el contenido restaurado. No usar `verificar` del código actual sobre `0002`:
+exige `0004`.
+
+**Código compatible para servir `0002`: `c56dc83915d5ef8d6a38158285988de93b4486b2` (fase 3).** Prepararlo en un
+worktree separado, sin cambiar esta rama. Estos comandos se entregan para uso manual; no se han ejecutado. La
+carpeta nueva debe no existir; se reutiliza el intérprete SQL actual sin instalar dependencias:
+
+```powershell
+& 'C:\Program Files\Git\cmd\git.exe' -C 'C:\Users\broke\dev\api-real-jaen' worktree add --detach 'C:\Users\broke\dev\api-real-jaen-fase3-0002' c56dc83915d5ef8d6a38158285988de93b4486b2
+& 'C:\Users\broke\dev\api-real-jaen\.venv\Scripts\python.exe' -B 'C:\Users\broke\dev\api-real-jaen-fase3-0002\api.py' --almacen sql --base 'C:\Users\broke\dev\datos-importados\base\real-jaen.sqlite' --ambito 'C:\Users\broke\dev\api-real-jaen-fase3-0002\ambito.json' --port 8001
+```
+
+Arrancar la fase 3 solo tras una restauración correcta. Esa versión **no mantiene el nuevo bloqueo**: debe cerrarse
+explícitamente antes de volver a usar herramientas de mantenimiento. Linux y symlinks siguen pendientes de validación.

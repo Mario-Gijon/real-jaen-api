@@ -111,6 +111,10 @@ Abre http://127.0.0.1:8001/health y http://127.0.0.1:8001/api/v1/scope
 Lee solo esa base, en solo lectura, con su revision de esquema y sus sustituciones guardadas; no
 admite --datos ni --sustituciones. Si la base falta, no es de este esquema o no se puede leer, la API
 no arranca: nunca crea una base ni recurre a los JSON. Mismas rutas, contratos y respuestas.
+La API SQL mantiene un bloqueo cooperativo <base>.lock hasta terminar. Cierre la API antes de importar,
+reconstruir, migrar, incorporar sustituciones o restaurar: esas operaciones se rechazan mientras esté activa.
+El sistema operativo libera el bloqueo ante una caída; no borre el archivo .lock ni WAL/SHM.
+Coordina nuestras herramientas, no programas SQLite externos. Procedimiento y límites: docs/fase4-sincronizacion.md, 11.
 
 SUSTITUCIONES LOCALES (--sustituciones RUTA)
 Decisiones de esta instalacion, no datos de SofaScore: "el evento X queda sustituido por el Y"
@@ -399,7 +403,8 @@ test_sincronizacion.py se omiten y el resto funciona igual. Base fuera de los re
   .venv\Scripts\python -m persistencia restaurar --copia COPIA.sqlite --base RUTA.sqlite --confirmar
 Cada escritura en una base existente hace antes una copia verificada (en <carpeta de la base>\copias)
 y la base se verifica antes de confirmar.
-La API lee la base al arrancar: tras importar, reconstruir, migrar o restaurar, reiniciala.
+La API lee la base al arrancar: cierrala antes de importar, reconstruir, migrar o restaurar y arrancala despues.
+Mientras una API SQL nueva tenga la base reservada, los comandos se rechazan (docs/fase4-sincronizacion.md, 11).
 Importacion incremental y vigencia de convocatorias: docs/fase4-sincronizacion.md.
 La carga solo admite carpetas que las reglas actuales del importador reproducen: una carpeta con
 duplicados legados en jugador_partido (que la API en modo JSON si lee y une) se rechaza.

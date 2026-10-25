@@ -6,6 +6,7 @@ from logging.config import fileConfig
 from alembic import context
 
 from persistencia.modelos import Base
+from persistencia.bloqueo import bloquear
 from persistencia.sqlite import comprobar_integridad, crear_motor, preparar_migracion
 
 config = context.config
@@ -52,4 +53,5 @@ def ejecutar():
         motor.dispose()
 
 
-ejecutar()
+with bloquear(ruta_de_la_base()):
+    ejecutar()

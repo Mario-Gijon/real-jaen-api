@@ -29,6 +29,7 @@ from sqlalchemy import text
 
 import importar
 from persistencia import carga, reconstruccion, sqlite
+from persistencia.bloqueo import exclusivo
 from persistencia.carga import CargaRechazada, ahora, filas_de_carga, insertar, literal
 
 ENTIDADES = ('competition', 'season', 'stage', 'team', 'player', 'match')
@@ -546,6 +547,7 @@ class Presentacion:
         return bool(self.entradas)
 
 
+@exclusivo('ruta_base')
 def importar_evidencia(ruta_base, exportaciones=(), calendarios=(), fichas=(), entradas=(), comando=None):
     """`persistencia importar`: comprobaciones previas, copia verificada y una transacción (evidencia nueva,
     declaraciones, sincronización completa, verificación, ejecución confirmada). Si algo falla no se escribe nada y
@@ -595,6 +597,7 @@ def importar_evidencia(ruta_base, exportaciones=(), calendarios=(), fichas=(), e
             'ficheros': informe['ficheros']}
 
 
+@exclusivo('ruta_base')
 def reconstruir(ruta_base, confirmar=False, comando=None):
     """`persistencia reconstruir`: sin confirmar, la diferencia entre lo guardado y las reglas actuales (en seco); con
     confirmar, copia verificada y una transacción que registra las reglas nuevas y aplica la sincronización completa
@@ -632,6 +635,7 @@ def reconstruir(ruta_base, confirmar=False, comando=None):
     return {'base': str(ruta), 'run': run, 'copia': copia['ruta'], 'cambios': plan.recuento()}
 
 
+@exclusivo('ruta_base')
 def verificar(ruta_base):
     """`persistencia verificar`: solo lectura. Integridad, revisión, claves foráneas, convocatorias, versiones de
     reglas y sincronización en seco."""
@@ -670,6 +674,7 @@ def exigir_base(ruta_base, revision=True):
     return ruta
 
 
+@exclusivo('ruta_base')
 def migrar(ruta_base):
     """`persistencia migrar`: copia verificada y `alembic upgrade head`. La migración comprueba claves foráneas y
     vigencia de convocatorias antes de confirmar (migraciones/env.py); después se verifica la base entera."""
@@ -686,6 +691,7 @@ def migrar(ruta_base):
             'verificacion': verificar(ruta)}
 
 
+@exclusivo('ruta_base')
 def restaurar(ruta_copia, ruta_base, revision=None):
     """`persistencia restaurar`: solo si ningún proceso usa la base (sqlite.restaurar). La copia debe tener la
     revisión del código, salvo que se indique otra a propósito (volver a una copia anterior a una migración junto con
@@ -693,6 +699,7 @@ def restaurar(ruta_copia, ruta_base, revision=None):
     return sqlite.restaurar(ruta_copia, ruta_base, revision or revision_del_codigo())
 
 
+@exclusivo('ruta_base')
 def copiar(ruta_base, motivo='manual'):
     return sqlite.crear_copia(exigir_base(ruta_base, revision=False), motivo)
 

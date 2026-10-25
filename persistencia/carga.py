@@ -24,6 +24,7 @@ from sqlalchemy import text
 
 import importar
 from persistencia import reconstruccion, sqlite
+from persistencia.bloqueo import bloquear
 
 RAIZ = Path(__file__).resolve().parent.parent
 PROVEEDOR = 'sofascore'
@@ -534,6 +535,17 @@ def recuentos(c):
 
 
 def cargar(carpeta, ruta_base, comando=None):
+    ruta = Path(ruta_base).resolve()
+    repositorio = repositorio_que_contiene(ruta.parent)
+    if repositorio is not None:
+        raise CargaRechazada(f'La base debe quedar fuera de los repositorios: {ruta} está dentro de {repositorio}')
+    ruta.parent.mkdir(parents=True, exist_ok=True)
+    with bloquear(ruta):
+        with bloquear(parcial_de(ruta)):
+            return _cargar(carpeta, ruta, comando)
+
+
+def _cargar(carpeta, ruta_base, comando=None):
     """Carga la carpeta en una base nueva. Devuelve el informe; ante cualquier diferencia o fallo lanza
     CargaRechazada (u otra excepción) y no deja base."""
     carpeta = Path(carpeta).resolve()

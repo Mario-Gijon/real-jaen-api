@@ -6,7 +6,8 @@ código (si no, `persistencia reconstruir`; la comparación completa en seco, un
 importación), y se reconstruyen los mismos datos que lee el modo JSON
 (persistencia.reconstruccion). A partir de ahí el camino es el de siempre: api.componer (fichas, ámbito,
 sustituciones guardadas en la base) y, al consultar, las reglas actuales de normalización y agregados. Todo se lee al
-arrancar; la conexión se cierra después (sin recarga en caliente).
+arrancar; la conexión se cierra después (sin recarga en caliente). La API mantiene además el bloqueo
+cooperativo de esa ruta durante toda su ejecución; los lectores directos lo reservan solo durante su lectura.
 
 Con el diario WAL, una conexión de solo lectura puede dejar junto a la base sus archivos `-shm` y `-wal` (vacío): es
 el funcionamiento normal de SQLite y no cambia los datos.
@@ -18,6 +19,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 import api
 from persistencia import reconstruccion, sqlite
+from persistencia.bloqueo import exclusivo
 from persistencia.carga import configuracion_alembic
 from persistencia.decisiones import sustituciones_guardadas
 from persistencia.sincronizacion import reglas_desfasadas
@@ -34,7 +36,8 @@ def revision_esperada():
     return ScriptDirectory.from_config(configuracion_alembic(Path('.'))).get_current_head()
 
 
-def leer_base(ruta):
+@exclusivo('ruta')
+def _leer_base(ruta):
     """(datos almacenados con los originales indexados, sustituciones activas) de una base válida."""
     ruta = Path(ruta).resolve()
     if not ruta.is_file():
@@ -65,6 +68,12 @@ def leer_base(ruta):
     datos = {n: reconstruida[n] for n in DATOS}
     datos['originales'] = api.indexar(reconstruida['originales'])
     return datos, sustituciones
+
+
+def leer_base(ruta):
+    if not Path(ruta).is_file():
+        raise BaseNoUtilizable(f'No existe la base {Path(ruta).resolve()} (el modo SQL nunca crea una)')
+    return _leer_base(ruta)
 
 
 def cargar_desde_base(ruta, ambito):

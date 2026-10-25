@@ -4,6 +4,8 @@
 (resultados en la sección 6). La revisión crítica de simplicidad tras la fase 3 está en
 `docs/revision-simplicidad-persistencia.md`. Fase 4 (importación incremental con sincronización completa) implementada
 sin activar en la base real: `docs/fase4-sincronizacion.md`.
+La coordinación cooperativa API/mantenimiento y sus límites están en la sección 11 de ese documento;
+la API mantiene un bloqueo de proceso aunque cierre su conexión tras cargar la instantánea.
 
 Decisiones acordadas:
 - SQLite al principio, SQLAlchemy como ORM y Alembic para migraciones; uso individual.

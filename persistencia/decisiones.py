@@ -16,6 +16,7 @@ from sqlalchemy import text
 
 import api
 from persistencia import reconstruccion, sqlite
+from persistencia.bloqueo import exclusivo
 from persistencia.carga import ahora, insertar, literal, version_del_codigo
 
 
@@ -23,6 +24,7 @@ class DecisionRechazada(Exception):
     """No se guarda ninguna decisión."""
 
 
+@exclusivo('ruta_base')
 def cargar_sustituciones(ruta_base, archivo, ambito, comando=None):
     ruta, archivo = Path(ruta_base).resolve(), Path(archivo).resolve()
     if not ruta.is_file():
