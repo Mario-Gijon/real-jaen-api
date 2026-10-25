@@ -61,3 +61,11 @@ La muestra procede de una copia anterior 0002, migrada/verificada solo en tempor
 no acredita importaciones posteriores. Base activa y servicios Windows intactos. Sin commit ni push.
 Linux y symlinks validados en este volumen ext4; otros almacenamientos, NTFS compartido,
 coordinacion Windows/Linux sobre una misma base y caida completa de VM/host siguen sin validar.
+
+Entrega portable a Linux: colocar api-real-jaen y rj-analyst como carpetas hermanas, con
+Compose en rj-analyst y deployment/imports fuera de ambos contextos. La guia canonica incluye
+comandos POSIX para primera instalacion, arranque con base existente, mantenimiento y recuperacion.
+No requiere PowerShell, Python, Node ni entornos del anfitrion para instalar u operar Docker.
+Tambien documenta entrega de imagenes versionadas sin fuentes en el servidor, configuracion
+de interfaz/puerto para proxy inverso, requisitos de permisos y datos iniciales. No hay montajes
+de codigo ni arquitectura de CPU forzada. La configuracion local de un anfitrion no se entrega.
