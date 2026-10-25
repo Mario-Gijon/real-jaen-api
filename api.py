@@ -968,6 +968,7 @@ def main():
                     help='json (predeterminado): carpeta de importación; sql: solo la base de --base')
     ap.add_argument('--datos',type=Path,default=None,help='carpeta de importación (modo json; por defecto datos/)')
     ap.add_argument('--base',type=Path,default=None,help='base SQLite (solo modo sql)')
+    ap.add_argument('--host',default='127.0.0.1',help='dirección de escucha (por defecto solo loopback)')
     ap.add_argument('--port',type=int,default=8001)
     ap.add_argument('--ambito',type=Path,default=AMBITO)
     ap.add_argument('--sustituciones',type=Path,default=None,
@@ -994,8 +995,8 @@ def main():
                 self.send_header('Cache-Control','no-store')
                 self.end_headers()
                 self.wfile.write(cuerpo)
-        print(f'API: http://127.0.0.1:{args.port} (almacén {args.almacen}) — Ctrl+C para detener',flush=True)
-        servidor=ThreadingHTTPServer(('127.0.0.1',args.port),Handler)
+        print(f'API: http://{args.host}:{args.port} (almacén {args.almacen}) — Ctrl+C para detener',flush=True)
+        servidor=ThreadingHTTPServer((args.host,args.port),Handler)
         try:servidor.serve_forever()
         except KeyboardInterrupt:pass
         finally:servidor.server_close()

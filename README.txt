@@ -476,3 +476,11 @@ Pruebas: tests/test_fichas.py cubre identidad, estructura, zonas horarias, nulos
 conflictos de valores, reimportacion, aislamiento de relaciones/deporte, reconstruccion
 por ambito y registros Slice del scraper (propietario, clave, identidad, sin ficha).
 Todas las pruebas de la API se ejecutan con unittest discover -s tests.
+
+
+DOCKER LOCAL (sin activar servicios existentes)
+Imagen de producción local: Dockerfile, Python 3.14.4 fijado y dependencias SQL. Compose vive en
+el repositorio hermano rj-analyst/compose.yaml; procedimiento y límites en docs/docker.md y
+rj-analyst/docs/docker.md. api.py admite --host (por defecto 127.0.0.1); la imagen pide 0.0.0.0
+solo dentro de su red, sin publicar backend al host. Datos y copias viven en un volumen externo,
+no en la imagen. No hay migraciones automáticas, recarga en caliente ni botón Actualizar.
