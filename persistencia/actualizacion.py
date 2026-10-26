@@ -1,0 +1,343 @@
+"""Coordinador interno para fixtures locales. Sin conexión con api.main ni red.
+
+Un hilo propietario mantiene el bloqueo durante apertura, trabajo y recuperación.
+El journal operativo es independiente de la base deportiva. Ver docs/coordinador-fixtures.md.
+"""
+from contextlib import closing
+from dataclasses import dataclass
+import hashlib
+import json
+from pathlib import Path
+import queue
+import shutil
+import sqlite3
+import threading
+import time
+import uuid
+
+import api
+from persistencia import carga, lectura, sincronizacion, sqlite
+from persistencia.bloqueo import bloquear, ruta_normalizada
+
+
+class CoordinacionRechazada(RuntimeError):
+    pass
+
+
+def codigo():
+    return carga.referencia_del_codigo()['sha256_agregada']
+
+
+def comprobar(base):
+    resultado = sincronizacion.verificar(base)
+    if not resultado['ok']:
+        raise CoordinacionRechazada(str(resultado))
+    return sqlite.comprobar_copia(base)
+
+
+@dataclass(frozen=True)
+class Generacion:
+    id: str
+    _datos: dict
+
+    def consultar(self, ruta):
+        # Devuelve una respuesta propia: los consumidores no pueden mutar la instantánea.
+        estado, cuerpo = api.consultar(self._datos, ruta)
+        return estado, json.loads(json.dumps(cuerpo, ensure_ascii=False, allow_nan=False))
+
+
+def preparar(base, ambito, ident):
+    generacion = Generacion(ident, lectura.cargar_desde_base(base, ambito))
+    rutas = ['/health', '/api/v1/scope']
+    for entidad, plural, clave, sufijos in (
+        ('teams', 'equipos', 'team_id', ('', '/players', '/matches', '/performance', '/player-stats')),
+        ('players', 'jugadores', 'player_id', ('', '/matches')),
+        ('matches', 'partidos', 'match_id', ('', '/statistics', '/lineups', '/incidents')),
+    ):
+        rutas.extend(f'/api/v1/{entidad}/{fila[clave]}{sufijo}'
+                     for fila in generacion._datos[plural] for sufijo in sufijos)
+    for ruta in rutas:
+        generacion.consultar(ruta)
+    return generacion
+
+
+class Coordinador:
+    """Uso explícito en pruebas/herramientas internas; no crea ni migra la base.
+
+    exportaciones: secuencia (ruta fixture JSONL, equipo externo); calendarios/fichas: rutas.
+    El callback privado _frontera permite pruebas de terminación, no ejecuta comandos.
+    """
+    def __init__(self, base, ambito, *, reserva=64 * 1024 * 1024, _frontera=None):
+        self.base = ruta_normalizada(base)
+        self.ambito = Path(ambito).resolve()
+        self.directorio = self.base.with_name(self.base.name + '.actualizaciones')
+        self.journal = self.directorio / 'jobs.sqlite'
+        self.reserva = reserva
+        self._frontera = _frontera or (lambda nombre: None)
+        self._puerta = threading.Lock()
+        self._cola = queue.Queue()
+        self._listo = threading.Event()
+        self._bloqueado = None
+        self._inicio_error = None
+        self._cerrado = False
+        self._hilo = threading.Thread(target=self._propietario, daemon=False)
+        self._hilo.start()
+        self._listo.wait()
+        if self._inicio_error:
+            self._hilo.join()
+            raise self._inicio_error
+
+    def _db(self):
+        c = sqlite3.connect(self.journal, timeout=10)
+        try:
+            c.execute('PRAGMA synchronous=FULL')
+            return c
+        except BaseException:
+            c.close()
+            raise
+
+    def _leer(self, ident):
+        with closing(self._db()) as c:
+            fila = c.execute('SELECT detalle FROM trabajo WHERE id=?', (ident,)).fetchone()
+        if fila is None:
+            raise KeyError(ident)
+        return json.loads(fila[0])
+
+    def estado(self, ident):
+        return self._leer(ident)
+
+    def _guardar(self, trabajo, meta=None):
+        with closing(self._db()) as c, c:
+            c.execute('UPDATE trabajo SET estado=?, detalle=? WHERE id=?',
+                      (trabajo['estado'], json.dumps(trabajo), trabajo['id']))
+            if meta is not None:
+                c.execute('UPDATE confirmado SET detalle=? WHERE id=1', (json.dumps(meta),))
+
+    def _meta(self):
+        with closing(self._db()) as c:
+            fila = c.execute('SELECT detalle FROM confirmado WHERE id=1').fetchone()
+        return json.loads(fila[0]) if fila else None
+
+    def _activos(self):
+        with closing(self._db()) as c:
+            return [json.loads(f[0]) for f in c.execute(
+                "SELECT detalle FROM trabajo WHERE estado IN ('queued', 'running')")]
+
+    def _reglas(self):
+        return {'codigo': codigo(), 'ambito': hashlib.sha256(self.ambito.read_bytes()).hexdigest()}
+
+    def _exigir_reglas(self, esperado):
+        if self._reglas() != {k: esperado[k] for k in ('codigo', 'ambito')}:
+            raise CoordinacionRechazada('Cambios de codigo o ambito: mantenimiento explicito requerido')
+
+    def _restaurar(self, copia, descripcion):
+        # Única vía: también para deshacer una promoción que ya reemplazó el principal.
+        sincronizacion.restaurar(copia, self.base)
+        if comprobar(self.base) != descripcion:
+            raise CoordinacionRechazada('La recuperacion no reproduce la descripcion esperada')
+
+    def _recuperar(self, trabajo):
+        trabajo.update(estado='running', fase='recovering')
+        self._guardar(trabajo)
+        self._restaurar(trabajo['copia'], trabajo['anterior'])
+        self._frontera('recovered')
+
+    def _abrir(self):
+        if not self.base.is_file():
+            raise CoordinacionRechazada('La base debe existir; control interno no inicializa datos')
+        self.directorio.mkdir(exist_ok=True)
+        with closing(self._db()) as c, c:
+            c.execute('CREATE TABLE IF NOT EXISTS trabajo(id TEXT PRIMARY KEY, estado TEXT NOT NULL, detalle TEXT NOT NULL)')
+            c.execute("CREATE UNIQUE INDEX IF NOT EXISTS unico_activo ON trabajo((1)) WHERE estado IN ('queued','running')")
+            c.execute('CREATE TABLE IF NOT EXISTS confirmado(id INTEGER PRIMARY KEY CHECK(id=1), detalle TEXT NOT NULL)')
+        for trabajo in self._activos():
+            if trabajo['fase'] in ('publishing', 'recovering'):
+                self._recuperar(trabajo)
+            trabajo.update(estado='interrupted', fase='finished', error='Proceso interrumpido; no se reanuda automaticamente')
+            self._guardar(trabajo)
+        descripcion = comprobar(self.base)
+        meta = self._meta()
+        if meta is None:
+            # No aceptar silenciosamente reglas distintas a las archivadas en la evidencia.
+            with closing(sqlite._lectura(self.base)) as c:
+                filas = c.execute("SELECT summary FROM import_run WHERE status IN ('committed','no_changes') ORDER BY id DESC").fetchall()
+            referencia = next((json.loads(f[0]).get('codigo') for f in filas
+                               if f[0] and json.loads(f[0]).get('codigo')), None)
+            if not referencia or referencia['sha256_agregada'] != codigo():
+                raise CoordinacionRechazada('No se acredita la huella de reglas de la base inicial')
+            meta = dict(self._reglas(), generacion=str(uuid.uuid4()), descripcion=descripcion)
+            with closing(self._db()) as c, c:
+                c.execute('INSERT INTO confirmado VALUES(1,?)', (json.dumps(meta),))
+        self._exigir_reglas(meta)
+        if descripcion != meta['descripcion']:
+            raise CoordinacionRechazada('El principal no coincide con la generacion confirmada')
+        self._actual = preparar(self.base, self.ambito, meta['generacion'])
+
+    def _propietario(self):
+        try:
+            with bloquear(self.base):
+                self._abrir()
+                self._listo.set()
+                while True:
+                    ident = self._cola.get()
+                    if ident is None:
+                        return
+                    if not self._bloqueado:
+                        self._ejecutar(ident)
+        except BaseException as e:
+            self._inicio_error = e
+        finally:
+            self._listo.set()
+
+    def capturar(self):
+        with self._puerta:
+            if self._cerrado or self._bloqueado or not self._hilo.is_alive():
+                raise CoordinacionRechazada(str(self._bloqueado or 'Coordinador cerrado o propietario no disponible'))
+            return self._actual
+
+    def solicitar(self, *, exportaciones=(), calendarios=(), fichas=()):
+        with self._puerta:
+            if self._cerrado or self._bloqueado or not self._hilo.is_alive():
+                raise CoordinacionRechazada(str(self._bloqueado or 'Coordinador cerrado'))
+            with closing(self._db()) as c, c:
+                c.execute('BEGIN IMMEDIATE')
+                activo = c.execute("SELECT id FROM trabajo WHERE estado IN ('queued','running')").fetchone()
+                if activo:
+                    return activo[0]
+                ident = str(uuid.uuid4())
+                trabajo = dict(id=ident, estado='queued', fase='queued',
+                    entradas=dict(exportaciones=[(str(Path(p).resolve()), e) for p, e in exportaciones],
+                                  calendarios=[str(Path(p).resolve()) for p in calendarios],
+                                  fichas=[str(Path(p).resolve()) for p in fichas]))
+                c.execute('INSERT INTO trabajo VALUES(?,?,?)', (ident, 'queued', json.dumps(trabajo)))
+            self._cola.put(ident)
+            return ident
+
+    def esperar(self, ident, timeout=30):
+        limite = time.monotonic() + timeout
+        while time.monotonic() < limite:
+            estado = self.estado(ident)
+            if estado['estado'] not in ('queued', 'running'):
+                return estado
+            if self._bloqueado:
+                raise CoordinacionRechazada(str(self._bloqueado))
+            time.sleep(0.01)
+        raise TimeoutError(ident)
+
+    def _espacio(self, trabajo):
+        rutas = [Path(p) for p, _ in trabajo['entradas']['exportaciones']]
+        rutas += [Path(p) for grupo in ('calendarios', 'fichas') for p in trabajo['entradas'][grupo]]
+        volumen = self.base.stat().st_dev
+        if self.directorio.stat().st_dev != volumen:
+            raise CoordinacionRechazada('Candidata y principal necesitan el mismo almacenamiento')
+        tamano = self.base.stat().st_size + sum(p.stat().st_size for p in rutas)
+        tamano += sum(p.stat().st_size for p in carga.acompanantes(self.base) if p.exists())
+        requerido = 12 * tamano + self.reserva
+        if shutil.disk_usage(self.base.parent).free < requerido:
+            raise OSError('Espacio insuficiente antes de preparar la candidata')
+
+    def _congelar(self, trabajo):
+        directorio = self.directorio / trabajo['id']
+        directorio.mkdir()
+        entradas, manifiesto = {}, []
+        for grupo, valores in trabajo['entradas'].items():
+            entradas[grupo] = []
+            for i, valor in enumerate(valores):
+                ruta, equipo = valor if grupo == 'exportaciones' else (valor, None)
+                destino = directorio / f'{grupo}-{i}.jsonl'
+                shutil.copyfile(ruta, destino)
+                # fsync antes de poder publicar una candidata basada en esta evidencia.
+                with destino.open('r+b') as f:
+                    import os
+                    os.fsync(f.fileno())
+                manifiesto.append(dict(origen=ruta, fichero=str(destino),
+                                       sha256=hashlib.sha256(destino.read_bytes()).hexdigest()))
+                entradas[grupo].append((destino, equipo) if grupo == 'exportaciones' else destino)
+        trabajo['manifiesto'] = manifiesto
+        return directorio, entradas
+
+    def _ejecutar(self, ident):
+        trabajo = self._leer(ident)
+        nueva = None
+        try:
+            meta = self._meta()
+            self._exigir_reglas(meta)
+            if comprobar(self.base) != meta['descripcion']:
+                raise CoordinacionRechazada('El principal cambio fuera del coordinador')
+            trabajo.update(estado='running', fase='preparing')
+            self._guardar(trabajo)
+            self._frontera('before_backup')
+            self._espacio(trabajo)
+            directorio, entradas = self._congelar(trabajo)
+            copia = sincronizacion.copiar(self.base, 'coordinador')
+            trabajo.update(copia=copia['ruta'], anterior=meta['descripcion'])
+            self._guardar(trabajo)
+            self._frontera('backup_saved')
+            candidata = directorio / 'candidata.sqlite'
+            sqlite.copia_consistente(self.base, candidata)
+            trabajo.update(candidata=str(candidata))
+            self._guardar(trabajo)
+            self._frontera('before_import')
+            informe = sincronizacion.importar_evidencia(candidata, **entradas)
+            self._frontera('candidate_committed')
+            descripcion = comprobar(candidata)
+            self._exigir_reglas(meta)
+            generacion = str(uuid.uuid4())
+            nueva = preparar(candidata, self.ambito, generacion)
+            self._frontera('snapshot_prepared')
+            trabajo.update(fase='publishing', esperada=descripcion, generacion=generacion, resultado=informe)
+            self._guardar(trabajo)
+            self._frontera('publication_prepared')
+            self._restaurar(candidata, descripcion)
+            self._frontera('principal_replaced')
+            self._exigir_reglas(meta)
+            with self._puerta:
+                self._frontera('before_confirmation')
+                self._exigir_reglas(meta)
+                trabajo.update(estado='completed', fase='finished')
+                confirmado = dict(codigo=meta['codigo'], ambito=meta['ambito'], generacion=generacion, descripcion=descripcion)
+                try:
+                    self._guardar(trabajo, confirmado)  # Punto único de confirmación durable.
+                    self._frontera('confirmed')
+                except Exception:
+                    try:
+                        confirmado = self._leer(ident)['estado'] == 'completed'
+                    except Exception as lectura_error:
+                        # Bloquear bajo la puerta: ninguna captura nueva puede adelantarse
+                        # a la reconciliacion de un COMMIT cuyo resultado no podemos leer.
+                        self._bloqueado = CoordinacionRechazada(f'Confirmacion incierta: {lectura_error}')
+                        raise
+                    if confirmado:
+                        self._actual = nueva
+                    raise
+                self._actual = nueva
+                self._frontera('swapped')
+        except Exception as e:
+            try:
+                # COMMIT puede haber terminado aunque el llamante haya recibido un error.
+                durable = self._leer(ident)
+                if durable['estado'] == 'completed':
+                    with self._puerta:
+                        self._actual = nueva
+                    return
+                if durable['fase'] in ('publishing', 'recovering'):
+                    with self._puerta:
+                        self._recuperar(durable)
+                durable.update(estado='failed', fase='finished', error=f'{type(e).__name__}: {e}')
+                self._guardar(durable)
+            except Exception as recuperacion:
+                self._bloqueado = CoordinacionRechazada(f'Recuperacion requerida: {recuperacion}')
+
+    def close(self):
+        with self._puerta:
+            if self._cerrado:
+                return
+            self._cerrado = True
+        self._cola.put(None)
+        self._hilo.join()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        self.close()

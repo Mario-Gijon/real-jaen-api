@@ -484,3 +484,6 @@ el repositorio hermano rj-analyst/compose.yaml; procedimiento y límites en docs
 rj-analyst/docs/docker.md. api.py admite --host (por defecto 127.0.0.1); la imagen pide 0.0.0.0
 solo dentro de su red, sin publicar backend al host. Datos y copias viven en un volumen externo,
 no en la imagen. No hay migraciones automáticas, recarga en caliente ni botón Actualizar.
+
+COORDINADOR INTERNO (fixtures, sin activar): diseno y limites en docs/coordinador-fixtures.md.
+No hay endpoints nuevos ni cambios en el arranque habitual; no ejecuta red ni scraper.
