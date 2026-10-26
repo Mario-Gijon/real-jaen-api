@@ -489,3 +489,5 @@ COORDINADOR INTERNO (fixtures, sin activar): diseno y limites en docs/coordinado
 No hay endpoints nuevos ni cambios en el arranque habitual; no ejecuta red ni scraper.
 
 Gestion de perfil y recuperacion administrativa offline implementadas (sin servicio ni integracion): docs/gestion-perfil-adquisicion.md.
+
+Contrato e integración interna SIMULADA validada, sin activar instalación habitual: docs/contrato-adquisicion-interno.md. Pila Docker de prueba independiente; sin recetas reales ni endpoints Next.

@@ -1,0 +1,145 @@
+{
+  "status": "SIMULATED_INTERNAL_INTEGRATION_PASSED",
+  "profile_commit": "6fecb58d4e45d7cafd890ed21ef96810fdcc2401",
+  "platform": "Docker Desktop Linux x86_64",
+  "contract_tests_passed": 11,
+  "docker_stages_passed": 16,
+  "sql_regression_windows": {
+    "tests": 239,
+    "skipped": 2,
+    "result": "passed"
+  },
+  "json_without_sql_windows": {
+    "tests": 239,
+    "skipped": 92,
+    "result": "passed"
+  },
+  "generic_suite_in_gitless_docker": {
+    "tests": 211,
+    "skipped": 3,
+    "failures": 1,
+    "errors": 1,
+    "result": "failed_checkout_preconditions",
+    "notes": "Git provenance and in-repository destination checks need a real Git checkout"
+  },
+  "secrets_removed": true,
+  "secret_in_logs": false,
+  "simulation_explicit_only": true,
+  "backend_default_seccomp_preserved": true,
+  "profile_policy_json_unchanged": true,
+  "seccomp_lf_sha256": "abd5cc8ed37eb8a76b57b6aa9e8042e79ac7f04cb189782e2c8565c0765c5cb7",
+  "cases": [
+    {
+      "case": "simulation-disabled-by-default",
+      "exit": 1,
+      "ok": true
+    },
+    {
+      "case": "initialize-profile",
+      "exit": 0,
+      "ok": true
+    },
+    {
+      "case": "initialize-synthetic-database",
+      "exit": 0,
+      "ok": true
+    },
+    {
+      "case": "start-acquisition",
+      "exit": 0,
+      "ok": true
+    },
+    {
+      "case": "protocol-unit-tests",
+      "exit": 0,
+      "ok": true
+    },
+    {
+      "case": "live-authentication",
+      "exit": 0,
+      "ok": true
+    },
+    {
+      "case": "complete-flow",
+      "exit": 0,
+      "ok": true
+    },
+    {
+      "case": "queue-before-crash",
+      "exit": 0,
+      "ok": true
+    },
+    {
+      "case": "kill-only-test-acquisition",
+      "exit": 0,
+      "ok": true
+    },
+    {
+      "case": "restart-only-test-acquisition",
+      "exit": 0,
+      "ok": true
+    },
+    {
+      "case": "no-automatic-resume",
+      "exit": 0,
+      "ok": true
+    },
+    {
+      "case": "prepare-sealed-bundle",
+      "exit": 0,
+      "ok": true
+    },
+    {
+      "case": "tamper-only-test-bundle",
+      "exit": 0,
+      "ok": true
+    },
+    {
+      "case": "reject-tamper-before-publication",
+      "exit": 0,
+      "ok": true
+    },
+    {
+      "case": "service-logs-secret-audit",
+      "exit": 0,
+      "ok": true
+    },
+    {
+      "case": "stop-only-test-stack",
+      "exit": 0,
+      "ok": true
+    }
+  ],
+  "images": {
+    "rj-acq-simulated:review": {
+      "id": "sha256:15a1d129d4291cd18e15da097039488e8219e3dbc1f0dc1361b89dfcc4b4724d",
+      "source_hashes": {
+        "service.py": "fe6b943d06c42c27f345916d674ca80388c1402c99bbdaaef0cc26a74d0a2248"
+      }
+    },
+    "rj-acq-integration-backend:review": {
+      "id": "sha256:49b7b92dafa87f027c913ef1fbbe2efabda8c9b07268f4e358813cd09c1eaa8f",
+      "source_hashes": {
+        "adquisicion.py": "4c49056e7ee2941b5890dab44a76e28698ba7e1100610d1f964e20afbd85a407",
+        "actualizacion.py": "7ab307b40f8021d1415b2efb9adc40415d75765dcd06006e02042c2c53e3294f"
+      }
+    }
+  },
+  "source_sha256": {
+    "acquisition/service.py": "fe6b943d06c42c27f345916d674ca80388c1402c99bbdaaef0cc26a74d0a2248",
+    "persistencia/adquisicion.py": "4c49056e7ee2941b5890dab44a76e28698ba7e1100610d1f964e20afbd85a407",
+    "persistencia/actualizacion.py": "7ab307b40f8021d1415b2efb9adc40415d75765dcd06006e02042c2c53e3294f",
+    "tests/acquisition/acquisition_simulated.py": "685c18044a07400b8414d5cf726f8a8dae069857ee3d305e18e35b3dff930db5",
+    "tests/acquisition/integration_flow.py": "4a58b85d04fba1329ed030bad62f592ba3721c60860bf173fed24abc6e46ab60",
+    "tests/acquisition/test_protocol.py": "64d038eba92d02d5be301a772df9fb53e956b2f368a3a8ce7c5b78c6eb63b3be",
+    "tests/test_adquisicion.py": "640556ffd11699b357fc21a579e20f05f0ab9792b158755239cf73f3882f80b4",
+    "docker/acquisition/test_integration.py": "a1e5795e7d732343f8fde249bf397cd7c9c57362404a043e1bbf25f153ccb2a5"
+  },
+  "pending": [
+    "Real recipes/provider and historical/personal policies",
+    "Visitor authorization before public backend/Next control",
+    "Group Linux server and filesystem validation",
+    "Full generic suite in a real Linux Git checkout",
+    "Production transport/secret rotation/retention policies"
+  ]
+}

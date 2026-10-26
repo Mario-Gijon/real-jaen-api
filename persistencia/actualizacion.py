@@ -195,20 +195,30 @@ class Coordinador:
                 raise CoordinacionRechazada(str(self._bloqueado or 'Coordinador cerrado o propietario no disponible'))
             return self._actual
 
-    def solicitar(self, *, exportaciones=(), calendarios=(), fichas=()):
+    def solicitar(self, *, exportaciones=(), calendarios=(), fichas=(), identificador=None):
+        entradas = dict(exportaciones=[(str(Path(p).resolve()), e) for p, e in exportaciones],
+                        calendarios=[str(Path(p).resolve()) for p in calendarios],
+                        fichas=[str(Path(p).resolve()) for p in fichas])
+        if identificador is not None and str(uuid.UUID(identificador)) != identificador:
+            raise CoordinacionRechazada('Identificador de solicitud invalido')
         with self._puerta:
             if self._cerrado or self._bloqueado or not self._hilo.is_alive():
                 raise CoordinacionRechazada(str(self._bloqueado or 'Coordinador cerrado'))
             with closing(self._db()) as c, c:
                 c.execute('BEGIN IMMEDIATE')
+                if identificador is not None:
+                    anterior = c.execute('SELECT detalle FROM trabajo WHERE id=?', (identificador,)).fetchone()
+                    if anterior:
+                        if json.loads(anterior[0])['entradas'] != json.loads(json.dumps(entradas)):
+                            raise CoordinacionRechazada('Solicitud reutilizada con otras entradas')
+                        return identificador
                 activo = c.execute("SELECT id FROM trabajo WHERE estado IN ('queued','running')").fetchone()
                 if activo:
+                    if identificador is not None and identificador != activo[0]:
+                        raise CoordinacionRechazada('Otro trabajo activo')
                     return activo[0]
-                ident = str(uuid.uuid4())
-                trabajo = dict(id=ident, estado='queued', fase='queued',
-                    entradas=dict(exportaciones=[(str(Path(p).resolve()), e) for p, e in exportaciones],
-                                  calendarios=[str(Path(p).resolve()) for p in calendarios],
-                                  fichas=[str(Path(p).resolve()) for p in fichas]))
+                ident = identificador or str(uuid.uuid4())
+                trabajo = dict(id=ident, estado='queued', fase='queued', entradas=entradas)
                 c.execute('INSERT INTO trabajo VALUES(?,?,?)', (ident, 'queued', json.dumps(trabajo)))
             self._cola.put(ident)
             return ident

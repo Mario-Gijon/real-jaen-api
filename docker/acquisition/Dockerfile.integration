@@ -1,0 +1,21 @@
+# Only for the explicitly simulated integration stack, not habitual installations.
+ARG PROFILE_IMAGE=local/profile-runtime:required
+ARG BACKEND_IMAGE=local/backend-runtime:required
+FROM ${PROFILE_IMAGE} AS acquisition-test
+USER root
+RUN mkdir -p /acquisition-jobs && chown 10001:10001 /acquisition-jobs
+COPY --from=implementation / /opt/app/acquisition/
+COPY --from=checks / /opt/checks/
+ENV PYTHONPATH=/opt/app:/opt/checks
+USER 10001:10001
+ENTRYPOINT ["python", "-B", "-m", "acquisition.service"]
+
+FROM ${BACKEND_IMAGE} AS backend-test
+HEALTHCHECK NONE
+COPY --from=backend / /app/
+COPY --from=implementation / /app/acquisition/
+COPY --from=fixtures / /app/tests/
+COPY --from=checks / /opt/checks/
+ENV PYTHONPATH=/app:/opt/checks:/app/tests
+WORKDIR /app
+ENTRYPOINT ["python", "-B", "-m", "integration_flow"]
