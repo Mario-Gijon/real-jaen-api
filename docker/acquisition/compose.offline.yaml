@@ -1,0 +1,19 @@
+# Standalone offline administration/testing only. Does not include backend/frontend.
+services:
+  admin:
+    image: ${RJ_PROFILE_IMAGE:?Set an existing local profile image}
+    pull_policy: never
+    init: true
+    network_mode: none
+    user: "10001:10001"
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=./seccomp-linux-amd64.json
+    shm_size: 512m
+    volumes:
+      - profile:/profiles
+volumes:
+  profile:
+    external: true
+    name: ${RJ_PROFILE_VOLUME:?Set an explicitly created exclusive profile volume}

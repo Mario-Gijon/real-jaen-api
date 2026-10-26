@@ -487,3 +487,5 @@ no en la imagen. No hay migraciones automáticas, recarga en caliente ni botón 
 
 COORDINADOR INTERNO (fixtures, sin activar): diseno y limites en docs/coordinador-fixtures.md.
 No hay endpoints nuevos ni cambios en el arranque habitual; no ejecuta red ni scraper.
+
+Gestion de perfil y recuperacion administrativa offline implementadas (sin servicio ni integracion): docs/gestion-perfil-adquisicion.md.

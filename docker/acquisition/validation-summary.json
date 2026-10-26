@@ -1,0 +1,30 @@
+{
+  "status": "PROFILE_MANAGEMENT_OFFLINE_PASSED_NO_SERVICE_INTEGRATION",
+  "platform": "Docker Desktop Linux x86_64",
+  "unit_tests_passed": 31,
+  "acceptance_cases_passed": 23,
+  "concurrent_attempts_rejected": 2,
+  "real_enospc": true,
+  "cookies_after_sigkill_hostname_change": true,
+  "manual_recovery_only": true,
+  "publication_crash_points": [
+    "before_pointer",
+    "after_pointer"
+  ],
+  "compose_admin_network_mode": "none",
+  "runtime_test_instruments_absent": true,
+  "source_matches_runtime": true,
+  "seccomp_sha256": "abd5cc8ed37eb8a76b57b6aa9e8042e79ac7f04cb189782e2c8565c0765c5cb7",
+  "additional_permissions": false,
+  "images": {
+    "rj-profile-admin:runtime-20261026": "sha256:0f2cf2d573fb78cb62a0429365172d169af4ee495c5e7565169c2579cf302073",
+    "rj-profile-admin:offline-20261026": "sha256:4e00beffaa2aaf3e6f7a1b30e9088461218159e0d7800d7280b7588dff50508c"
+  },
+  "pending": [
+    "Group server kernel/LSM/filesystem validation",
+    "Other CPU architectures and native Windows",
+    "Power loss and physical corruption",
+    "Retention and corrupt/missing-state administrative repair",
+    "Minimal standalone browser runtime without unused inherited SQL dependencies"
+  ]
+}
