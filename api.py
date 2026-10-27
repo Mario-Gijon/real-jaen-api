@@ -514,11 +514,31 @@ def desacuerdos_de_alineacion(datos, ident):
         return (v.get('listed', True), v.get('substitute'), v.get('minutesPlayed'), bool(v.get('individual_statistics')))
     return {j: vs for j, vs in dichos.items() if len(vs) < len(comparables) or len({firma(v) for v in vs}) > 1}
 
+def se_completan(lecturas):
+    """Las lecturas de una clave en varias versiones sólo difieren en que alguna la omite: las que la dan traen el mismo
+    valor válido. Un `null` o un valor inválido no es una omisión: frente a cualquier otra lectura es un desacuerdo."""
+    valores = {v for estado, v in lecturas if estado == 'valida'}
+    return all(estado in ('ausente', 'valida') for estado, _ in lecturas) and len(valores) == 1
+
+def incoherencia_combinada(grupo, valores):
+    """Las relaciones del grupo (las de estadisticas_de_actuacion) sobre los valores explícitos y válidos que dan entre
+    todas las versiones. Versiones que se completan no pueden, juntas, superar un total: p. ej. una con 1 tiro a puerta
+    y otra cuyas categorías complementarias ya agotan los tiros."""
+    v = valores.get
+    if grupo == 'tiros':
+        partes = [v(c) for c in ('onTargetScoringAttempt', 'shotOffTarget', 'blockedScoringAttempt') if v(c) is not None]
+        return v('totalShots') is not None and sum(partes) > v('totalShots')
+    relacion = {'pases': ('accuratePass', 'totalPass'), 'regates': ('wonContest', 'totalContest')}.get(grupo)
+    return relacion is not None and None not in (v(relacion[0]), v(relacion[1])) and v(relacion[0]) > v(relacion[1])
+
 def conflictos_de_estadisticas(datos, ident):
-    """Grupos de estadísticas (GRUPOS_ESTADISTICA, más `goles`) cuyas claves difieren en valor o en presencia entre
-    versiones comparables de la alineación: {jugador: {grupo: [versión con sus claves del grupo]}}. Ninguna versión
-    gana: ese grupo queda sin dato y las demás estadísticas del jugador no se tocan. Un jugador que falta en alguna
-    versión es un desacuerdo de participación (desacuerdos_de_alineacion), no de estadísticas."""
+    """Grupos de estadísticas (GRUPOS_ESTADISTICA, más `goles`) en los que versiones comparables de la alineación se
+    contradicen: {jugador: {grupo: [versión con sus claves del grupo]}}. Hay contradicción si alguna clave del grupo
+    trae valores explícitos distintos, o un `null` o un valor inválido frente a otra lectura, o si los valores que dan
+    entre todas incumplen las relaciones del grupo. Que una versión omita una clave que otra da no es contradicción:
+    la selección de versiones (y sus originales) decide qué se usa, sin tomar valores de otra versión. Ninguna versión
+    gana un conflicto: ese grupo queda sin dato y las demás estadísticas del jugador no se tocan. Un jugador que falta en
+    alguna versión es un desacuerdo de participación (desacuerdos_de_alineacion), no de estadísticas."""
     comparables = alineaciones_comparables(datos, ident)
     if len(comparables) < 2:
         return {}
@@ -532,8 +552,14 @@ def conflictos_de_estadisticas(datos, ident):
         if len(dichas) < len(comparables):
             continue
         for grupo, claves in dict(GRUPOS_ESTADISTICA, goles=('goals',)).items():
-            firmas = [{c: s[c] for c in claves if c in s} for _, s in dichas]
-            if len({json.dumps(f, sort_keys=True) for f in firmas}) > 1:
+            lecturas = {c: [lectura([s], c) for _, s in dichas] for c in claves}
+            distintas = [c for c in claves if len({json.dumps(l) for l in lecturas[c]}) > 1]
+            if not distintas:
+                continue
+            combinados = {c: next(v for estado, v in lecturas[c] if estado == 'valida')
+                          for c in claves if any(estado == 'valida' for estado, _ in lecturas[c])}
+            if not all(se_completan(lecturas[c]) for c in distintas) or incoherencia_combinada(grupo, combinados):
+                firmas = [{c: s[c] for c in claves if c in s} for _, s in dichas]
                 conflictos.setdefault(jugador, {})[grupo] = [dict(v, statistics=f) for (v, _), f in zip(dichas, firmas)]
     return conflictos
 

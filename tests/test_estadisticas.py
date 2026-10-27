@@ -187,6 +187,84 @@ class DePuntaAPunta(Base):
         jugadores = api.consultar(datos, '/api/v1/matches/100/lineups')[1]['normalized']['players']
         self.assertEqual(next(p for p in jugadores if p['player_id'] == 1)['stats'], stats)
 
+    def dos_versiones(self, antiguas, nuevas):
+        """Actuación del jugador 1 con dos versiones confirmadas posteriores al partido (la nueva es la seleccionada)."""
+        antigua = alineacion([entrada(1, JAEN, **antiguas)], [entrada(3, RIVAL)])
+        nueva = alineacion([entrada(1, JAEN, **nuevas)], [entrada(3, RIVAL)])
+        datos = self.servidos(('2026-10-21T12:00:00+00:00', antigua), ('2026-10-27T13:00:00+00:00', nueva))
+        return api.actuaciones_del_partido(datos, 100)[1], datos
+
+    def test_ceros_explicitos_nuevos_no_son_conflicto(self):
+        # Caso real del 27-10: la versión nueva añade ceros que la antigua omitía; ningún valor común cambia.
+        a, _ = self.dos_versiones(dict(totalShots=2, blockedScoringAttempt=2),
+                                  dict(totalShots=2, blockedScoringAttempt=2, onTargetScoringAttempt=0, shotOffTarget=0,
+                                       fouls=0, saves=0, goals=0))
+        self.assertEqual(a['issues'], [])
+        self.assertEqual(a['stats']['shots'], {'value': 2, 'source': 'reported', 'rule': None, 'reason': None})
+        # Lo que da la versión seleccionada: ahora un 0 informado, no deducido.
+        self.assertEqual(a['stats']['shots_on_target'], {'value': 0, 'source': 'reported', 'rule': None, 'reason': None})
+        self.assertEqual(a['stats']['fouls']['value'], 0)
+        self.assertEqual(a['goals'], {'value': 0, 'source': 'reported'})
+
+    def test_un_valor_nuevo_que_completa_se_usa(self):
+        a, _ = self.dos_versiones(dict(totalContest=3), dict(totalContest=3, wonContest=2))
+        self.assertEqual((a['issues'], a['stats']['dribbles_won']['value']), ([], 2))
+
+    def test_no_se_toman_valores_de_otra_version(self):
+        # La seleccionada omite una clave que la antigua daba: sin conflicto y sin dato (no se completa con la otra).
+        a, _ = self.dos_versiones(dict(fouls=2), dict())
+        self.assertEqual(a['issues'], [])
+        self.assertEqual(a['stats']['fouls'], {'value': None, 'source': None, 'rule': None, 'reason': 'not_reported'})
+
+    def test_un_goal_nuevo_a_cero_no_bloquea_la_deduccion(self):
+        a, _ = self.dos_versiones(dict(totalShots=2, blockedScoringAttempt=2), dict(totalShots=2, blockedScoringAttempt=2, goals=0))
+        self.assertEqual(a['issues'], [])
+        self.assertEqual(a['stats']['shots_on_target'], {'value': 0, 'source': 'derived', 'rule': 'shots_partition', 'reason': None})
+
+    def test_null_e_invalidos_no_equivalen_a_una_clave_ausente(self):
+        casos = [('null frente a valor', dict(fouls=None), dict(fouls=1)),
+                 ('null frente a ausencia', dict(fouls=None), dict()),
+                 ('ausencia frente a null', dict(), dict(fouls=None)),
+                 ('inválido frente a valor', dict(fouls=-1), dict(fouls=1)),
+                 ('inválido frente a ausencia', dict(fouls='1'), dict()),
+                 ('null frente a inválido', dict(fouls=None), dict(fouls=-1))]
+        for nombre, antiguas, nuevas in casos:
+            with self.subTest(nombre):
+                a, _ = self.dos_versiones(antiguas, nuevas)
+                self.assertEqual(a['stats']['fouls']['reason'], 'version_conflict')
+                self.assertIn('stat_version_conflict', a['issues'])
+                self.assertEqual(a['stats']['passes']['value'], 20)
+        # El mismo null en ambas versiones no es un desacuerdo: es lo que dice la fuente.
+        a, _ = self.dos_versiones(dict(fouls=None, totalContest=3), dict(fouls=None, totalContest=3, wonContest=1))
+        self.assertEqual((a['issues'], a['stats']['fouls']['reason']), ([], 'reported_null'))
+
+    def test_valores_explicitos_distintos_siguen_en_conflicto(self):
+        a, _ = self.dos_versiones(dict(fouls=1), dict(fouls=2))
+        self.assertEqual(a['stats']['fouls']['reason'], 'version_conflict')
+        # Ceros explícitos añadidos no ocultan que otra clave del grupo cambió de valor.
+        a, _ = self.dos_versiones(dict(totalShots=2, blockedScoringAttempt=2), dict(totalShots=3, blockedScoringAttempt=2, shotOffTarget=0))
+        self.assertEqual(a['stats']['shots']['reason'], 'version_conflict')
+
+    def test_versiones_que_juntas_incumplen_las_relaciones_del_grupo(self):
+        # Una da 1 a puerta y 1 fuera; la otra, 1 fuera y 1 bloqueado: juntas suman 3 de 2 tiros.
+        a, _ = self.dos_versiones(dict(totalShots=2, onTargetScoringAttempt=1, shotOffTarget=1),
+                                  dict(totalShots=2, shotOffTarget=1, blockedScoringAttempt=1))
+        self.assertEqual({a['stats'][m]['reason'] for m in ('shots', 'shots_on_target')}, {'version_conflict'})
+        self.assertEqual(a['stats']['passes']['value'], 20)
+        [evidencia] = [e for e in a['evidence'] if e['issue'] == 'stat_version_conflict']
+        self.assertEqual(len(evidencia['fields']['lineup_versions']), 2)
+        # Regates ganados de una versión por encima de los intentados de la otra.
+        a, _ = self.dos_versiones(dict(totalContest=2), dict(wonContest=3))
+        self.assertEqual(a['stats']['dribbles_won']['reason'], 'version_conflict')
+
+    def test_la_seleccion_y_los_originales_se_conservan(self):
+        _, datos = self.dos_versiones(dict(totalShots=2), dict(totalShots=2, fouls=0))
+        todas = datos['originales'][(100, 'lineups')]['todas']
+        self.assertEqual([r['fetched_at'] for r in todas], ['2026-10-21T12:00:00+00:00', '2026-10-27T13:00:00+00:00'])
+        self.assertEqual(datos['originales'][(100, 'lineups')]['registro']['fetched_at'], '2026-10-27T13:00:00+00:00')
+        [d] = [d for d in datos['discrepancias'] if d['key'] == 'lineups']
+        self.assertEqual(d['reasons'], ['comparable_versions_differ'])
+
     def test_t17_goles_y_asistencias_no_cambian(self):
         a = alineacion([entrada(1, JAEN, totalShots=2, blockedScoringAttempt=2, goalAssist=0)], [entrada(3, RIVAL)])
         actuacion = api.actuaciones_del_partido(self.servidos(('2026-10-21T12:00:00+00:00', a)), 100)[1]

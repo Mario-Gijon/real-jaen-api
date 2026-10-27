@@ -121,10 +121,18 @@ saltarse la comprobación.
   confirmada sobre la preliminar). `discrepancias.json` conserva las demás. La API marca
   `lineup_versions_disagree` solo si difieren suplente, minutos o la existencia de estadísticas
   individuales; **no compara los valores**.
-- Propuesto: si hay al menos dos versiones distintas posteriores al partido (con minutos) y, para el
-  jugador, alguna clave del grupo difiere en valor o en presencia, el grupo queda `version_conflict`
-  con las versiones en la evidencia. Los demás grupos conservan su valor. Un desacuerdo de
-  participación sigue llevando a `unknown` (todas las métricas `participation_unknown`).
+- Conflicto (`conflictos_de_estadisticas`): con al menos dos versiones distintas posteriores al
+  partido (con minutos), el grupo del jugador queda `version_conflict`, con las versiones en la
+  evidencia, si alguna clave trae valores explícitos distintos, si un `null` o un valor inválido se
+  enfrenta a cualquier otra lectura (también a una ausencia: no son una omisión), o si los valores que
+  dan entre todas las versiones incumplen las relaciones del grupo (4.4; p. ej. una versión con 1 a
+  puerta y otra cuyas categorías complementarias ya agotan los tiros). Los demás grupos conservan su
+  valor. Un desacuerdo de participación sigue llevando a `unknown` (todas las métricas
+  `participation_unknown`).
+- No es conflicto que una versión omita una clave que otra da con el mismo valor válido (p. ej. la
+  alineación del 27-10 de 16599363, que añade ceros explícitos que la del 21-10 omitía). Se normaliza
+  la versión seleccionada, sin tomar valores de otra: si la seleccionada omite la clave, `not_reported`.
+  Decisión del 27-10-2026, sustituye a «difiere en valor o en presencia».
 - En la importación activa no hay ningún caso (`discrepancias.json` vacío; todas las versiones de
   alineación de cada partido tienen la misma huella).
 
