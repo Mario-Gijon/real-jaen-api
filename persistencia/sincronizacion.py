@@ -68,6 +68,14 @@ def estado_deseado(c, nuevos=None, run=None, codigo=''):
         originales += nuevos.originales
         fichas += nuevos.fichas
         manifiesto = dict(manifiesto, exports=nuevos.manifiesto(manifiesto['exports']))
+    # `content` guarda la primera representación de cada huella semántica. Se deriva de esa misma
+    # representación también antes del COMMIT: un orden de claves equivalente en la entrada no debe
+    # cambiar call_up_stat.ordinal y discrepar después de la sincronización en seco, que lee `content`.
+    textos = {h: json.loads(texto) for h, texto in c.exec_driver_sql('SELECT hash, payload_text FROM content')}
+    def enlazar(registro):
+        payload = textos.setdefault(registro['content_hash'], registro['payload'])
+        return dict(registro, payload=payload)
+    originales, fichas = list(map(enlazar, originales)), list(map(enlazar, fichas))
     try:
         salida = importar.ensamblar(originales, copy.deepcopy(manifiesto['exports']), fichas, manifiesto['imported_at'],
                                     con_fichas=True)

@@ -537,6 +537,10 @@ ids externos y sus FK resueltas, `time`, `added_time`.
   - Si dos observaciones con el mismo contenido canónico difieren solo en el orden de claves,
     comparten fila con el orden de la primera. La diferencia se detecta por `text_sha256` y se
     documenta; en los datos activos no ocurre.
+  - La sincronización deriva convocatorias y `call_up_stat.ordinal` de esa representación guardada,
+    no del orden de la entrada nueva: si no, la importación calculaba ordinales con un orden y la
+    verificación previa al COMMIT los releía con el otro, y rechazaba la importación (detectado el
+    27-10-2026 con 3403 grupos discrepantes). Prueba: `tests/test_orden_payload.py`.
 - **Números**:
   - el texto guardado es el que produce `json.dumps` del valor leído, igual que hoy al servir;
   - los enteros grandes y los decimales se conservan (Python serializa los `float` con su
