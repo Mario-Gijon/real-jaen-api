@@ -1,0 +1,105 @@
+{
+  "status": "APPROVED_FIVE_RULE_PROFILE_SANDBOX_PASSED_RECOVERY_FAILED_STOPPED",
+  "date": "2026-10-26",
+  "platform": "Docker Desktop Linux x86_64 only",
+  "profile": "docker29.5.2-cap0-amd64.full-candidate.approved-probe.json",
+  "profile_sha256": "e340dc1b775e61332d5f9dcf63c6bb2a2f614a02fda2555fad363b2bd4d6fe1b",
+  "delta": "full-candidate.from-initial.delta.json",
+  "image": "sha256:e13cef0eff2f0d87e8023f149eebf1fdd2682613a4788611c3f9c1efcb856b62",
+  "rules_added": 5,
+  "no_other_policy_changes": true,
+  "untraced_only": true,
+  "sandbox": {
+    "chrome_status": "Sandbox Status\nLayer 1 Sandbox\tNamespace\nPID namespaces\tYes\nNetwork namespaces\tYes\nSeccomp-BPF sandbox\tYes\nSeccomp-BPF sandbox supports TSYNC\tYes\nPtrace Protection with Yama LSM (Broker)\tYes\nPtrace Protection with Yama LSM (Non-broker)\tNo\n\nYou are adequately sandboxed.",
+    "browser_seccomp_filters": 2,
+    "renderer_seccomp_filters": 3,
+    "renderer_nspid_depth": [
+      3
+    ],
+    "renderer_effective_caps": 0,
+    "nnp": 1,
+    "namespace_symlinks": "Some sandboxed processes deny readlink; PID nesting corroborated by NSpid, see full evidence",
+    "intermediate_zygote_caps": "A nested-userns zygote has namespace-local CAP_SYS_ADMIN before dropping privileges; no container or host capability was granted"
+  },
+  "phases": [
+    {
+      "phase": "first",
+      "exit_code": 0,
+      "container": "rj-full-accept-0e9889291e-first",
+      "runtime_pid_after": 0,
+      "ok": true
+    },
+    {
+      "phase": "cookie-recreated",
+      "exit_code": 0,
+      "container": "rj-full-accept-0e9889291e-cookie-recreated",
+      "runtime_pid_after": 0,
+      "ok": true
+    },
+    {
+      "phase": "sigterm",
+      "exit_code": 0,
+      "container": "rj-full-accept-0e9889291e-sigterm",
+      "runtime_pid_after": 0,
+      "ok": true
+    },
+    {
+      "phase": "sigkill",
+      "exit_code": 137,
+      "container": "rj-full-accept-0e9889291e-sigkill",
+      "runtime_pid_after": 0,
+      "ok": true
+    },
+    {
+      "phase": "recovered",
+      "exit_code": 1,
+      "ok": false,
+      "container": "rj-full-accept-0e9889291e-recovered",
+      "runtime_pid_after": 0,
+      "error": "AssertionError: Browser profile cookie did not persist",
+      "children_closed": true
+    }
+  ],
+  "sigkill_host_pids_all_absent": true,
+  "sigkill_host_pids_count": 16,
+  "recovery_diagnosis": "Profile recovery after SIGKILL: scraper selects empty secondary profile for lock from different hostname",
+  "cookie_loss_demonstrated": false,
+  "scraper_revision": "611e436a1528b0f487aa56a045f023e8ae8ae098",
+  "additional_permissions": false,
+  "integration": false,
+  "retained_exclusive_volume": "rj-full-accept-0e9889291e-profile",
+  "evidence_sha256": {
+    "cookie-recreated.inspect.json": "c114b7cc5d4b56dcf8b26bf69382c0bca8de44d87de9d26c972470a9e0869319",
+    "cookie-recreated.json": "8d16627bbfbd6e4454996de048d409ac1111df3f368465fefe4b173b7b0fd647",
+    "cookie-recreated.log": "872462b06b827d4cea97a59bfd80e8d8a4846d3d17f188b262a2e99bb5263e7e",
+    "docker-info.txt": "af78fe64b5ec87eeae12861a5ba8f801f2dda8db4dae91b6b8496ea400f110bf",
+    "docker-version.txt": "78e70d8740fb2d4ba1c5954bc96c8008bb302a8d1de5ad5a624b984bf71c31b5",
+    "earlier-bridge.py": "f863292b7f317c835c0317521f06c33baa8a5c75e39d065905fde986f2c0d316",
+    "earlier-first-untraced.json": "552127ee86aa7883a523ed41861f102d04a15ea05492a91fd516258d5df22bac",
+    "earlier-first-untraced.log": "e2a1f0a7b789d433f7cfa674fa4f6f00146a7d62e4bea9437f08a23593c0c8af",
+    "earlier-inspect.json": "c4dbedc6aae9d6f49a9d5d66a6eea5be3c55bc0f26ce298eb8d4e091424ce084",
+    "earlier-proc-cookie-recreated.json": "7c73a4d1920b0bb4238f0a2388190a6f1500399293dee9213407d4d56711e8c5",
+    "earlier-profile_lock.py": "2831ee23ba53eddba111c48af47d37997bf37faabd728ac27bb67ae13fd18924",
+    "first.inspect.json": "52d73d9b641e247d633f91771abb555940a24c288dcca2feb3b2430ff877609f",
+    "first.json": "3761f18e9ecd71ea2ac06bd9cc19f40afe6013e8d8561f6b7cdaf3e9de7f0612",
+    "first.log": "e034b77b2c6a5d5a149613035410f5ec41fa6c8f5deaa6e6a5e16e0ce5118a11",
+    "offline_probe.executed.py": "2f419df7c4e262ae21c175034e78949ecf614f6322040d17ac800c71245f51c1",
+    "recovered.inspect.json": "c9aadc493ee754919405fac042a5f48932058fcc69ce6a1c8b9bfee7d9c2a5d7",
+    "recovered.json": "733c5db2fa233072679883a5cb4e4e16c34b4ab5094554be85f0a0bc1e187908",
+    "recovered.log": "bcd4b2b8135d4bacadce6b61cb7c79ea7e543b89b2ad2e1f51af665054d00410",
+    "results.json": "baea22938d8f6097c43439b290bca75a305fc6ddcd376d8b4481102cea437487",
+    "runner.executed.py": "5d702fcb2b71e67bfbbf166966e852269d9966a10e553bdc1333bca523c21289",
+    "sigkill-entry.py": "2d251a18ee413c6ccc6a1c4492526891f1310c59d333a1cd88424fa70abb85ba",
+    "sigkill-host-pids-after.txt": "a83d72bca94a2fc3bcb2696c4524488a7d66875ec2508f6e8800abe44cc4c78d",
+    "sigkill.inspect.json": "a4e242639024fee5dd061145b8e1cafb6dc0c6ac9a831edfddd28aac13be669e",
+    "sigkill.log": "0b5cd36c6436bcb44d405a42150bae30dbd91c80aec041a85790a933a0639efe",
+    "sigkill.ready.json": "87ae14c50bfb8189b401c69cb1b71fb7f392e4054877df946ca9c678da90b174",
+    "sigkill.top-before.txt": "ec2ad3fe34a111c82bc57ea151b297dfff9def7d075947ba05789e0d33ee6975",
+    "sigterm-entry.py": "9c21cb60d8d73a8382fc957eddae28d53c71bf0cc996800977ae20fa2541489f",
+    "sigterm.inspect.json": "961fc7fbc46b26804fa27935922a0d01dfc99d1433a2c9913434456844e80592",
+    "sigterm.json": "47fdd12b78a18d7cead7c8baa90f80d1105bee9950d12fc0930dcc55cf69ce3d",
+    "sigterm.log": "c41d5065e8f9b73bb01fa73c55170f579cee964d1e895162a78a86494339e2bd",
+    "sigterm.ready.json": "da4a24fa8905bf4fde77ae0471814e78ab4f0bee765e410d634cf44f32a1fe4a",
+    "sigterm.top-before.txt": "049eb44ab5c2b4174a9c9afc0700bfdaf3463d9763d22e8fe1e4c8bd7bf5f9a2"
+  }
+}

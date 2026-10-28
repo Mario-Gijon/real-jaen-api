@@ -1,0 +1,76 @@
+{
+  "date": "2026-10-26",
+  "instrument": "PTRACE_TRACEME + PTRACE_GET_SYSCALL_INFO, own fixed Chromium child",
+  "extra_permissions": false,
+  "source_profile_sha256": "fa328590879c20500f0f763f20f59e134d2d5ac0991f4a0aa0ab1b7af045e68c",
+  "observed_blocking_call": {
+    "event": "syscall",
+    "pid": 25,
+    "syscall": "clone",
+    "nr": 56,
+    "args": [
+      268435473,
+      140726311737168,
+      0,
+      0,
+      0,
+      0
+    ],
+    "args_hex": [
+      "0x10000011",
+      "0x7ffd65d25750",
+      "0x0",
+      "0x0",
+      "0x0",
+      "0x0"
+    ],
+    "result": -1,
+    "errno": 1
+  },
+  "container_mask": "0x7e020000",
+  "namespace_bits_observed": "0x10000000",
+  "browser_failure": "No usable sandbox",
+  "children_closed": true,
+  "local_requests": [],
+  "ptrace_interference": "Crash handler cannot attach to a process already traced; do not treat that EPERM as a new sandbox permission requirement",
+  "limitations": "Tracing can affect sandbox behaviour; the untraced control has the same fatal error, and the effective seccomp rule independently denies the observed call",
+  "trace_complete": {
+    "event": "complete",
+    "main_code": 134,
+    "elapsed": 0.6123464180000155
+  },
+  "proposed_additional_rule": {
+    "names": [
+      "clone"
+    ],
+    "action": "SCMP_ACT_ALLOW",
+    "args": [
+      {
+        "index": 0,
+        "value": 268435473,
+        "op": "SCMP_CMP_EQ"
+      }
+    ]
+  },
+  "proposal_applied": false,
+  "evidence_hashes": {
+    "browser-complete.log": "b960e2ae7a332e2df70c2cfdac0bdae924264d7408ac56b3a866a398e99c2159",
+    "chromium-syscalls.jsonl": "6968149d81afb72ff7f7aab17efe7590e27fe37f94906a3e885c57ccf62c868c",
+    "traced-browser.json": "5399bfc2f001037c17a8cf29a7e25ff22b96ae14ae5f765f4df6a630b1aa3483",
+    "container.json": "e60e15c2d968712096ad7d77251086fef3ad5dcddde64e14f7060e7ac8b3287a"
+  },
+  "runtime_security_checked": {
+    "uid": "10001:10001",
+    "cap_drop": [
+      "ALL"
+    ],
+    "cap_add": [],
+    "network": "none",
+    "privileged": false,
+    "no_new_privileges": true,
+    "mounts": [
+      "/acquisition"
+    ],
+    "applied_profile_is_previous_approved_only": true
+  }
+}

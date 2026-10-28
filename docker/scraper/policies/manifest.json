@@ -1,0 +1,12 @@
+{
+  "scope": "diagnostic-only-not-production",
+  "date": "2026-10-26",
+  "reviewed_baseline_original_sha256": "7f2cbfb3a0ca22c4f77634c0576b1547e15ef8e04c5058891586b1fef4ea8671",
+  "baseline_normalization": "CRLF to LF only; JSON object unchanged",
+  "files": {
+    "docker29.5.2-cap0-amd64.baseline.json": "86ebd1c8740202bd6c8317c40a6e5d7eb0e259ce81b0bfbb968815f65c28d619",
+    "docker29.5.2-cap0-amd64.unshare-user.probe.json": "fa328590879c20500f0f763f20f59e134d2d5ac0991f4a0aa0ab1b7af045e68c",
+    "unshare-user.delta.json": "a5df64ea84620c05fc88feee133bdf4c9a82d8732970133e98b1551bd228febd",
+    "unshare-user.results.json": "b09b04c0f6aa8a51bbf895173d5d697dbc79d3a1c6d00c294c6569692fb82be3"
+  }
+}

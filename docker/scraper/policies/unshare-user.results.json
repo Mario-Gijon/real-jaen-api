@@ -1,0 +1,74 @@
+{
+  "date": "2026-10-26",
+  "scope": "isolated-diagnostic-only",
+  "applied_to_production": false,
+  "profile_sha256": "fa328590879c20500f0f763f20f59e134d2d5ac0991f4a0aa0ab1b7af045e68c",
+  "baseline_sha256": "86ebd1c8740202bd6c8317c40a6e5d7eb0e259ce81b0bfbb968815f65c28d619",
+  "checks": {
+    "container.json": {
+      "uid": "10001:10001",
+      "network": "none",
+      "cap_add": [],
+      "cap_drop": [
+        "ALL"
+      ],
+      "no_new_privileges": true,
+      "privileged": false,
+      "mount_destinations": [],
+      "effective_profile_matches": true
+    },
+    "browser-container.json": {
+      "uid": "10001:10001",
+      "network": "none",
+      "cap_add": [],
+      "cap_drop": [
+        "ALL"
+      ],
+      "no_new_privileges": true,
+      "privileged": false,
+      "mount_destinations": [
+        "/acquisition"
+      ],
+      "effective_profile_matches": true
+    }
+  },
+  "parent_process_status": {
+    "Name": "python",
+    "Uid": "10001\t10001\t10001\t10001",
+    "Gid": "10001\t10001\t10001\t10001",
+    "CapInh": "0000000000000000",
+    "CapPrm": "0000000000000000",
+    "CapEff": "0000000000000000",
+    "CapBnd": "0000000000000000",
+    "NoNewPrivs": "1",
+    "Seccomp": "2",
+    "Seccomp_filters": "2"
+  },
+  "user_namespace_probes": {
+    "no_flags": {
+      "ok": false,
+      "errno": 1,
+      "error": "[Errno 1] Operation not permitted"
+    },
+    "fs_only": {
+      "ok": false,
+      "errno": 1,
+      "error": "[Errno 1] Operation not permitted"
+    },
+    "user": {
+      "ok": true
+    }
+  },
+  "browser": {
+    "ok": false,
+    "error": "No usable sandbox / Chromium sandboxing failed",
+    "local_requests": [],
+    "children_closed": true,
+    "children_after_close": {},
+    "cookie_persistence_validated": false,
+    "functional_sigterm_validated": false
+  },
+  "stopped_before_any_permission_expansion": true,
+  "reviewed_baseline_original_sha256": "7f2cbfb3a0ca22c4f77634c0576b1547e15ef8e04c5058891586b1fef4ea8671",
+  "baseline_normalization": "CRLF to LF only; JSON object unchanged"
+}

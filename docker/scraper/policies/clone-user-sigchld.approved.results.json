@@ -1,0 +1,74 @@
+{
+  "status": "APPROVED_DIAGNOSTIC_APPLIED_FAILED_STOPPED",
+  "date": "2026-10-26",
+  "profile": "docker29.5.2-cap0-amd64.clone-user-sigchld.approved-probe.json",
+  "profile_sha256": "403d1881298cd11b87db0fdf0e98d9c7df7cdd2c893aec91fb1d47106127477b",
+  "baseline_delta": "clone-user-sigchld.approved.from-initial.delta.json",
+  "image": "sha256:e13cef0eff2f0d87e8023f149eebf1fdd2682613a4788611c3f9c1efcb856b62",
+  "container": "/rj-clone-approved-999ad7fb5e",
+  "single_container": true,
+  "effective_profile_verified": true,
+  "security": {
+    "machine": "x86_64",
+    "uid": 10001,
+    "elf_class": 2,
+    "elf_machine": 62,
+    "sigchld": 17,
+    "status": {
+      "CapInh": "0000000000000000",
+      "CapPrm": "0000000000000000",
+      "CapEff": "0000000000000000",
+      "CapBnd": "0000000000000000",
+      "NoNewPrivs": "1",
+      "Seccomp": "2"
+    }
+  },
+  "untraced": "SIGTRAP before any local request; children closed",
+  "trace_clone_10000011": "success",
+  "trace_unshare_10000000": "success",
+  "next_denial": [
+    {
+      "event": "syscall",
+      "pid": 52,
+      "syscall": "clone",
+      "nr": 56,
+      "args": [
+        1879048209,
+        140733761622784,
+        0,
+        0,
+        0,
+        0
+      ],
+      "args_hex": [
+        "0x70000011",
+        "0x7fff21de9300",
+        "0x0",
+        "0x0",
+        "0x0",
+        "0x0"
+      ],
+      "result": -1,
+      "errno": 1
+    }
+  ],
+  "trace_complete": {
+    "event": "complete",
+    "main_code": 133,
+    "elapsed": 0.48376365000058286
+  },
+  "browser_sandbox_active_verified": false,
+  "cookies_verified": false,
+  "sigterm_browser_verified": false,
+  "additional_exceptions_applied": false,
+  "evidence_sha256": {
+    "architecture-security.json": "b44ab53c9392015a3673188d852bb6a11368b56b5f5d7781be4a3f33d60f3ec7",
+    "chromium-syscalls.jsonl": "c855e9bdefb56b85c0e94a0b6da5094569c59b081e41f6d7eb3dd995b8c241f3",
+    "first-untraced.json": "2c85b62e84385ab6f6e07b6bb2d82d8eead3c4499ec69e784073a84e920ca1c7",
+    "first-untraced.log": "3c19e8d4eec06ebd290e609c41077b2ffbb769ee092f2c740ea777f1987d4caa",
+    "inspect.json": "a7fa2ddd2a07303020553a1eb8b1b24b274a63cd0a9b1081e4916e4482c154b9",
+    "next-block-traced.log": "308770f4f5e61e84e219f239ff1c784c0c1a24efbc55621a53345c8bc5eb0973",
+    "supervisor.py": "c26b1440c8929536910ed98c62eca6c0cdc23a012c346005d7e1048b4c710758",
+    "traced-browser.json": "d64cf217e4aba2857bd16fb0ae2e78b2a63206c1a05ea11a34ace1c357613b95"
+  }
+}

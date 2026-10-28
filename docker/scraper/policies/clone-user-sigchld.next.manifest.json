@@ -1,0 +1,9 @@
+{
+  "status": "PROPOSED_NOT_APPLIED",
+  "source_profile_sha256": "fa328590879c20500f0f763f20f59e134d2d5ac0991f4a0aa0ab1b7af045e68c",
+  "files": {
+    "docker29.5.2-cap0-amd64.clone-user-sigchld.next.proposed.json": "403d1881298cd11b87db0fdf0e98d9c7df7cdd2c893aec91fb1d47106127477b",
+    "clone-user-sigchld.next.delta.json": "8777ce64936820e46ceafed60e1c476819e24c846f931e9562acd4d726ad6763",
+    "clone-user-sigchld.trace-results.json": "f6d0f341cea0ba348a7fe0aa5084406a80c842d2b6966a9f606cb3137c0386e5"
+  }
+}
