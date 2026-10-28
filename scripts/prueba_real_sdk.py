@@ -99,7 +99,8 @@ def build(a):
     assert not mismatch, mismatch
     listing = docker('run', '--rm', '--pull', 'never', '--network', 'none', '--entrypoint', 'sh', image['Id'], '-c',
                      'find /opt/app -type f | sort; ls -d /opt/checks /opt/probe 2>/dev/null; true').stdout.split()
-    foreign = [f for f in listing if f not in IMAGE_PATHS.values()]
+    # El destino runtime copia también el .dockerignore de su contexto (texto, no código).
+    foreign = [f for f in listing if f not in IMAGE_PATHS.values() and f != '/opt/app/acquisition/.dockerignore']
     assert not foreign, foreign  # nada de pilotos de prueba, ensayos, sitios simulados ni instrumentos
     rev = subprocess.run(['git', '-C', str(a.scraper_source), 'rev-parse', 'HEAD'], check=True, capture_output=True,
                          text=True).stdout.strip()
