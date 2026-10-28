@@ -1,0 +1,85 @@
+# Explicit isolated test stack of the acquisition service. Never merge this file with the habitual Compose.
+# Internal network without egress. The acquisition service replays recorded responses from a local site inside its
+# own container (provider fixture-site, test image only); the backend client works on a copy of an inactive snapshot.
+services:
+  profile-admin:
+    image: ${RJ_TEST_ACQUISITION_IMAGE:?Set a local test acquisition image}
+    pull_policy: never
+    entrypoint: [python, -B, -m, acquisition.admin]
+    init: true
+    network_mode: none
+    user: "10001:10001"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true", "seccomp=./seccomp-linux-amd64.json"]
+    shm_size: 512m
+    volumes: ["profiles:/profiles"]
+  acquisition:
+    image: ${RJ_TEST_ACQUISITION_IMAGE:?Set a local test acquisition image}
+    pull_policy: never
+    entrypoint: [python, -B, -m, acquisition.service]
+    init: true
+    user: "10001:10001"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true", "seccomp=./seccomp-linux-amd64.json"]
+    shm_size: 512m
+    mem_limit: 2g
+    pids_limit: 512
+    environment:
+      ACQ_TEST_MODE: ${RJ_TEST_MODE:?Set explicitly to 1 only for the isolated test stack}
+      ACQ_PROVIDER: fixture-site
+      ACQ_FIXTURE_ROUTES: /fixtures/routes.json
+      ACQ_FIXTURE_SCENARIO: ${RJ_TEST_SCENARIO:-challenge}
+      ACQ_SECRET_FILE: /run/secrets/acquisition-token
+    volumes:
+      - profiles:/profiles
+      - jobs:/acquisition-jobs
+      - type: bind
+        source: ${RJ_TEST_SECRET_FILE:?Set temporary secret file outside code and images}
+        target: /run/secrets/acquisition-token
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${RJ_TEST_ROUTES:?Set the recorded routes file}
+        target: /fixtures/routes.json
+        read_only: true
+        bind: {create_host_path: false}
+    networks: [control]
+  backend-client:
+    image: ${RJ_TEST_BACKEND_IMAGE:?Set a local test backend image}
+    pull_policy: never
+    init: true
+    user: "10001:10001"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    volumes:
+      - state:/state
+      - type: bind
+        source: ${RJ_TEST_SECRET_FILE:?Set temporary secret file outside code and images}
+        target: /run/secrets/acquisition-token
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${RJ_TEST_SNAPSHOT:?Set an identified inactive snapshot}
+        target: /imports/snapshot.sqlite
+        read_only: true
+        bind: {create_host_path: false}
+      - type: volume
+        source: evidence
+        target: /evidence
+        read_only: true
+    networks: [control]
+networks:
+  control: {internal: true}
+volumes:
+  profiles:
+    external: true
+    name: ${RJ_TEST_PROFILE_VOLUME:?New exclusive test volume required}
+  jobs:
+    external: true
+    name: ${RJ_TEST_JOBS_VOLUME:?New exclusive test volume required}
+  state:
+    external: true
+    name: ${RJ_TEST_STATE_VOLUME:?New exclusive test volume required}
+  evidence:
+    external: true
+    name: ${RJ_TEST_EVIDENCE_VOLUME:?Exchange volume of the real run, mounted read-only}

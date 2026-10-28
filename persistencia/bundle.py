@@ -1,4 +1,10 @@
-"""Pilot v2 wire protocol. Standard library + existing API rules; no scraper/browser imports."""
+"""Acquisition bundle format: inventory of the current generation and bundle verification.
+
+Shared by the backend (receiver) and the acquisition service (producer). Standard library and the existing API
+rules only; no scraper/browser imports. The wire identifiers (contract 'pilot-v2', recipe
+'sofascore-pilot-16599363-v1') come from the pilot that validated this format and stay unchanged, so sealed
+evidence such as the real bundle of 2026-10-28 remains verifiable. See docs/contrato-adquisicion-interno.md.
+"""
 import base64
 from datetime import datetime
 import hashlib

@@ -33,6 +33,27 @@ def load_downloaded(folder):
     return routes
 
 
+def routes_from_bundle(body):
+    """Cuerpos originales de un bundle sellado (provenance.jsonl): la última respuesta correcta de cada ruta, byte a
+    byte como la recibió el productor."""
+    import base64
+    envelope = json.loads(body)
+    rows = [json.loads(line) for line in base64.b64decode(envelope['files']['provenance.jsonl']).splitlines()]
+    return {row['path']: base64.b64decode(row['body_b64']) for row in sorted(rows, key=lambda r: r['number'])}
+
+
+def save_routes(routes, path):
+    import base64
+    from pathlib import Path
+    Path(path).write_text(json.dumps({k: base64.b64encode(v).decode() for k, v in sorted(routes.items())}), encoding='utf-8')
+
+
+def routes_from_file(path):
+    import base64
+    from pathlib import Path
+    return {k: base64.b64decode(v) for k, v in json.loads(Path(path).read_text(encoding='utf-8')).items()}
+
+
 class FixtureSite:
     def __init__(self, routes, *, scenario='challenge', cert=None):
         self.routes, self.scenario = dict(routes), scenario

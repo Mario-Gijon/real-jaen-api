@@ -1,0 +1,16 @@
+{
+  "descripcion": "Huellas de producer_rules() (acquisition/recipe.py) aprobadas por revisión. El backend rechaza cualquier bundle con otra huella. Una entrada nueva exige revisar el código del productor que la genera. 'generacion' limita una aprobación a los bundles de esa generación. Está fuera de persistencia/ a propósito: aprobar un productor no cambia las reglas de importación ni la huella que el coordinador exige a la base.",
+  "aprobados": [
+    {
+      "rules_sha256": "e18eba33cfbfd11b6ac39c6046ddacfe4436bb8f0b40775ba6b770f8a8c4d65a",
+      "productor": "acquisition/{pilot_bundle,pilot_transport,sofascore_offline,sdk_adapter,sdk_transport}.py en el commit 69ac18f",
+      "uso": "Solo el bundle real del 28-10-2026 (rj-real-sdk-37b257e89b03), en su propia generación",
+      "generacion": "0e80fdde-95d9-44b0-a2ea-8426bce14b03"
+    },
+    {
+      "rules_sha256": "836b85894c1fa0cd70da0c3187db3fe37f537af5e7ba1ae8a16738cd6fb13ceb",
+      "productor": "acquisition/{recipe,transport,sdk_adapter,job}.py del servicio definitivo",
+      "uso": "Servicio de adquisición"
+    }
+  ]
+}

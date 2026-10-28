@@ -1,93 +1,203 @@
-"""Contract tests with only local HTTP and local fixtures; no sports database."""
-import base64
+"""Contract of the acquisition service and its backend client: local HTTP, a fake job runner, no SDK or network.
+
+Runs in the acquisition test image (the service needs fcntl and persistencia.bundle)."""
 import hashlib
-import io
 import json
 from pathlib import Path
+import shutil
 import tempfile
 import threading
+import time
 import unittest
 import urllib.error
 import urllib.request
 import uuid
-from acquisition.service import Jobs,Server,PREFIX,encoded
-from acquisition_simulated import Provider
-from persistencia.adquisicion import Cliente,AdquisicionRechazada,validar_bundle
+
+from acquisition.service import Jobs, Server, PREFIX, configuration
+from persistencia.adquisicion import AdquisicionRechazada, Cliente
+from persistencia.bundle import fingerprint
+
+RECIPE = 'sofascore-pilot-16599363-v1'
+
+
+def baseline(generation=None):
+    value = dict(schema=1, generation_id=generation or str(uuid.uuid4()), teams=[2841, 135672, *range(90001, 90019)],
+                 events=[dict(id=16599363, current=True, replaced_by=None, home=2841, away=135672, status='finished',
+                              tournament_id=94191, season_id=97382)], records=[])
+    return dict(value, sha256=fingerprint(value))
+
+
+class Runner:
+    """Writes what acquisition.job writes. mode: ok, fail, wait (until cancelled or released), writable, mismatch."""
+    def __init__(self):
+        self.mode, self.calls, self.release = 'ok', 0, threading.Event()
+
+    def __call__(self, folder, spec, cancelled):
+        self.calls += 1
+        if self.mode == 'wait':
+            while not cancelled() and not self.release.is_set():
+                time.sleep(.02)
+            if cancelled():
+                return 1
+        if self.mode == 'fail':
+            (folder / 'report.json').write_text(json.dumps(dict(error='Stopped: 403', descriptor=None)))
+            return 1
+        body = json.dumps(dict(job=spec['job_id'], request=spec['request_id'])).encode()
+        (folder / 'bundle.json').write_bytes(body)
+        if self.mode != 'writable':
+            (folder / 'bundle.json').chmod(0o400)
+        descriptor = dict(bytes=len(body), sha256=hashlib.sha256(body).hexdigest())
+        if self.mode == 'mismatch':
+            descriptor['sha256'] = '0' * 64
+        (folder / 'report.json').write_text(json.dumps(dict(descriptor=descriptor, sends=[], requests=[],
+                                                             connections=dict(sockets=[]), browser=dict(total=0))))
+        return 0
+
 
 class Protocol(unittest.TestCase):
     def setUp(self):
-        self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
-        root=Path(self.temp.name);self.token=b'a'*64
-        self.file=root/'secret';self.file.write_bytes(self.token)
-        self.jobs=Jobs(root/'jobs',Provider());self.addCleanup(self.jobs.close)
-        self.server=Server(('127.0.0.1',0),self.jobs,self.token)
-        self.thread=threading.Thread(target=self.server.serve_forever,daemon=True);self.thread.start()
-        self.addCleanup(self.server.server_close);self.addCleanup(self.server.shutdown)
-        self.url='http://127.0.0.1:'+str(self.server.server_port)
-        self.client=Cliente(self.url,self.file,allow_simulated=True)
-    def request(self,path,body,auth=None):
-        req=urllib.request.Request(self.url+path,data=json.dumps(body).encode(),headers={'Authorization':auth or 'Bearer '+self.token.decode()})
-        return urllib.request.urlopen(req,timeout=5)
-    def completed(self,recipe='fixture-complete-v1'):
-        request=str(uuid.uuid4());job=self.client.solicitar(request,recipe)
-        state=self.client.esperar(job['id']);return request,state
-    def bundle(self):
-        request,state=self.completed();raw,etag=self.client._http('GET','/'+state['id']+'/bundle',bundle=True)
-        self.assertEqual(etag,state['bundle']['sha256'])
-        request_obj=urllib.request.Request(self.url+PREFIX+'/'+state['id']+'/bundle',headers={'Authorization':'Bearer '+self.token.decode()})
-        with urllib.request.urlopen(request_obj,timeout=5) as response:self.assertEqual(response.headers['ETag'],chr(34)+etag+chr(34))
-        return raw,state,dict(job_id=state['id'],request_id=request,recipe_id=state['recipe_id'])
-    def test_authorization_wrong_secret_and_no_echo(self):
-        with self.assertRaises(urllib.error.HTTPError) as error:self.request(PREFIX,{},'Bearer wrong-secret')
-        self.assertEqual(error.exception.code,401)
-        self.assertNotIn(self.token,error.exception.read())
-    def test_arbitrary_parameters_rejected(self):
-        for field in ('command','url','path'):
-            with self.assertRaises(urllib.error.HTTPError) as error:
-                self.request(PREFIX,{'request_id':str(uuid.uuid4()),'recipe_id':'fixture-complete-v1',field:'ignored'})
-            self.assertEqual(error.exception.code,400)
-    def test_valid_bundle_and_partial_rejected(self):
-        raw,state,ids=self.bundle();data,m=validar_bundle(raw,state['bundle'],**ids)
-        self.assertTrue(data and m['is_simulated'])
-        request,state=self.completed('fixture-partial-v1');body,_=self.client._http('GET','/'+state['id']+'/bundle',bundle=True)
-        with self.assertRaises(AdquisicionRechazada):validar_bundle(body,state['bundle'],job_id=state['id'],request_id=request,recipe_id=state['recipe_id'])
-    def test_mutation_digest_rejected(self):
-        raw,state,ids=self.bundle()
-        with self.assertRaises(AdquisicionRechazada):validar_bundle(raw+b' ',state['bundle'],**ids)
-    def test_rehashed_invalid_files_paths_and_coverage_rejected(self):
-        raw,state,ids=self.bundle()
-        for mutation in ('path','hash','content','extra','coverage','errors','identity'):
-            envelope=json.loads(raw)
-            if mutation=='path':envelope['manifest']['files'][0]['name']='../../escape'
-            if mutation=='hash':envelope['manifest']['files'][0]['sha256']='0'*64
-            if mutation=='content':envelope['files']['raw.jsonl']=base64.b64encode(b'changed').decode()
-            if mutation=='extra':envelope['files']['extra']=envelope['files']['raw.jsonl']
-            if mutation=='coverage':envelope['manifest']['coverage']='partial'
-            if mutation=='errors':envelope['manifest']['errors']=[{'code':'download_failed'}]
-            if mutation=='identity':envelope['manifest']['request_id']=str(uuid.uuid4())
-            body=encoded(envelope);descriptor={'bytes':len(body),'sha256':hashlib.sha256(body).hexdigest()}
-            with self.subTest(mutation=mutation),self.assertRaises(AdquisicionRechazada):validar_bundle(body,descriptor,**ids)
-    def test_duplicate_json_keys_rejected(self):
-        raw,state,ids=self.bundle();body=raw.replace(b'{',b'{"files":{},',1)
-        desc={'bytes':len(body),'sha256':hashlib.sha256(body).hexdigest()}
-        with self.assertRaises(AdquisicionRechazada):validar_bundle(body,desc,**ids)
-    def test_sealed_file_corruption_not_served(self):
-        raw,state,ids=self.bundle();path=self.jobs.root/'bundles'/(state['id']+'.json');path.chmod(0o600);path.write_bytes(raw+b'x')
-        with self.assertRaises(AdquisicionRechazada):self.client._http('GET','/'+state['id']+'/bundle',bundle=True)
-    def test_duplicate_terminal_requests_return_original(self):
-        request,state=self.completed();again=self.client.solicitar(request,'fixture-complete-v1')
-        self.assertEqual(again['id'],state['id']);self.assertEqual(again['bundle'],state['bundle'])
-    def test_different_recipe_same_request_conflicts(self):
-        request,state=self.completed()
-        with self.assertRaises(AdquisicionRechazada):self.client.solicitar(request,'fixture-fail-v1')
-    def test_failed_and_cancelled_never_provide_bundle(self):
-        req,failed=self.completed('fixture-fail-v1');self.assertEqual(failed['state'],'failed')
-        job=self.client.solicitar(str(uuid.uuid4()),'fixture-slow-v1');self.client.cancelar(job['id']);state=self.client.esperar(job['id'])
-        self.assertEqual(state['state'],'cancelled')
-        for state in (failed,state):
-            with self.assertRaises(AdquisicionRechazada):self.client._http('GET','/'+state['id']+'/bundle',bundle=True)
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.token = b'a' * 64
+        self.file = self.root / 'secret'
+        self.file.write_bytes(self.token)
+        self.servers = []
+        self.addCleanup(self.stop_all)
+        self.runner = Runner()
+        self.start('jobs')
 
-    def test_client_requires_explicit_simulation_activation(self):
-        client=Cliente(self.url,self.file)
-        with self.assertRaises(AdquisicionRechazada):client.solicitar(str(uuid.uuid4()),'fixture-complete-v1')
-        with self.assertRaises(AdquisicionRechazada):client._http('GET')
+    def start(self, name):
+        self.jobs = Jobs(self.root / name, provider='fixture-site', runner=self.runner)
+        self.server = Server(('127.0.0.1', 0), self.jobs, self.token)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.servers.append((self.server, self.jobs, self.runner))
+        self.url = 'http://127.0.0.1:' + str(self.server.server_port)
+        self.client = Cliente(self.url, self.file, modo='prueba')
+
+    def stop_all(self):
+        for server, jobs, runner in self.servers:
+            server.shutdown(); server.server_close(); runner.release.set(); jobs.close()
+
+    def post(self, body, auth=None, raw=None):
+        req = urllib.request.Request(self.url + PREFIX, data=raw if raw is not None else json.dumps(body).encode(),
+                                     headers={'Authorization': auth or 'Bearer ' + self.token.decode()})
+        return urllib.request.urlopen(req, timeout=5)
+
+    def completed(self, inventory=None):
+        request = str(uuid.uuid4())
+        job = self.client.solicitar(request, RECIPE, inventory or baseline())
+        return request, self.client.esperar(job['id'], timeout=10)
+
+    def test_authorization_wrong_secret_and_no_echo(self):
+        for auth in ('Bearer wrong-secret', 'Basic ' + self.token.decode()):
+            with self.assertRaises(urllib.error.HTTPError) as error:
+                self.post({}, auth)
+            self.assertEqual(error.exception.code, 401)
+            self.assertNotIn(self.token, error.exception.read())
+
+    def test_arbitrary_parameters_and_invalid_inventory_rejected(self):
+        good = dict(request_id=str(uuid.uuid4()), recipe_id=RECIPE, inventory=baseline())
+        tampered = baseline(); tampered['teams'] = tampered['teams'][:19]
+        cases = [dict(good, command='x'), dict(good, url='http://x'), dict(good, recipe_id='fixture-complete-v1'),
+                 dict(good, request_id='not-a-uuid'), dict(good, inventory=[]), dict(good, inventory=tampered)]
+        for body in cases:
+            with self.subTest(body=sorted(body)), self.assertRaises(urllib.error.HTTPError) as error:
+                self.post(body)
+            self.assertEqual(error.exception.code, 400)
+        raw = json.dumps(good).encode().replace(b'{', b'{"request_id":"x",', 1)  # duplicate key
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            self.post(None, raw=raw)
+        self.assertEqual(error.exception.code, 400)
+        self.assertEqual(self.runner.calls, 0)
+
+    def test_completed_bundle_served_sealed_with_etag(self):
+        request, state = self.completed()
+        self.assertEqual(state['state'], 'completed')
+        body = self.client.descargar(state['id'], state['bundle'])
+        self.assertEqual(json.loads(body)['request'], request)
+        with self.assertRaises(AdquisicionRechazada):
+            self.client.descargar(state['id'], dict(state['bundle'], sha256='1' * 64))
+        report = self.client.informe(state['id'])
+        self.assertEqual(set(report), {'provider', 'started_at', 'finished_at', 'error', 'cancelled', 'stopped', 'limits',
+                                       'sends', 'requests', 'sandbox', 'launches', 'connections', 'browser'})
+
+    def test_duplicate_request_returns_original_and_conflicts(self):
+        inventory = baseline()
+        request, state = self.completed(inventory)
+        again = self.client.solicitar(request, RECIPE, inventory)
+        self.assertEqual((again['id'], again['bundle']), (state['id'], state['bundle']))
+        with self.assertRaises(AdquisicionRechazada):
+            self.client.solicitar(request, RECIPE, baseline())  # same key, other inventory
+        self.assertEqual(self.runner.calls, 1)
+
+    def test_one_active_job_and_cancellation(self):
+        self.runner.mode = 'wait'
+        job = self.client.solicitar(str(uuid.uuid4()), RECIPE, baseline())
+        with self.assertRaises(AdquisicionRechazada):
+            self.client.solicitar(str(uuid.uuid4()), RECIPE, baseline())
+        self.client.cancelar(job['id'])
+        state = self.client.esperar(job['id'], timeout=10)
+        self.assertEqual(state['state'], 'cancelled')
+        self.assertEqual(self.client.cancelar(job['id'])['state'], 'cancelled')
+        with self.assertRaises(AdquisicionRechazada):
+            self.client.descargar(job['id'], dict(bytes=1, sha256='0' * 64))
+
+    def test_failed_or_unsealed_jobs_never_provide_a_bundle(self):
+        for mode, error in (('fail', 'provider_failed'), ('writable', 'bundle_not_sealed'), ('mismatch', 'bundle_not_sealed')):
+            with self.subTest(mode=mode):
+                self.runner.mode = mode
+                _, state = self.completed()
+                self.assertEqual((state['state'], state['error']), ('failed', error))
+                with self.assertRaises(AdquisicionRechazada):
+                    self.client.descargar(state['id'], dict(bytes=1, sha256='0' * 64))
+
+    def test_sealed_file_corruption_not_served(self):
+        _, state = self.completed()
+        path = self.jobs.root / 'work' / state['id'] / 'bundle.json'
+        path.chmod(0o600); path.write_bytes(path.read_bytes() + b'x')
+        with self.assertRaises(AdquisicionRechazada):
+            self.client.descargar(state['id'], state['bundle'])
+
+    def test_restart_marks_interrupted_without_resume(self):
+        self.runner.mode = 'wait'
+        inventory = baseline()
+        request = str(uuid.uuid4())
+        job = self.client.solicitar(request, RECIPE, inventory)
+        while self.client.estado(job['id'])['state'] == 'queued':
+            time.sleep(.02)
+        # Crash image: the durable store as it is while the job runs, opened by a new process.
+        (self.root / 'restarted').mkdir()
+        shutil.copyfile(self.jobs.root / 'jobs.sqlite', self.root / 'restarted' / 'jobs.sqlite')
+        self.runner = Runner()
+        self.start('restarted')
+        self.assertEqual(self.client.estado(job['id'])['state'], 'interrupted')
+        self.assertEqual(self.client.solicitar(request, RECIPE, inventory)['state'], 'interrupted')
+        self.assertEqual(self.runner.calls, 0)
+
+    def test_client_configuration(self):
+        for url, modo in (('http://example.org:8002', 'real'), ('http://127.0.0.1:1', 'real'), ('https://acquisition', 'real'),
+                          ('http://acquisition:8002', 'simulada'), ('http://user:p@acquisition:8002', 'real')):
+            with self.subTest(url=url, modo=modo), self.assertRaises(AdquisicionRechazada):
+                Cliente(url, self.file, modo=modo)
+        Cliente('http://acquisition:8002', self.file)
+
+    def test_service_requires_an_explicit_provider(self):
+        for env in ({}, {'ACQ_PROVIDER': 'sofascore'}, {'ACQ_PROVIDER': 'sofascore', 'ACQ_ENABLE_REAL': '1', 'ACQ_TEST_MODE': '1'},
+                    {'ACQ_PROVIDER': 'fixture-site', 'ACQ_TEST_MODE': '1'}, {'ACQ_PROVIDER': 'simulated-local-v1', 'ACQ_TEST_MODE': '1'}):
+            with self.subTest(env=env), self.assertRaises(SystemExit):
+                configuration(env)
+        self.assertEqual(configuration({'ACQ_PROVIDER': 'sofascore', 'ACQ_ENABLE_REAL': '1'}), ('sofascore', {}))
+        with self.assertRaises(ValueError):
+            Jobs(self.root / 'other', provider='sofascore')  # a real job process needs the profile owner
+
+
+class Producers(unittest.TestCase):
+    def test_current_producer_is_approved(self):
+        from acquisition.recipe import producer_rules
+        from persistencia.adquisicion import productores_aprobados
+        self.assertIn(producer_rules(), productores_aprobados())
+
+
+if __name__ == '__main__':
+    unittest.main(verbosity=2)

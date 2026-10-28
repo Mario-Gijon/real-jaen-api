@@ -79,8 +79,8 @@ Continuar SOLO si coincide la identidad anterior, o tras revisar explícitamente
 runtime y volver a validarlo. No instalar navegadores o resolver dependencias al arrancar:
 
 ```sh
-docker build --network none --pull=false --target runtime --build-arg PROFILE_RUNTIME="$RJ_PROFILE_RUNTIME" --build-context implementation=./acquisition -f docker/acquisition/Dockerfile -t rj-profile-admin:runtime-20261026 docker/acquisition
-docker build --network none --pull=false --target test --build-arg PROFILE_RUNTIME="$RJ_PROFILE_RUNTIME" --build-context implementation=./acquisition --build-context checks=./tests/acquisition -f docker/acquisition/Dockerfile -t rj-profile-admin:test-20261026 docker/acquisition
+docker build --network none --pull=false --target runtime --build-arg PROFILE_RUNTIME="$RJ_PROFILE_RUNTIME" --build-context implementation=./acquisition --build-context backend=. -f docker/acquisition/Dockerfile -t rj-profile-admin:runtime-20261026 docker/acquisition
+docker build --network none --pull=false --target test --build-arg PROFILE_RUNTIME="$RJ_PROFILE_RUNTIME" --build-context implementation=./acquisition --build-context backend=. --build-context checks=./tests/acquisition -f docker/acquisition/Dockerfile -t rj-profile-admin:test-20261026 docker/acquisition
 ```
 
 Build usa únicamente contextos de código dedicados. El pin de cinco reglas es

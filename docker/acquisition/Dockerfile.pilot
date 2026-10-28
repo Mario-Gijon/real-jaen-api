@@ -1,9 +1,0 @@
-# Source-only offline package over an already audited SDK/browser runtime.
-ARG PROFILE_IMAGE
-FROM ${PROFILE_IMAGE}
-COPY acquisition/ /opt/app/acquisition/
-COPY api.py importar.py /opt/app/
-COPY persistencia/bundle_v2.py /opt/app/persistencia/bundle_v2.py
-ENV PYTHONPATH=/opt/app:/opt/scraper
-USER 10001:10001
-# Inherit the offline admin entrypoint. No real provider is started automatically.

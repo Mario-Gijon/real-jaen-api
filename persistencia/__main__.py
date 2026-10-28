@@ -19,9 +19,14 @@
   python -m persistencia restaurar --copia COPIA.sqlite --base RUTA.sqlite --confirmar [--revision REV]
       Sustituye la base por la copia, solo si ningún proceso la usa (cierre antes la API). Copia antes la actual.
       La copia debe tener la revisión del código, salvo --revision explícita (marcha atrás de una migración).
+  python -m persistencia adquirir --base RUTA.sqlite --ambito ambito.json --solicitud UUID [--receta RECETA]
+                                  [--url http://acquisition:8002] [--secreto RUTA]
+      Pide al servicio de adquisición la receta fija, verifica el bundle y lo publica por el coordinador (API detenida).
+      Repetir la misma --solicitud reanuda esa solicitud: nunca vuelve a consultar al proveedor si ya hay bundle.
 """
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -35,7 +40,7 @@ from persistencia.sqlite import CopiaNoValida
 from persistencia.bloqueo import BaseEnUso  # noqa: E402
 
 # Órdenes tras las que la API (que lee la base al arrancar) debe reiniciarse.
-CAMBIAN_LA_BASE = ('importar', 'reconstruir', 'sustituciones', 'restaurar', 'migrar')
+CAMBIAN_LA_BASE = ('importar', 'reconstruir', 'sustituciones', 'restaurar', 'migrar', 'adquirir')
 
 
 def main():
@@ -70,6 +75,13 @@ def main():
     t.add_argument('--base', type=Path, required=True)
     t.add_argument('--confirmar', action='store_true')
     t.add_argument('--revision', help='revisión de la copia, si no es la del código (marcha atrás de una migración)')
+    q = sub.add_parser('adquirir', help='adquisición fija, verificación y publicación (API detenida)')
+    q.add_argument('--base', type=Path, required=True)
+    q.add_argument('--ambito', type=Path, required=True)
+    q.add_argument('--solicitud', required=True, help='UUID de la solicitud; repetirlo la reanuda')
+    q.add_argument('--receta', default='sofascore-pilot-16599363-v1')
+    q.add_argument('--url', default=os.environ.get('RJ_ACQUISITION_URL', 'http://acquisition:8002'))
+    q.add_argument('--secreto', type=Path, default=os.environ.get('RJ_ACQUISITION_SECRET_FILE', '/run/secrets/acquisition-token'))
     args = ap.parse_args()
     comando = ' '.join(sys.argv)
     try:
@@ -90,11 +102,16 @@ def main():
             informe = sincronizacion.migrar(args.base)
         elif args.orden == 'copiar':
             informe = sincronizacion.copiar(args.base, args.motivo)
+        elif args.orden == 'adquirir':
+            from persistencia.actualizacion import Coordinador
+            from persistencia.adquisicion import Cliente
+            with Coordinador(args.base, args.ambito) as coordinador:
+                informe = Cliente(args.url, args.secreto).publicar(coordinador, args.solicitud, args.receta)
         else:
             if not args.confirmar:
                 ap.error('restaurar sustituye la base: añade --confirmar')
             informe = sincronizacion.restaurar(args.copia, args.base, args.revision)
-    except (CargaRechazada, DecisionRechazada, CopiaNoValida, BaseEnUso) as e:
+    except (CargaRechazada, DecisionRechazada, CopiaNoValida, BaseEnUso, RuntimeError, ValueError) as e:
         ap.exit(1, f'Rechazado: {e}\n')
     print(json.dumps(informe, ensure_ascii=False, indent=2))
     if args.orden == 'verificar' and not informe['ok']:

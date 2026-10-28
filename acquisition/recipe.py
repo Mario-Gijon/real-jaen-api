@@ -1,4 +1,9 @@
-"""Sealed pilot bundles from the real SDK cache/export API. No sporting SQLite access."""
+"""Fixed recipe sofascore-pilot-16599363-v1: round 1 calendar and match 16599363, sealed from the SDK cache/export.
+
+Runs inside the acquisition service (acquisition/job.py). No sporting SQLite access: the inventory comes from the
+backend with the request. producer_rules() is the fingerprint the backend must have approved
+(productores-adquisicion.json).
+"""
 from datetime import datetime
 import base64
 import json
@@ -6,14 +11,14 @@ import os
 from pathlib import Path
 import shutil
 
-from .pilot_transport import PilotStopped, iso
+from .transport import Stopped, iso
 from .profile import sync_dir
-from persistencia.bundle_v2 import PATHS, PILOT, SECTIONS, check_inventory, encode, fingerprint, record, sha, verify
+from persistencia.bundle import PATHS, PILOT, SECTIONS, check_inventory, encode, fingerprint, record, sha, verify
 
 REVISION='611e436a1528b0f487aa56a045f023e8ae8ae098'
 
 def producer_rules():
-    names=('pilot_bundle.py','pilot_transport.py','sofascore_offline.py','sdk_adapter.py','sdk_transport.py')
+    names=('recipe.py','transport.py','sdk_adapter.py','job.py')
     sources={n:sha(Path(__file__).with_name(n).read_bytes()) for n in names}
     return fingerprint(dict(sources=sources,scraper=REVISION,policy=dict(window_s=259200,interval_s=21600)))
 
@@ -24,12 +29,12 @@ def seed_cache(store,baseline):
     for source in baseline['records']:
         row=source['record']
         if row['event_id'] not in expected or row['key']=='listing':continue
-        if row['fetched_at'] is None:raise PilotStopped('Raw evidence without provenance needs explicit initialization')
+        if row['fetched_at'] is None:raise Stopped('Raw evidence without provenance needs explicit initialization')
         grouped.setdefault(row['event_id'],{})[row['key']]=Outcome('ok',data=row['payload'],fetched_at=datetime.fromisoformat(row['fetched_at']))
     with store.lease('writer',purpose='explicit-test-cache-initialization'):
         for ident,outcomes in grouped.items():store.events.put(ident,outcomes)
 
-class PilotListing:
+class RoundListing:
     def __init__(self,store,baseline):self.store,self.baseline=store,baseline
     async def run(self,item,get,write):
         from sofascore_scraper.services.pipeline import ItemResult
@@ -37,51 +42,51 @@ class PilotListing:
         response=await get(PATHS[0],retries=1)
         if response.status!='ok':return ItemResult(item,'failed',response.reason,event=response)
         data=response.data
-        if not isinstance(data,dict) or not isinstance(data.get('events'),list):raise PilotStopped('Malformed round')
+        if not isinstance(data,dict) or not isinstance(data.get('events'),list):raise Stopped('Malformed round')
         expected=check_inventory(self.baseline)
         scoped=[e for e in data['events'] if e.get('tournament',{}).get('id')==94191]
-        if PILOT not in {e.get('id') for e in scoped}:raise PilotStopped('Pilot missing from its verified round')
-        if any(e.get('id') not in expected for e in scoped):raise PilotStopped('New event: another preflight required')
+        if PILOT not in {e.get('id') for e in scoped}:raise Stopped('Pilot missing from its verified round')
+        if any(e.get('id') not in expected for e in scoped):raise Stopped('New event: another preflight required')
         import importar
         prior={(s['record']['event_id'],s['record']['key']):s['record'] for s in self.baseline['records']}
         for event in scoped:
             if event['id']==PILOT:continue
             original=prior.get((event['id'],'event'))
             if original is None or fingerprint(importar.rasgos_evento(original['payload']))!=fingerprint(importar.rasgos_evento(event)):
-                raise PilotStopped('Round correction outside fixed pilot: another preflight required')
+                raise Stopped('Round correction outside fixed pilot: another preflight required')
         lister=ScheduleLister(self.store,only_finished=False,concurrency=1)
         await write(lambda:lister.save_page(17073,97382,'round_1',data,meta={'complete':round_is_complete(data)},fetched_at=response.fetched_at))
         return ItemResult(item,'ok')
 
-def collect_pilot(store,transport,baseline,output,*,cancelled=lambda:False):
+def collect(store,transport,baseline,output,*,cancelled=lambda:False):
     """One targeted pilot, not a historical rotation. Caller explicitly owns the transport."""
     from sofascore_scraper.services.pipeline import FetchPipeline
     from sofascore_scraper.services.planning import WorkItem
     from sofascore_scraper.store import Ref
     expected=check_inventory(baseline)
-    if PILOT not in expected or not expected[PILOT]['current']:raise PilotStopped('Pilot is not current in this inventory')
+    if PILOT not in expected or not expected[PILOT]['current']:raise Stopped('Pilot is not current in this inventory')
     output=Path(output)
     if output.exists():
         body=output.read_bytes();descriptor=dict(bytes=len(body),sha256=sha(body))
         verify(body,descriptor,baseline,context=(transport.context['job_id'],transport.context['request_id']),expected_rules=producer_rules(),test_transport=transport.mode=='loopback-fixture')
         return descriptor # Exact repeat of a sealed job, no network or writes.
     required=3*len(encode(baseline))+64*1024*1024
-    if shutil.disk_usage(output.parent).free<required:raise PilotStopped('Insufficient space before backup/download')
+    if shutil.disk_usage(output.parent).free<required:raise Stopped('Insufficient space before backup/download')
     results=[]
     with store.lease('writer',purpose='fixed-pilot-download-and-export'):
         backup=store.backup.create(scope='all')
-        if not store.backup.verify(backup.name).ok:raise PilotStopped('Cache backup verification failed')
+        if not store.backup.verify(backup.name).ok:raise Stopped('Cache backup verification failed')
         # Preserve even partial new evidence before any later run can overwrite cache files.
         async def run():
-            pipeline=FetchPipeline(store,client=transport,concurrency=1,selection=SECTIONS,listing=PilotListing(store,baseline))
+            pipeline=FetchPipeline(store,client=transport,concurrency=1,selection=SECTIONS,listing=RoundListing(store,baseline))
             listing=WorkItem(Ref.season(17073,97382),'listing',(('pilot_round_1',''),),None,'fixed pilot round')
             first=await pipeline.run([listing],cancelled=cancelled)
-            if first.failed or first.cancelled or first.skipped or cancelled():raise PilotStopped('Calendar acquisition incomplete')
+            if first.failed or first.cancelled or first.skipped or cancelled():raise Stopped('Calendar acquisition incomplete')
             detail=WorkItem(Ref.event(PILOT),'refill',tuple((k,'') for k in SECTIONS),'football','explicit pilot authorization')
             second=await pipeline.run([detail],cancelled=cancelled)
             results.extend(second.results)
-            if second.failed or second.cancelled or second.skipped or cancelled():raise PilotStopped('Pilot acquisition incomplete')
-            if any(o.status!='ok' for result in second.results for o in result.slices.values()):raise PilotStopped('Sporting resource incomplete; no bundle publication')
+            if second.failed or second.cancelled or second.skipped or cancelled():raise Stopped('Pilot acquisition incomplete')
+            if any(o.status!='ok' for result in second.results for o in result.slices.values()):raise Stopped('Sporting resource incomplete; no bundle publication')
         import asyncio
         try:
             asyncio.run(run())
@@ -92,11 +97,11 @@ def collect_pilot(store,transport,baseline,output,*,cancelled=lambda:False):
         except BaseException:
             # Preserve partial evidence; never turn it into a publishable bundle.
             partial=store.backup.create(scope='all')
-            if not store.backup.verify(partial.name).ok:raise PilotStopped('Partial cache backup failed; acquisition stopped')
+            if not store.backup.verify(partial.name).ok:raise Stopped('Partial cache backup failed; acquisition stopped')
             raise
         # Seal only after verified post-acquisition backup. A failed maintenance step stops here.
         complete=store.backup.create(scope='all')
-        if not store.backup.verify(complete.name).ok:raise PilotStopped('Post-acquisition cache backup failed')
+        if not store.backup.verify(complete.name).ok:raise Stopped('Post-acquisition cache backup failed')
         with output.open('xb') as f:f.write(body);f.flush();os.fsync(f.fileno())
         output.chmod(0o400);sync_dir(output.parent)
         return descriptor
@@ -114,25 +119,25 @@ def assemble(store,baseline,transport,workspace):
         tmp=Path(tmp)
         normalized=tmp/'events.jsonl'
         report=ExportService(store).export_dataset(DatasetSpec(dataset='events',schema='normalized',format='jsonl',filter=DatasetFilter(event_ids=ids)),normalized)
-        if report.skipped:raise PilotStopped('Calendar export omitted evidence')
+        if report.skipped:raise Stopped('Calendar export omitted evidence')
         calendar={row['id']:row for row in (json.loads(line) for line in normalized.read_bytes().splitlines())}
         raw=tmp/'raw.jsonl'
         report=store.export.raw(EventQuery(scope=Scope(event_ids=ids)),raw,keys=('event',*SECTIONS),fmt='jsonl')
-        if report.skipped:raise PilotStopped('Raw export omitted evidence')
+        if report.skipped:raise Stopped('Raw export omitted evidence')
         for row in (json.loads(line) for line in raw.read_bytes().splitlines()):
             pair=row['event_id'],row['key']
             if row['event_id'] not in active:continue
             if row['event_id']!=PILOT:
                 original=prior.get(pair)
-                if original is None or original['payload']!=row['payload']:raise PilotStopped('Unqueried cache differs from its inventory')
+                if original is None or original['payload']!=row['payload']:raise Stopped('Unqueried cache differs from its inventory')
                 row=original # Keep exact original timestamp/spelling, never regenerate its freshness.
             records[pair]=row
     for ident in ids:
         if ident not in calendar:
             old=prior.get((ident,'listing'))
-            if old is None:raise PilotStopped('Inventory event missing from cache/calendar')
+            if old is None:raise Stopped('Inventory event missing from cache/calendar')
             calendar[ident]=old['payload'] # Null observed_at remains null with exact provenance.
-    if set(calendar)!=set(ids):raise PilotStopped('Unexpected calendar expansion')
+    if set(calendar)!=set(ids):raise Stopped('Unexpected calendar expansion')
     successful=[a for a in transport.state['attempts'] if a['status']==200]
     latest={a['path']:a for a in successful}
     files['provenance.jsonl']=b''.join(encode(dict(number=a['number'],path=a['path'],received_at=a['finished_at'],body_b64=base64.b64encode((transport.root/(transport.context['job_id']+'-responses')/(str(a['number'])+'.body')).read_bytes()).decode()))+b'\n' for a in successful)
@@ -162,7 +167,7 @@ def assemble(store,baseline,transport,workspace):
             row=records.get((ident,key))
             if (key in SECTIONS and phase in ('pre','live')) or (key=='event' and row is None and phase=='pre'):
                 coverage.append(dict(event_id=ident,resource=key,status='not_applicable',origin='phase',evidence=None,checked_at=None));continue
-            if row is None or (key in SECTIONS and body_state(key,row['payload'])!='data'):raise PilotStopped('Resource coverage incomplete')
+            if row is None or (key in SECTIONS and body_state(key,row['payload'])!='data'):raise Stopped('Resource coverage incomplete')
             coverage.append(dict(event_id=ident,resource=key,status='data',origin='attempt' if ident==PILOT else 'inventory',
                                  evidence=refs[ident,key],checked_at=latest[f'/event/{PILOT}'+('' if key=='event' else '/'+key)]['finished_at'] if ident==PILOT else row['fetched_at']))
     m=dict(schema=2,contract='pilot-v2',**{k:transport.context[k] for k in ('job_id','request_id','inventory_sha256')},

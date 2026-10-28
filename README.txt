@@ -488,14 +488,13 @@ no en la imagen. No hay migraciones automáticas, recarga en caliente ni botón 
 COORDINADOR INTERNO (fixtures, sin activar): diseno y limites en docs/coordinador-fixtures.md.
 No hay endpoints nuevos ni cambios en el arranque habitual; no ejecuta red ni scraper.
 
-ADQUISICIÓN SOFASCORE (sin integrar; objetivo de despliegue: Docker Compose)
-Estado vigente, flujo que ha funcionado, experimentos sustituidos y pendientes: docs/adquisicion-sofascore.md.
+ADQUISICIÓN SOFASCORE (servicio interno; Docker Compose con rj-analyst/compose.acquisition.yaml)
+Estado vigente, ejecuciones reales, salida de red y lo que se observa: docs/adquisicion-sofascore.md.
+- Contrato backend–adquisición, garantías, idempotencia y pruebas: docs/contrato-adquisicion-interno.md.
+  Disparo: python -m persistencia adquirir (API detenida); operación en ../rj-analyst/docs/docker.md.
 - Receta de la imagen base del scraper: docs/scraper-empaquetado-linux.md (docker/scraper/).
 - Sandbox: diagnósticos y políticas en docs/diagnostico-sandbox-linux.md y docker/scraper/policies/.
 - Perfil: diseño final en docs/perfil-adquisicion-diseno-final.md; gestión y recuperación administrativa
-  offline implementadas en docs/gestion-perfil-adquisicion.md.
-- Contrato e integración interna SIMULADA (protocolo v1): docs/contrato-adquisicion-interno.md.
-- Protocolo v2 del piloto, conservado hasta que la solución definitiva iguale sus garantías:
-  docs/piloto-sofascore-tecnico.md.
+  en docs/gestion-perfil-adquisicion.md.
 - Diseño del servicio separado: ../rj-analyst/docs/propuesta-servicio-adquisicion.md.
-- Informes y evidencias de los pilotos, archivados: docs/historico/README.md.
+- Informes, protocolos retirados (v1 simulado, v2 del piloto) y evidencias: docs/historico/README.md.

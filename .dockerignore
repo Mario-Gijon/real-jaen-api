@@ -3,6 +3,7 @@
 !api.py
 !importar.py
 !ambito.json
+!productores-adquisicion.json
 !alembic.ini
 !requirements-sql.txt
 !persistencia/
@@ -14,6 +15,3 @@
 **/.env*
 **/*.sqlite*
 **/*.lock
-# Pilot v2 bundle protocol: kept for its tests until the real recipe replaces it; never in the image.
-persistencia/bundle_v2.py
-persistencia/adquisicion_v2.py

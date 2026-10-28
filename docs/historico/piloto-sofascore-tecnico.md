@@ -1,9 +1,9 @@
 # Piloto SofaScore: preparación técnica, sin autorización de red externa
 
 > Estado 27-10-2026: el transporte HTTP del piloto quedó sustituido por el flujo normal del SDK con tráfico
-> reducido ([adquisicion-sofascore.md](adquisicion-sofascore.md)). Este documento sigue siendo la referencia del
+> reducido ([adquisicion-sofascore.md](../adquisicion-sofascore.md)). Este documento sigue siendo la referencia del
 > protocolo v2 (inventario, cobertura, control de generación, bundle), que se conserva hasta que la solución
-> definitiva demuestre las mismas garantías. Resultados y preflights del piloto: [historico/](historico/README.md).
+> definitiva demuestre las mismas garantías. Resultados y preflights del piloto: [historico/](README.md).
 
 ## Aclaraciones previas a la implementación
 
@@ -44,7 +44,7 @@ estado_deseado ahora enlaza cada hash con la representación que realmente conse
 
 ## Resultado propio y reproducción offline
 
-Informe de metadatos: [piloto-sofascore-validacion.json](piloto-sofascore-validacion.json). Preflight: [preflight-sofascore-piloto.json](historico/preflight-sofascore-piloto.json).
+Informe de metadatos: [piloto-sofascore-validacion.json](piloto-sofascore-validacion.json). Preflight: [preflight-sofascore-piloto.json](preflight-sofascore-piloto.json).
 
 - 16 pruebas de transporte y artefactos: presupuesto antes de socket, backoff/Retry-After, rechazo global 403/429, ausencia no inferida, límite por recurso, cierre/reapertura, exclusión, disco lleno antes de petición o al conservar respuesta, cancelación, cobertura incompleta y corrección fuera del plan.
 - 31 pruebas del adaptador, caché y bordes temporales con reloj fijo, incluyendo el límite de 30 segundos de reintento transitorio separado de las seis horas de refresco válido; navegador local con su sandbox anterior, sin permisos nuevos.
@@ -96,7 +96,7 @@ Sin peticiones externas, cambios de base activa, servicios, frontend, scraper o 
 
 ## Adenda 27-10-2026: copia aportada y preparación de prueba
 
-Resultado propio en [piloto-sofascore-copia-20261027.json](historico/piloto-sofascore-copia-20261027.json); preflight actualizado en [preflight-sofascore-piloto.json](historico/preflight-sofascore-piloto.json). Se utilizó exclusivamente `real-jaen.20261027-083912-846469.piloto-16599363.sqlite`, aportada por el usuario. No se examinó la base activa: esta comprobación acredita la copia suministrada, no certifica por sí sola cuándo se generó respecto a las últimas importaciones del origen activo.
+Resultado propio en [piloto-sofascore-copia-20261027.json](piloto-sofascore-copia-20261027.json); preflight actualizado en [preflight-sofascore-piloto.json](preflight-sofascore-piloto.json). Se utilizó exclusivamente `real-jaen.20261027-083912-846469.piloto-16599363.sqlite`, aportada por el usuario. No se examinó la base activa: esta comprobación acredita la copia suministrada, no certifica por sí sola cuándo se generó respecto a las últimas importaciones del origen activo.
 
 Copia SQLite coherente bajo bloqueo hacia un directorio temporal nuevo, retenido para revisión. Antes de modificarla se comprobaron revisión 0004, integridad, claves foráneas y equivalencia de la huella lógica completa con la copia suministrada. SHA-256 del archivo suministrado sin cambios antes/después. Reconstrucción explícita solo en la base de prueba para adoptar reglas actuales, con respaldo previo del mecanismo existente: cero cambios deportivos. IDs de equipos, jugadores y partidos, observaciones originales y sustituciones locales conservados. La verificación posterior no detecta diferencias.
 
@@ -112,7 +112,7 @@ Antes de la prueba real: disponer del motor Linux, validar esta copia en la pila
 
 ## Adenda Linux 27-10-2026: validación offline completada
 
-El motor volvió a responder. Se ejecutó scripts/test_pilot_v2.py con la copia aportada del 27-10 y las imágenes locales fijadas, sin pull ni red externa. Resultado propio en [piloto-sofascore-linux-20261027.json](historico/piloto-sofascore-linux-20261027.json). Esta adenda supera el pendiente del motor de la sección anterior; la validación del servidor del grupo sigue pendiente.
+El motor volvió a responder. Se ejecutó scripts/test_pilot_v2.py con la copia aportada del 27-10 y las imágenes locales fijadas, sin pull ni red externa. Resultado propio en [piloto-sofascore-linux-20261027.json](piloto-sofascore-linux-20261027.json). Esta adenda supera el pendiente del motor de la sección anterior; la validación del servidor del grupo sigue pendiente.
 
 16 pruebas focalizadas superadas. Recorrido completo satisfactorio: inventario -> caché SDK -> cinco GET de servidor loopback -> bundle de 31.587.177 bytes -> recepción autenticada -> candidata -> verificación -> publicación. Se ejecutaron dos trabajos independientes de cinco GET locales: uno para inyectar fallo posterior al COMMIT de candidata y otro para publicar. Ninguna solicitud externa. 2792 respuestas equivalentes al lector independiente, IDs, originales y decisiones conservados, integridad correcta. Se comprobaron cuatro manipulaciones rechazadas, autenticación, duplicados idempotentes, generación antigua rechazada, reinicio y conservación de la instantánea anterior al fallar candidata. Backend sin SDK ni navegador instalados.
 
@@ -126,4 +126,4 @@ Se revalidaron la base de prueba Windows retenida y su inventario/generación ex
 
 El primer GET, /unique-tournament/17073/season/97382/events/round/1, recibió 403. Un solo intento, ningún reintento, ninguna otra ruta ni navegador. El transporte detuvo el trabajo y conservó el bloqueo administrativo durable contra nuevos intentos. No se generó bundle, no se preparó candidata y no se intentó publicar. El código HTTP acredita rechazo; no se atribuye a una causa concreta (IP, WAF, cliente, geografía o política del proveedor) sin evidencia adicional. No se intenta eludirlo ni cambiar cabeceras/transporte.
 
-SHA-256 de la base de prueba y generación/inventario idénticos antes/después. No se abrió la base activa ni se modificaron servicios. Evidencia propia y ubicaciones en [piloto-sofascore-real-20261027.json](historico/piloto-sofascore-real-20261027.json). Se conserva el volumen exclusivo con caché, respaldo verificado y evidencia original del rechazo para revisión; el contenedor terminado se retiró tras comprobar su etiqueta. No se incluyen payloads, caché o datos en Git. El recorrido real hasta publicación queda sin validar por este bloqueo, aunque el offline había pasado. No se repetirá el piloto automáticamente. Sin commit ni push.
+SHA-256 de la base de prueba y generación/inventario idénticos antes/después. No se abrió la base activa ni se modificaron servicios. Evidencia propia y ubicaciones en [piloto-sofascore-real-20261027.json](piloto-sofascore-real-20261027.json). Se conserva el volumen exclusivo con caché, respaldo verificado y evidencia original del rechazo para revisión; el contenedor terminado se retiró tras comprobar su etiqueta. No se incluyen payloads, caché o datos en Git. El recorrido real hasta publicación queda sin validar por este bloqueo, aunque el offline había pasado. No se repetirá el piloto automáticamente. Sin commit ni push.

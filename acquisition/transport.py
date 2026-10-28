@@ -1,4 +1,8 @@
-"""Fixed-route pilot HTTP transport. Real egress disabled unless explicitly enabled by its caller."""
+"""Fixed-route acquisition transport: durable budget charged before each send, retries, stops and evidence.
+
+Transport sends with urllib (loopback fixtures only in tests); SdkTransport sends through the scraper SDK
+(acquisition.sdk_adapter). Real egress is disabled unless explicitly enabled by its caller.
+"""
 import asyncio
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -10,16 +14,16 @@ import urllib.error
 import urllib.request
 from urllib.parse import urlsplit
 from .profile import atomic_json
-from persistencia.bundle_v2 import PATHS, encode, fingerprint, parse
+from persistencia.bundle import PATHS, encode, fingerprint, parse
 
 
 def iso(at):return datetime.fromtimestamp(at,timezone.utc).isoformat()
 
-class PilotStopped(RuntimeError):pass
+class Stopped(RuntimeError):pass
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self,*args):return None
 
-class PilotTransport:
+class Transport:
     def __init__(self,root,*,job_id,request_id,inventory_sha256,loopback_url=None,enable_real=False,
                  max_attempts=16,seconds=300,clock=time.time,sleep=asyncio.sleep,cancelled=lambda:False,breaker=None):
         import uuid
@@ -33,11 +37,11 @@ class PilotTransport:
             if p.scheme!='http' or p.hostname!='127.0.0.1' or not p.port or p.path!='/api/v1' or p.username or p.password or p.query or p.fragment:raise ValueError('Only a literal loopback fixture server is allowed')
             self.base=loopback_url
         elif enable_real:self.base='https://www.sofascore.com/api/v1'
-        else:raise PilotStopped('Proveedor real deshabilitado')
+        else:raise Stopped('Proveedor real deshabilitado')
         if type(max_attempts) is not int or not 1<=max_attempts<=16 or type(seconds) is not int or not 1<=seconds<=300:raise ValueError('Unapproved pilot limits')
         self.max_attempts=max_attempts;self.seconds=seconds;self.clock=clock;self.sleep=sleep;self.cancelled=cancelled
         self.state=parse(self.path.read_bytes()) if self.path.exists() else dict(context=self.context,started_at=iso(clock()),attempts=[])
-        if self.state['context']!=self.context:raise PilotStopped('Job identity reused with another inventory')
+        if self.state['context']!=self.context:raise Stopped('Job identity reused with another inventory')
         self.retry=parse(self.retry_path.read_bytes()) if self.retry_path.exists() else {}
         self.opener=urllib.request.build_opener(urllib.request.ProxyHandler({}),NoRedirect())
         self.memo={};self.owner=None;self.serial=None
@@ -52,7 +56,7 @@ class PilotTransport:
         try:
             fcntl.flock(self.owner,fcntl.LOCK_EX|fcntl.LOCK_NB)
             if self.path.exists():self.state=parse(self.path.read_bytes())
-            if self.state['context']!=self.context:raise PilotStopped('Job identity changed')
+            if self.state['context']!=self.context:raise Stopped('Job identity changed')
             self.retry=parse(self.retry_path.read_bytes()) if self.retry_path.exists() else {}
             for a in self.state['attempts']:
                 if a['status'] is None:
@@ -65,21 +69,21 @@ class PilotTransport:
     def __exit__(self,*exc):
         if self.owner:self.owner.close();self.owner=None
     async def __aenter__(self):
-        if self.owner is None:raise PilotStopped('Exclusive pilot ownership required')
+        if self.owner is None:raise Stopped('Exclusive pilot ownership required')
         self.serial=asyncio.Lock();return self
     async def __aexit__(self,*exc):pass
 
     def _check(self):
-        if self.owner is None:raise PilotStopped('No owner')
+        if self.owner is None:raise Stopped('No owner')
         if self.cancelled():raise InterruptedError('Pilot cancelled')
-        if self.clock()>=datetime.fromisoformat(self.state['started_at']).timestamp()+self.seconds:raise PilotStopped('Pilot time limit')
-        if self.breaker.tripped:raise PilotStopped('Circuit breaker open')
-        if self.retry.get('_blocked',{}).get('admin'):raise PilotStopped('Operator review required after refusal')
-        if self.retry.get('_blocked',{}).get('next_at',0)>self.clock():raise PilotStopped('Pilot stopped after refusal/breaker')
+        if self.clock()>=datetime.fromisoformat(self.state['started_at']).timestamp()+self.seconds:raise Stopped('Pilot time limit')
+        if self.breaker.tripped:raise Stopped('Circuit breaker open')
+        if self.retry.get('_blocked',{}).get('admin'):raise Stopped('Operator review required after refusal')
+        if self.retry.get('_blocked',{}).get('next_at',0)>self.clock():raise Stopped('Pilot stopped after refusal/breaker')
 
     async def _wait_until(self,at):
         deadline=datetime.fromisoformat(self.state['started_at']).timestamp()+self.seconds
-        if at>=deadline:raise PilotStopped('Retry does not fit job deadline')
+        if at>=deadline:raise Stopped('Retry does not fit job deadline')
         while self.clock()<at:
             self._check();await self.sleep(min(.25,at-self.clock()))
 
@@ -103,18 +107,18 @@ class PilotTransport:
 
     async def get(self,path,retries=None):
         from sofascore_scraper.slices import Outcome
-        if path not in PATHS:raise PilotStopped('Path not in fixed pilot allowlist')
+        if path not in PATHS:raise Stopped('Path not in fixed pilot allowlist')
         async with self.serial:
             self._check()
             if path in self.memo:return self.memo[path]
             while True:
                 self._check()
                 prior=self.retry.get(path,{})
-                if prior.get('admin'):raise PilotStopped('Resource requires administrative review')
+                if prior.get('admin'):raise Stopped('Resource requires administrative review')
                 await self._wait_until(prior.get('next_at',0))
                 attempts=[a for a in self.state['attempts'] if a['path']==path]
-                if attempts and attempts[-1]['status']==200 and path not in self.retry:raise PilotStopped('Resource already acquired: use its verified cache/bundle')
-                if len(attempts)>=2 or len(self.state['attempts'])>=self.max_attempts:raise PilotStopped('Pilot attempt budget exhausted')
+                if attempts and attempts[-1]['status']==200 and path not in self.retry:raise Stopped('Resource already acquired: use its verified cache/bundle')
+                if len(attempts)>=2 or len(self.state['attempts'])>=self.max_attempts:raise Stopped('Pilot attempt budget exhausted')
                 await self._wait_until(self.retry.get('_last_sent',{}).get('at',0)+1)
                 self._check()
                 a=dict(number=len(self.state['attempts'])+1,path=path,sent_at=iso(self.clock()),finished_at=None,status=None,payload_sha256=None)
@@ -129,7 +133,7 @@ class PilotTransport:
                     try:
                         with (folder/(str(a['number'])+'.body')).open('xb') as evidence:
                             evidence.write(raw);evidence.flush();os.fsync(evidence.fileno())
-                    except OSError as error:raise PilotStopped('Cannot preserve response evidence; stop acquisition') from error
+                    except OSError as error:raise Stopped('Cannot preserve response evidence; stop acquisition') from error
                     if status==200:
                         try:
                             payload=parse(raw)
@@ -159,8 +163,23 @@ class PilotTransport:
                 if reason in ('403','429') or self.breaker.tripped:
                     self.retry['_blocked']=dict(next_at=now+max(900,wait),admin=reason=='403')
                 atomic_json(self.path,self.state);atomic_json(self.retry_path,self.retry)
-                if reason in ('403','429') or self.breaker.tripped:raise PilotStopped('Refusal/breaker: stop entire pilot')
+                if reason in ('403','429') or self.breaker.tripped:raise Stopped('Refusal/breaker: stop entire pilot')
                 if reason in ('parse','empty','404','redirect','http') or len(attempts)+1>=2:
                     return Outcome('empty' if reason in ('empty','404') else 'failed',data=payload if reason=='empty' else None,
                                    reason=reason,http_status=status or None,fetched_at=datetime.fromisoformat(a['finished_at']))
                 # Retry only a transient network/5xx error, after its durable due time.
+
+
+class SdkTransport(Transport):
+    """Same budget, retries, stops, deadline and evidence; each request goes through the SDK's normal flow (curl_cffi
+    and, on a challenge, its browser) instead of urllib."""
+    via = 'sdk'
+
+    def __init__(self, root, *, adapter, **kwargs):
+        super().__init__(root, **kwargs)
+        if adapter.api != self.base:
+            raise ValueError('El adaptador y el transporte deben usar la misma raíz API')
+        self.adapter = adapter
+
+    def _request(self, path):
+        return self.adapter.request(path)
