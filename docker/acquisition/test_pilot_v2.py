@@ -220,7 +220,54 @@ def acquisition_stage(exchange,root):
             assert len(hits2)==5 and set(hits2)==set(PATHS)
             (exchange/'second-meta.json').write_bytes(encode(dict(descriptor=desc2,context=[job2,request2],rules_sha256=producer_rules(),attempts=len(hits2))))
 
+def sdk_acquisition_stage(exchange,root,downloaded):
+    """Como acquisition_stage, pero cada petición sale por el flujo normal del SDK (curl y, ante el challenge, el
+    navegador) con el adaptador de adquisición, el perfil gestionado y el sandbox exigido, contra el sitio de prueba
+    de 127.0.0.1 que sirve los cuerpos descargados de SofaScore el 27-10-2026. Sin red."""
+    from acquisition.sdk_adapter import SdkAdapter,configure_environment
+    configure_environment(root/'sdk')  # antes de importar el SDK
+    from acquisition.profile import Profile
+    from acquisition.sdk_transport import SdkTransport
+    from acquisition.pilot_bundle import seed_cache,collect_pilot,producer_rules
+    from sofascore_scraper.store import Store
+    from sdk_fixture import FixtureSite,load_downloaded
+    baseline=parse((exchange/'inventory.json').read_bytes())
+    managed=root/'managed-profile';managed.mkdir(mode=0o700)
+    jobs=[(str(uuid.uuid4()),str(uuid.uuid4())) for _ in range(2)]
+    with Profile(managed) as owner:
+        owner.initialize(confirm_new=True)
+        with closing(Store(root/'cache')) as store:
+            seed_cache(store,baseline)
+            with FixtureSite(load_downloaded(downloaded),scenario='challenge') as site,owner.session() as profile:
+                owner.allow_browser(profile)
+                adapter=SdkAdapter(profile,PATHS,api=site.api,site=site.origin,require_sandbox=True,local_test=True).install()
+                descriptors=[]
+                try:
+                    for (job,request),name in zip(jobs,('bundle.json','bundle-second.json')):
+                        with SdkTransport(root/'jobs',adapter=adapter,job_id=job,request_id=request,
+                                          inventory_sha256=baseline['sha256'],loopback_url=site.api) as transport:
+                            descriptors.append(collect_pilot(store,transport,baseline,exchange/name))
+                            assert collect_pilot(store,transport,baseline,exchange/name)==descriptors[-1]  # sellado: sin red
+                finally:
+                    adapter.close()
+                hits=site.api_hits();report=adapter.report()
+            assert report['stopped'] is None,report['stopped']
+            assert report['sandbox']=={'namespaces':True,'seccomp':True,'proc_verified':True},report['sandbox']
+            assert [s['user_data_dir'] for s in report['sessions']]==[str(profile)]
+            assert {h['path'] for h in hits}=={'/api/v1'+p for p in PATHS} and len(hits)==len([s for s in report['sends'] if s['sent']])
+            assert report['browser']['api']==len([s for s in report['sends'] if s['sent'] and s['channel']=='bridge'])
+        clean=owner.verify()  # tras la sesión: sin singletons ni sesión abierta
+    for (job,request),descriptor,name in zip(jobs,descriptors,('bundle-meta.json','second-meta.json')):
+        meta=dict(descriptor=descriptor,context=[job,request],rules_sha256=producer_rules(),attempts=5,external_requests=0)
+        (exchange/name).write_bytes(encode(meta))
+    summary=dict(stage='acquisition-sdk',requests=[h['path'] for h in hits],sends=len(hits),
+                 vias=[(r['path'],r['via'],r['status']) for r in report['requests']],sandbox=report['sandbox'],
+                 browser=report['browser'],sessions=report['sessions'],managed_profile=clean,
+                 events=[e['kind'] for e in report['events']],bytes=[d['bytes'] for d in descriptors])
+    (exchange/'sdk-report.json').write_bytes(encode(summary));print(encode(summary).decode())
+
 if __name__=='__main__':
     import sys
     if len(sys.argv)>1 and sys.argv[1]=='collect':acquisition_stage(Path('/exchange'),Path('/profiles'))
+    elif len(sys.argv)>1 and sys.argv[1]=='collect-sdk':sdk_acquisition_stage(Path('/exchange'),Path('/profiles'),Path(sys.argv[2]))
     else:unittest.main(verbosity=2)

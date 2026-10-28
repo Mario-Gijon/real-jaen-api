@@ -4,6 +4,7 @@ __pycache__
 # explicitly), never in the acquisition runtime/test images.
 pilot_bundle.py
 pilot_transport.py
+sdk_transport.py
 real_bundle.py
 sofascore_offline.py
 sofascore-scope.json

@@ -22,6 +22,22 @@ def processes():
             pass
     return found
 
+def verify_sandbox(before, path):
+    """Acredita por /proc el sandbox de un Chromium abierto sobre `path` después de `before` (PIDs previos): un único
+    proceso principal con esa ruta y renderers con NoNewPrivs, seccomp en modo filtro, sin capacidades y con un
+    namespace PID y un filtro seccomp propios."""
+    relevant = [entry for pid, entry in processes().items() if pid not in before]
+    browser = [v for v, args in relevant if any(a == ('--user-data-dir=' + str(path)).encode() for a in args) and not any(a.startswith(b'--type=') for a in args)]
+    renderers = [v for v, args in relevant if b' --type=renderer ' in b' ' + b' '.join(args) + b' ']
+    if len(browser) != 1 or not renderers:
+        raise ProfileError('No se ha acreditado la ruta o los procesos del sandbox')
+    for values in renderers:
+        if values['NoNewPrivs'].strip() != '1' or values['Seccomp'].strip() != '2' or int(values['CapEff'], 16) != 0:
+            raise ProfileError('Protecciones de renderer no acreditadas')
+        if len(values['NSpid'].split()) <= len(browser[0]['NSpid'].split()) or int(values['Seccomp_filters']) <= int(browser[0]['Seccomp_filters']):
+            raise ProfileError('Namespaces o filtro adicional no acreditados')
+    return {'namespaces': True, 'seccomp': True, 'proc_verified': True}
+
 class SandboxBrowser:
     def __init__(self, owner, path):
         self.owner, self.path = owner, path
@@ -54,17 +70,7 @@ class SandboxBrowser:
             for expected in ('Layer 1 Sandbox\tNamespace', 'PID namespaces\tYes', 'Network namespaces\tYes', 'Seccomp-BPF sandbox\tYes'):
                 if expected not in status:
                     raise ProfileError('No se ha acreditado el sandbox del navegador')
-            relevant = [entry for pid, entry in processes().items() if pid not in self.before]
-            browser = [v for v, args in relevant if any(a == ('--user-data-dir=' + str(self.path)).encode() for a in args) and not any(a.startswith(b'--type=') for a in args)]
-            renderers = [v for v, args in relevant if b' --type=renderer ' in b' ' + b' '.join(args) + b' ']
-            if len(browser) != 1 or not renderers:
-                raise ProfileError('No se ha acreditado la ruta o los procesos del sandbox')
-            for values in renderers:
-                if values['NoNewPrivs'].strip() != '1' or values['Seccomp'].strip() != '2' or int(values['CapEff'], 16) != 0:
-                    raise ProfileError('Protecciones de renderer no acreditadas')
-                if len(values['NSpid'].split()) <= len(browser[0]['NSpid'].split()) or int(values['Seccomp_filters']) <= int(browser[0]['Seccomp_filters']):
-                    raise ProfileError('Namespaces o filtro adicional no acreditados')
-            self.sandbox = {'namespaces': True, 'seccomp': True, 'proc_verified': True}
+            self.sandbox = verify_sandbox(self.before, self.path)
             await page.close()
             return self
         except BaseException:

@@ -13,7 +13,7 @@ from persistencia.bundle_v2 import PATHS, PILOT, SECTIONS, check_inventory, enco
 REVISION='611e436a1528b0f487aa56a045f023e8ae8ae098'
 
 def producer_rules():
-    names=('pilot_bundle.py','pilot_transport.py','sofascore_offline.py')
+    names=('pilot_bundle.py','pilot_transport.py','sofascore_offline.py','sdk_adapter.py','sdk_transport.py')
     sources={n:sha(Path(__file__).with_name(n).read_bytes()) for n in names}
     return fingerprint(dict(sources=sources,scraper=REVISION,policy=dict(window_s=259200,interval_s=21600)))
 

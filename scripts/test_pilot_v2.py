@@ -17,12 +17,15 @@ def main():
     ap.add_argument('--acquisition-image',required=True)
     ap.add_argument('--scraper-source',type=Path,required=True)
     ap.add_argument('--output',type=Path,required=True)
+    ap.add_argument('--sdk-data',type=Path,help='Respuestas ya descargadas (round_1.json y raw-*.jsonl): la adquisición '
+                    'sale por el flujo normal del SDK y su navegador contra un sitio de 127.0.0.1, con sandbox y perfil gestionado')
+    ap.add_argument('--seccomp',type=Path,default=ROOT/'docker/acquisition/seccomp-linux-amd64.json')
     a=ap.parse_args()
     if a.snapshot.name=='real-jaen.sqlite':raise ValueError('Use an identified inactive snapshot, never the active base')
     if a.output.exists():raise FileExistsError('Report directory must be new')
     a.output.mkdir(parents=True)
     def docker(*args,check=True):
-        p=subprocess.run(['docker',*map(str,args)],capture_output=True,text=True,encoding='utf8',errors='replace',timeout=240)
+        p=subprocess.run(['docker',*map(str,args)],capture_output=True,text=True,encoding='utf8',errors='replace',timeout=600)
         if check and p.returncode:raise RuntimeError(p.stdout+'\n'+p.stderr)
         return p
     docker('version')
@@ -44,11 +47,14 @@ def main():
     volumes={k:prefix+'-'+k for k in ('state','exchange','cache')}
     created=[];containers=[]
     common=['--rm','--init','--pull','never','--network','none','--cap-drop','ALL','--security-opt','no-new-privileges:true']
-    def run(image,mounts,env,command,label):
+    # Chromium del SDK: sandbox con la política fijada de cinco reglas (no el seccomp por defecto) y memoria compartida.
+    browser=['--security-opt','seccomp='+str(a.seccomp.resolve()),'--shm-size','512m']
+    def run(image,mounts,env,command,label,extra=(),variables=()):
         name=prefix+'-'+label;containers.append(name)
-        cmd=['run',*common,'--name',name,'--label','rj.pilot.v2='+prefix]
+        cmd=['run',*common,*extra,'--name',name,'--label','rj.pilot.v2='+prefix]
         for source,target,kind,readonly in mounts:
             cmd+=['--mount',f'type={kind},source={source},target={target}'+(',readonly' if readonly else '')]
+        for variable in variables:cmd+=['--env',variable]
         cmd+=['--env','PYTHONPATH='+env,'--entrypoint','python',image,'-B',*command]
         p=docker(*cmd,check=False);(a.output/(label+'.log')).write_text(p.stdout+p.stderr,encoding='utf8')
         if p.returncode:raise RuntimeError('Stopped at '+label+'\n'+p.stdout+'\n'+p.stderr)
@@ -69,15 +75,32 @@ def main():
                         (ROOT/'docker/acquisition/test_pilot_v2.py','/opt/checks/test_pilot_v2.py','bind',True),
                         (volumes['exchange'],'/exchange','volume',False),(volumes['cache'],'/profiles','volume',False)]
             run(acquisition['Id'],acq_mounts,'/opt/app:/opt/scraper:/opt/checks',['-m','unittest','test_pilot_v2','-v'],'transport-tests')
-            run(acquisition['Id'],acq_mounts,'/opt/app:/opt/scraper:/opt/checks',['/opt/checks/test_pilot_v2.py','collect'],'acquisition')
+            if a.sdk_data is None:
+                run(acquisition['Id'],acq_mounts,'/opt/app:/opt/scraper:/opt/checks',['/opt/checks/test_pilot_v2.py','collect'],'acquisition')
+            else:
+                # Certificado efímero no confiable (solo para comprobar que el navegador y curl lo rechazan).
+                cert,key=Path(tmp)/'cert.pem',Path(tmp)/'key.pem'
+                subprocess.run(['openssl','req','-x509','-newkey','rsa:2048','-nodes','-days','2','-subj','/CN=127.0.0.1',
+                                '-addext','subjectAltName=IP:127.0.0.1','-keyout',str(key),'-out',str(cert)],check=True,capture_output=True)
+                key.chmod(0o644)
+                sdk_mounts=acq_mounts+[(a.sdk_data.resolve(),'/fixtures/downloaded','bind',True),(Path(tmp),'/fixtures/tls','bind',True),
+                                       (ROOT/'docker/acquisition/sdk_fixture.py','/opt/checks/sdk_fixture.py','bind',True),
+                                       (ROOT/'docker/acquisition/test_sdk_adapter.py','/opt/checks/test_sdk_adapter.py','bind',True)]
+                variables=('RJ_REQUIRE_SANDBOX=1','RJ_SDK_DATA=/fixtures/downloaded',
+                           'RJ_TEST_CERT=/fixtures/tls/cert.pem','RJ_TEST_KEY=/fixtures/tls/key.pem')
+                run(acquisition['Id'],sdk_mounts,'/opt/app:/opt/scraper:/opt/checks',['/opt/checks/test_sdk_adapter.py'],
+                    'sdk-adapter-tests',browser,variables)
+                run(acquisition['Id'],sdk_mounts,'/opt/app:/opt/scraper:/opt/checks',
+                    ['/opt/checks/test_pilot_v2.py','collect-sdk','/fixtures/downloaded'],'acquisition',browser)
             run(backend['Id'],backend_mounts,'/app:/app/tests',
                 ['/app/docker/acquisition/pilot_backend_check.py','receive',producer_rules()],'receive')
             # Export only metadata reports; never snapshots, journals, credentials or bundles.
             p=docker('run',*common,'--mount',f'type=volume,source={volumes["exchange"]},target=/imports,readonly',
                      '--entrypoint','python',backend['Id'],'-c',
-                     "import pathlib,json;print(json.dumps({n:json.loads((pathlib.Path('/imports')/n).read_bytes()) for n in ('prepare-report.json','receive-report.json','bundle-meta.json')}))")
+                     "import pathlib,json;print(json.dumps({n:json.loads((pathlib.Path('/imports')/n).read_bytes()) for n in ('prepare-report.json','receive-report.json','bundle-meta.json','sdk-report.json') if (pathlib.Path('/imports')/n).exists()}))")
             report=dict(project=prefix,backend_image=backend['Id'],acquisition_image=acquisition['Id'],
                         network='none',scraper_revision=rev,sdk_hashes=sdk_hashes,source_revision=description['revision'],external_requests=0,
+                        transport='sdk' if a.sdk_data else 'urllib',sdk_data=str(a.sdk_data) if a.sdk_data else None,
                         volumes=volumes,production_provider_enabled=False,results=json.loads(p.stdout))
             (a.output/'results.json').write_text(json.dumps(report,indent=2)+'\n',encoding='utf8')
     finally:

@@ -26,27 +26,51 @@ contadores de seguidores, un nombre de equipo en el calendario y 1090 ceros expl
 La exportación raw JSONL del SDK la consumen sin cambios `importar.py` y `python -m persistencia importar`
 (validado en una copia aislada: originales y selección conservados, verificación sin cambios en seco).
 
-### Ajustes al SDK aplicados en memoria (sin modificar el scraper)
+### Adaptador integrado: `acquisition/sdk_adapter.py` (sin modificar el scraper)
 
 1. Sesión del navegador con `additional_args` `ignore_https_errors=False`, `service_workers='block'`,
-   `permissions=[]`. Scrapling 0.4.15 fija lo contrario en `StealthySessionMixin`; la prueba local con certificado
-   no confiable y el control con los valores por defecto demuestran la diferencia.
-2. `profile_lock.secondary_profile` prohibido: perfil ocupado = parada, nunca un perfil temporal hermano.
+   `permissions=[]` y `chromium_sandbox=True`. Scrapling 0.4.15 fija lo contrario en `StealthySessionMixin`.
+2. Un único perfil, el indicado (en Linux, la generación de la sesión gestionada de `acquisition/profile.py`):
+   `profile_lock.secondary_profile` prohibido y arranque rechazado si el bridge usa otra ruta. En Linux, el sandbox
+   de ese Chromium se acredita por `/proc` con `acquisition.browser.verify_sandbox` (la misma comprobación de la
+   gestión de perfil).
 3. Tráfico reducido: `BrowserBridge` usa `/robots.txt` (mismo origen, sin subrecursos) como página y como
    `redirectUrl` del captcha (aceptado por el sitio el 27-10); tras obtener la cookie, la página del captcha queda en
    `about:blank`; `blocked_domains` de Scrapling para publicidad y analítica (solo actúa en las páginas de su
    `fetch()`); `--disable-features=MediaRouter,GlobalMediaControls`.
-4. Configuración por variables `SOFASCORE_*`: datos, perfil, log, throttle y configuración propios;
-   `RETRIES=0`, `RATE=1`, `MAX_CONCURRENT=1`, `TIMEOUT_SECONDS=10`, `DEFAULTS__SLICES=statistics,lineups,incidents`.
-5. Guardas en los tres puntos de envío del SDK (sesión curl asíncrona, curl síncrono, `BrowserBridge._api_fetch`):
-   lista cerrada de recursos, presupuesto, plazo global con cierre forzado y parada sin reintento ante 403 sin
-   challenge, challenge repetido en la página, 429/503, error de red o de certificado, ruta no permitida o perfil
-   ocupado.
+4. `configure_environment()`: datos, log, throttle y configuración del SDK propios; `RETRIES=0`, `RATE=1`,
+   `MAX_CONCURRENT=1`, `TIMEOUT_SECONDS=10`; rechaza variables de proxy o certificados.
+5. Cada envío físico (curl síncrono o `fetch()` del navegador) pasa por la lista cerrada de rutas y un presupuesto;
+   la sesión curl asíncrona (con su warm-up) no se usa. Un 403 sin challenge, un challenge repetido en la página,
+   un 429/503, un fallo del navegador o una ruta fuera de la lista detienen el adaptador sin más envíos.
 
-Prototipo y banco de pruebas local (15 escenarios, 82 comprobaciones, más la comparación de tráfico), FUERA del
-repositorio: `C:\Users\broke\dev\prueba-scraper-normal\` (`prueba_scraper.py`, `servidor_local.py`,
-`probar_local.py`, `probar_trafico.py`). Informes de las ejecuciones reales: carpetas
-`rj-prueba-real-20261027-a` y `-b` del directorio temporal del usuario. Pendiente de llevar al repositorio (abajo).
+`request(path)` devuelve (estado, cabeceras, cuerpo). Con el protocolo v2, `acquisition/sdk_transport.py` sustituye
+solo el envío de `PilotTransport`, que conserva lista fija, presupuesto durable, reintentos, paradas, plazo,
+cancelación y evidencia; inventario, cobertura y generación siguen en `pilot_bundle`, `bundle_v2` y
+`adquisicion_v2`. `producer_rules()` incluye ambos módulos.
+
+Validación sin red, con los cuerpos descargados el 27-10 (`round_1.json` y `raw-16599363.jsonl` de la segunda prueba
+real) servidos por `docker/acquisition/sdk_fixture.py` (challenge, captcha con cookie, `/robots.txt`):
+
+- `docker/acquisition/test_sdk_adapter.py`, 8 escenarios en procesos nuevos con el navegador real: challenge
+  resuelto con tráfico reducido, 403 sin challenge, challenge irresoluble, 429 en el navegador, ruta no permitida,
+  perfil ocupado sin perfil temporal y TLS del navegador y de curl con certificado no confiable. Pasan en Windows
+  (venv del scraper; sin acreditar sandbox) y dentro del contenedor con `RJ_REQUIRE_SANDBOX=1`.
+- `scripts/test_pilot_v2.py --sdk-data <carpeta>`: recorrido completo en contenedores sin red. Adquisición con
+  la política seccomp fijada, perfil gestionado inicializado, sesión exclusiva y sandbox acreditado; dos trabajos;
+  recepción con autenticación, cuatro bundles manipulados rechazados, fallo tras la candidata sin publicar,
+  publicación, duplicado idempotente, generación obsoleta rechazada, identificadores y decisiones conservados y
+  2792 rutas equivalentes. Sin `--sdk-data`, el recorrido con urllib sigue igual.
+
+```sh
+python scripts/test_pilot_v2.py --snapshot <copia inactiva identificada> --backend-image <backend de integración> \
+  --acquisition-image <imagen con SDK y Chromium> --scraper-source <checkout 611e436> \
+  --sdk-data <carpeta con round_1.json y raw-16599363.jsonl> --output <carpeta nueva>
+```
+
+Prototipo y banco de pruebas que precedieron a la integración, FUERA del repositorio:
+`C:\Users\broke\dev\prueba-scraper-normal\`. Informes de las ejecuciones reales: carpetas `rj-prueba-real-20261027-a`
+y `-b` del directorio temporal del usuario.
 
 ### Correcciones a conclusiones anteriores
 
@@ -109,11 +133,22 @@ Garantías que la solución definitiva debe demostrar antes de retirarlo:
 
 ## Pendiente para integrar y validar en Docker
 
-1. Llevar al adaptador de `acquisition/` los ajustes 1-5 anteriores, con sus pruebas locales (servidor de
-   127.0.0.1, sin red externa), y una receta fija sobre el protocolo v1 versionado (`acquisition/service.py`,
-   `persistencia/adquisicion.py`) que aporte las garantías 1-5.
-2. Prueba real autorizada DENTRO del contenedor de adquisición: el acceso solo se ha demostrado en Windows nativo.
-   Comprobar challenge, red de salida, sandbox con la política fijada y tráfico reducido.
-3. Revisar la imagen base: `offline_probe.py` como punto de entrada y dependencias SQL innecesarias.
-4. Decidir qué hacer con las conexiones de fondo de Chromium.
-5. Con 1-2 cumplidos, retirar el protocolo v2 y sus pruebas.
+Hecho el 28-10-2026: adaptador integrado y validado sin red en local y en Docker (arriba).
+
+Para la prueba real en Docker:
+
+1. Una etapa real de una sola ejecución: `SdkTransport(enable_real=True)` con `SdkAdapter` sobre SofaScore
+   (sin `local_test`), plazo global y confirmación explícita, en un contenedor de adquisición con salida a Internet
+   y el resto de restricciones (sin montaje deportivo, seccomp fijado, perfil gestionado, sin capacidades). Hoy el
+   ejecutor solo tiene red `none`.
+2. Decidir la salida: Docker no filtra por dominio. Chromium abre además conexiones de fondo a Google (también el
+   puerto 5228); limitarlas exige un proxy de salida o aceptarlas y registrarlas.
+3. Imagen de adquisición construida desde las fuentes actuales (`scripts/build_pilot_image.py` o la definitiva) con
+   su ID registrado; la usada en la validación es la del 26-10 con el código actual montado.
+4. Copia inactiva identificada para el inventario y la recepción; nunca la base activa.
+5. Incertidumbre que solo resuelve esa prueba: si el challenge se resuelve igual en Chromium headless de Linux
+   dentro del contenedor (misma IP de salida que Windows a través de Docker Desktop).
+
+Después, para Docker Compose: receta fija real en el protocolo v1 versionado (`acquisition/service.py`,
+`persistencia/adquisicion.py`) con las garantías 1-5, servicio en el overlay de Compose, revisión de la imagen base
+(`offline_probe.py` como punto de entrada, dependencias SQL innecesarias) y, con todo ello, retirar el protocolo v2.
