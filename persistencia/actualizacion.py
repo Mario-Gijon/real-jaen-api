@@ -195,7 +195,7 @@ class Coordinador:
                 raise CoordinacionRechazada(str(self._bloqueado or 'Coordinador cerrado o propietario no disponible'))
             return self._actual
 
-    def solicitar(self, *, exportaciones=(), calendarios=(), fichas=(), identificador=None):
+    def solicitar(self, *, exportaciones=(), calendarios=(), fichas=(), identificador=None, generacion_esperada=None):
         entradas = dict(exportaciones=[(str(Path(p).resolve()), e) for p, e in exportaciones],
                         calendarios=[str(Path(p).resolve()) for p in calendarios],
                         fichas=[str(Path(p).resolve()) for p in fichas])
@@ -204,6 +204,8 @@ class Coordinador:
         with self._puerta:
             if self._cerrado or self._bloqueado or not self._hilo.is_alive():
                 raise CoordinacionRechazada(str(self._bloqueado or 'Coordinador cerrado'))
+            if generacion_esperada is not None and self._actual.id != generacion_esperada:
+                raise CoordinacionRechazada('La generacion de la solicitud ya no esta vigente')
             with closing(self._db()) as c, c:
                 c.execute('BEGIN IMMEDIATE')
                 if identificador is not None:
@@ -218,7 +220,7 @@ class Coordinador:
                         raise CoordinacionRechazada('Otro trabajo activo')
                     return activo[0]
                 ident = identificador or str(uuid.uuid4())
-                trabajo = dict(id=ident, estado='queued', fase='queued', entradas=entradas)
+                trabajo = dict(id=ident, estado='queued', fase='queued', entradas=entradas, generacion_base=generacion_esperada)
                 c.execute('INSERT INTO trabajo VALUES(?,?,?)', (ident, 'queued', json.dumps(trabajo)))
             self._cola.put(ident)
             return ident
@@ -271,6 +273,8 @@ class Coordinador:
         nueva = None
         try:
             meta = self._meta()
+            if trabajo.get('generacion_base') is not None and trabajo['generacion_base'] != meta['generacion']:
+                raise CoordinacionRechazada('La generacion cambio antes de preparar la candidata')
             self._exigir_reglas(meta)
             if comprobar(self.base) != meta['descripcion']:
                 raise CoordinacionRechazada('El principal cambio fuera del coordinador')

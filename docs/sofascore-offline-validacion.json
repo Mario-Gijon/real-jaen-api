@@ -1,0 +1,49 @@
+{
+  "engine": "29.5.2",
+  "image": "sha256:0f2cf2d573fb78cb62a0429365172d169af4ee495c5e7565169c2579cf302073",
+  "scraper_revision": "611e436a1528b0f487aa56a045f023e8ae8ae098",
+  "sdk_sha256": {
+    "services/pipeline.py": "fb9e3f6ec979359e5e803406fc0ec085ef62d9ca6a14fbd7ba500c1052e5682f",
+    "services/planning.py": "21f911b3b5ef2083477fdad0ae88524c72fd03fe24418b56fa7c58eb9a6694a9",
+    "services/listing.py": "b360b6d7db4dc9a63aefb0592665feaffa68ce8659397a817e932b8dace2976b",
+    "slices.py": "42de601fe3b6bfe6fbd53a8e06c952112f81adc853882d928b08721a5ab982aa",
+    "sports.py": "9807a6c1886c123f361690ec480a83d42273e39eadaa8ba1ba3555014b6aa40f",
+    "status.py": "ab2ca6ca8e991064920a0e22131f8931955eaa2ca381f1f8d19dca6f2da71e41",
+    "services/query.py": "dd2f04001562d7b95b5396e77c2e2ddb2b1e74d23acb5729e6df41c71e778cb0"
+  },
+  "platform": "Docker Desktop Linux amd64",
+  "seccomp_sha256": "abd5cc8ed37eb8a76b57b6aa9e8042e79ac7f04cb189782e2c8565c0765c5cb7",
+  "network": "none",
+  "uid": 10001,
+  "capabilities": [],
+  "no_new_privileges": true,
+  "init": true,
+  "tests": 30,
+  "exit_code": 0,
+  "external_requests": 0,
+  "host_data_mounts": [],
+  "production_provider_enabled": false,
+  "delivery_sha256": {
+    "acquisition/real_bundle.py": "cfb4941f10c8891f35e056580ec7ac62d0e2a95557b9fc0d94958369c5677d71",
+    "acquisition/sofascore_offline.py": "39d71f05a2e171a6e0b79a47da221e1afd90ff4f3137cd2dbdf0787a5f6b78f5",
+    "acquisition/sofascore-scope.json": "5fac26918cf3315cd56230d889bff774788ea94aa5d5298df81b5797c119d58b",
+    "scripts/plan_sofascore_evidence.py": "f9b13c6867d3e63ead8d30175f0a91ad22b3e2e93474c8116aa616bfacf679c9",
+    "scripts/test_sofascore_offline.py": "3f7764e60748a2a132f1dae8ffa46ac9658dcf26b03190ccdb2a8d0062b03da1",
+    "docker/acquisition/test_sofascore_offline.py": "985bc7ada3e397319b5aa1d6bc5b74bea7ee005e7654c0420878c371ce5a31d5"
+  },
+  "archived_exports_semantic_audit": {
+    "post_events": 80,
+    "pre_events": 300,
+    "post_lineups_data": 80,
+    "post_statistics_data": 80,
+    "post_incidents_data": 80,
+    "pilot_all_three_resources": "data",
+    "current_active_sql_not_examined": true
+  },
+  "limitations": [
+    "No real transport or production bundle handoff",
+    "Complete observed calendar export still required",
+    "Group Linux server not validated",
+    "No validated endpoint absence rules"
+  ]
+}

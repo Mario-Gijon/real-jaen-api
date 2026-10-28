@@ -1,0 +1,113 @@
+{
+  "project": "rj-pilot-v2-718c270f7520",
+  "backend_image": "sha256:49b7b92dafa87f027c913ef1fbbe2efabda8c9b07268f4e358813cd09c1eaa8f",
+  "acquisition_image": "sha256:376a8f804007cdd747bdafd31469ad878b1e6607ac6bd2483c9e1f0d5ea6db6c",
+  "network": "none",
+  "scraper_revision": "611e436a1528b0f487aa56a045f023e8ae8ae098",
+  "sdk_hashes": {
+    "services/pipeline.py": "fb9e3f6ec979359e5e803406fc0ec085ef62d9ca6a14fbd7ba500c1052e5682f",
+    "services/planning.py": "21f911b3b5ef2083477fdad0ae88524c72fd03fe24418b56fa7c58eb9a6694a9",
+    "services/listing.py": "b360b6d7db4dc9a63aefb0592665feaffa68ce8659397a817e932b8dace2976b",
+    "services/export.py": "526739ee50f53d1c34cb73054e0c60f38c849adcae3f893e514aae64b173fee2",
+    "store/export.py": "bc0767cb56a1d70fa40dcb6cb1ccbb273a9757f305eb1d014aa547cca518a0dc",
+    "store/backup.py": "b9db5e4366d6c9158f1bb3d1593eeee5ad5e6be6ff61774eb0a948935c7cf23d",
+    "slices.py": "42de601fe3b6bfe6fbd53a8e06c952112f81adc853882d928b08721a5ab982aa",
+    "sports.py": "9807a6c1886c123f361690ec480a83d42273e39eadaa8ba1ba3555014b6aa40f",
+    "status.py": "ab2ca6ca8e991064920a0e22131f8931955eaa2ca381f1f8d19dca6f2da71e41"
+  },
+  "source_revision": "0004",
+  "external_requests": 0,
+  "volumes": {
+    "state": "rj-pilot-v2-718c270f7520-state",
+    "exchange": "rj-pilot-v2-718c270f7520-exchange",
+    "cache": "rj-pilot-v2-718c270f7520-cache"
+  },
+  "production_provider_enabled": false,
+  "results": {
+    "prepare-report.json": {
+      "calendar_only": [
+        16599776,
+        16599788
+      ],
+      "current": 380,
+      "historical": [
+        16599919,
+        16599956
+      ],
+      "inventory_sha256": "b22bfb485ecbc0d9970a8f71d406767805f9050ccb2d83791f8f6df4258fdfe9",
+      "retained": 382,
+      "revision": "0004",
+      "stage": "backend_prepare"
+    },
+    "receive-report.json": {
+      "authentication_checked": true,
+      "base": "exclusive temporary pilot installation",
+      "browser_installed": false,
+      "default_disabled": true,
+      "duplicate_publication_idempotent": true,
+      "ids_preserved": true,
+      "integrity": "ok",
+      "local_decisions_preserved": true,
+      "original_observations_preserved": true,
+      "post_commit_candidate_failure": "principal and old snapshot preserved",
+      "publication": "completed",
+      "restart_generation_preserved": true,
+      "routes_equivalent": 2792,
+      "sdk_installed": false,
+      "stage": "backend_receive",
+      "stale_generation_rejected": true,
+      "tampered_bundles_rejected": 4
+    },
+    "bundle-meta.json": {
+      "attempts": 5,
+      "context": [
+        "a5bdbefe-0a56-420c-9942-4a0e05a5fa2b",
+        "f8f4f405-ed69-42eb-a49c-168742a997ab"
+      ],
+      "descriptor": {
+        "bytes": 31587177,
+        "sha256": "3cb77fc879ba04adbd0aea12e7f656983b25acafb0cf7e0573407aea52290b12"
+      },
+      "external_requests": 0,
+      "rules_sha256": "261f0ff4cabfb2981f9ba5ad1407449a555fadee0c42756756401502a5522320"
+    }
+  },
+  "checks": {
+    "transport_and_artifact_tests": 16,
+    "recipe_and_temporal_tests": 31,
+    "api_sql": {
+      "tests": 240,
+      "skipped": 2,
+      "ok": true,
+      "seconds": 86.563
+    },
+    "api_without_sql": {
+      "tests": 240,
+      "skipped": 93,
+      "ok": true,
+      "seconds": 6.11
+    },
+    "json_order_regression": true,
+    "synchronization_focused_tests": 21
+  },
+  "snapshot_source": "inactive consistent snapshot prepared 2026-10-25; not current Windows base",
+  "resources_removed_after_validation": true,
+  "real_provider_enabled": false,
+  "packaged_image": "sha256:eb4034e8aa8e7d13790e674d76fc15eb1a6fa985929b019b84555ff1381ec1e5",
+  "source_sha256": {
+    "acquisition/pilot_transport.py": "b5f5652bf29adcd040c89efd93f12a6a216a428ca15d21ac82df29607671b687",
+    "acquisition/pilot_bundle.py": "a867e91b4180ca5a66f79cc3ff0f8614e41a4ad743139086cec74bc8863e4c82",
+    "acquisition/sofascore_offline.py": "1cf31bc77a3c096129511bcd047b60bb2ea042efcbfd4cec9b0f6846cdc0236f",
+    "acquisition/real_bundle.py": "a15f7c00f94a32913a2ee5f7b9c0bb33163ca221fc91e7c60b4340e0e80cd971",
+    "persistencia/bundle_v2.py": "db6c27bcae1ce9af188b893e54f436745726f9ac42a9ef8eeecbde8c5d824f95",
+    "persistencia/adquisicion_v2.py": "0295daaa986824dd978bb7785964832a79fe71ba8f052004feb34b55458ef073",
+    "persistencia/actualizacion.py": "fa95c900f00623cfe2333fc82a3ab7f1078a810b8cf87c5f5476bf3d28ffcb40",
+    "persistencia/sincronizacion.py": "1eb19cb19578c9503787838a114227569cf745d9b6b5070cd9adc99fdd1ac01c",
+    "docker/acquisition/test_pilot_v2.py": "f08912aab8b83d6494a866db17cee6e2364b2ec1bd06bbe958425be0701e9836",
+    "docker/acquisition/pilot_backend_check.py": "e9a7b9d736d6a6b87db8cbd2ade136da6b8fafb7fbb201d24d4376cedf61ac46",
+    "scripts/test_pilot_v2.py": "cd6b6801710cf337ad341b06b75a0c9f0cce87d3038fb3e949682ba412f5f987",
+    "tests/test_orden_payload.py": "bbb60b4f55fcbd8f603e19127af2b62e6a3d1a3859066589bab30307d9f0e9c9",
+    "docker/acquisition/Dockerfile.pilot": "c96b600e202fdba890c771f8e95212767bdff0764ce5b480966278c4bdcab5a4",
+    "scripts/build_pilot_image.py": "fd3b872ec1468e8ba7f29db222a6c0e3780fde388f0647f23d2a6ff8fcaf2187"
+  }
+}
