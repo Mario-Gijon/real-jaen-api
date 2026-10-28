@@ -135,18 +135,22 @@ Garantías que la solución definitiva debe demostrar antes de retirarlo:
 
 Hecho el 28-10-2026: adaptador integrado y validado sin red en local y en Docker (arriba).
 
-Para la prueba real en Docker:
+Prueba real en Docker, preparada (`scripts/prueba_real_sdk.py`, etapa `docker/acquisition/real_sdk.py`,
+`Dockerfile.real`, verificación `pilot_backend_check.py verify-real`):
 
-1. Una etapa real de una sola ejecución: `SdkTransport(enable_real=True)` con `SdkAdapter` sobre SofaScore
-   (sin `local_test`), plazo global y confirmación explícita, en un contenedor de adquisición con salida a Internet
-   y el resto de restricciones (sin montaje deportivo, seccomp fijado, perfil gestionado, sin capacidades). Hoy el
-   ejecutor solo tiene red `none`.
-2. Decidir la salida: Docker no filtra por dominio. Chromium abre además conexiones de fondo a Google (también el
-   puerto 5228); limitarlas exige un proxy de salida o aceptarlas y registrarlas.
-3. Imagen de adquisición construida desde las fuentes actuales (`scripts/build_pilot_image.py` o la definitiva) con
-   su ID registrado; la usada en la validación es la del 26-10 con el código actual montado.
-4. Copia inactiva identificada para el inventario y la recepción; nunca la base activa.
-5. Incertidumbre que solo resuelve esa prueba: si el challenge se resuelve igual en Chromium headless de Linux
+1. `construir`: imagen desde `git archive` de un commit (sin red, sin código montado), con etiqueta del commit;
+   comprueba que `/opt/app` contiene exactamente los archivos del commit previstos (ningún ensayo, sitio simulado ni
+   instrumento) y que el SDK es el de `611e436`. Deja `build-record.json` con los ID.
+2. `ejecutar --modo ensayo`: todo el recorrido con la adquisición en red `none` (la primera petición falla en DNS y
+   la cadena de paradas termina sin bundle). `--modo real --confirmar sofascore-16599363-una-ejecucion`: red bridge
+   propia de esa ejecución y registro local de una sola vez (`%LOCALAPPDATA%\rj-acquisition\real-runs`).
+3. Límites: 5 rutas fijas, un intento por ruta (cualquier fallo detiene el trabajo), 8 envíos físicos, 300 s de
+   trabajo, vigilante de 420 s en el contenedor y 480 s en el ejecutor; un arranque del navegador, sandbox
+   acreditado, HTTPS verificado y tráfico reducido. El contenedor de adquisición solo monta intercambio y perfiles.
+4. Salida: Docker no filtra por dominio y no se añade proxy. Se registran los envíos del adaptador, las peticiones
+   de las páginas y todas las conexiones TCP/UDP del espacio de red del contenedor (`/proc/net`, cada 0,2 s), también
+   las de fondo de Chromium. No se registran nombres DNS.
+5. Incertidumbre que solo resuelve la prueba: si el challenge se resuelve igual en Chromium headless de Linux
    dentro del contenedor (misma IP de salida que Windows a través de Docker Desktop).
 
 Después, para Docker Compose: receta fija real en el protocolo v1 versionado (`acquisition/service.py`,

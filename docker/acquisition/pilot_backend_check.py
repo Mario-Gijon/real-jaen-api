@@ -142,6 +142,35 @@ def receive(expected_rules):
                 sdk_installed=False,browser_installed=False,integrity='ok',base='exclusive temporary pilot installation')
     (EXCHANGE/'receive-report.json').write_bytes(encode(report));print(encode(report).decode())
 
+def verify_real(expected_rules):
+    """Real single run: trust-boundary verification only (inventory, coverage, generation, provenance), no candidate."""
+    import base64
+    from persistencia.bundle_v2 import verify,fingerprint,PILOT
+    assert importlib.util.find_spec('sofascore_scraper') is None
+    baseline=parse((EXCHANGE/'inventory.json').read_bytes());meta=parse((EXCHANGE/'bundle-meta.json').read_bytes())
+    assert meta['rules_sha256']==expected_rules
+    body=(EXCHANGE/'bundle.json').read_bytes()
+    verify(body,meta['descriptor'],baseline,context=meta['context'],expected_rules=expected_rules)
+    try:verify(body,meta['descriptor'],baseline,context=meta['context'],expected_rules=expected_rules,test_transport=True);raise AssertionError('Real bundle accepted as fixture')
+    except Rejected:pass
+    m=parse(body)['manifest'];files=parse(body)['files']
+    prior={s['record']['key']:s['record']['payload'] for s in baseline['records'] if s['record']['event_id']==PILOT}
+    fresh={}
+    for name,raw in files.items():
+        if name.startswith('team_'):
+            for line in base64.b64decode(raw).splitlines():
+                row=parse(line)
+                if row['event_id']==PILOT:fresh[row['key']]=row['payload']
+    changes={k:('same' if k in prior and fingerprint(prior[k])==fingerprint(v) else 'changed' if k in prior else 'new') for k,v in sorted(fresh.items())}
+    statuses={}
+    for c in m['coverage']:statuses[c['status']]=statuses.get(c['status'],0)+1
+    report=dict(stage='backend_verify_real',accepted=True,transport=m['transport'],generation_id=m['generation_id'],
+                inventory_sha256=m['inventory_sha256'],attempts=[(a['path'],a['status']) for a in m['attempts']],
+                coverage=statuses,retained=len(m['retained']),pilot_resources_vs_inventory=changes,
+                publication=None,base='inactive snapshot copy in its own volume')
+    (EXCHANGE/'verify-report.json').write_bytes(encode(report));print(encode(report).decode())
+
 if __name__=='__main__':
     if sys.argv[1]=='prepare':prepare()
+    elif sys.argv[1]=='verify-real':verify_real(sys.argv[2])
     else:receive(sys.argv[2])
