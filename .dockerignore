@@ -7,7 +7,6 @@
 !requirements-sql.txt
 !persistencia/
 !persistencia/**
-!scripts/
 !scripts/initialize_snapshot.py
 !scripts/check_container.py
 **/__pycache__
@@ -15,3 +14,6 @@
 **/.env*
 **/*.sqlite*
 **/*.lock
+# Pilot v2 bundle protocol: kept for its tests until the real recipe replaces it; never in the image.
+persistencia/bundle_v2.py
+persistencia/adquisicion_v2.py

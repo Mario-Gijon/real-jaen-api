@@ -1,2 +1,9 @@
 __pycache__
 *.pyc
+# Pilot v2 recipe and fixed scope: kept for their own tests (Dockerfile.pilot stages them
+# explicitly), never in the acquisition runtime/test images.
+pilot_bundle.py
+pilot_transport.py
+real_bundle.py
+sofascore_offline.py
+sofascore-scope.json
