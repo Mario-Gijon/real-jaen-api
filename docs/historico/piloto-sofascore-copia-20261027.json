@@ -1,0 +1,228 @@
+{
+  "source": "C:\\Users\\broke\\dev\\datos-importados\\base\\copias\\real-jaen.20261027-083912-846469.piloto-16599363.sqlite",
+  "source_sha256": "ebe99c6d305db4864b7a316244e60e87360e314e7f71dd1108563530a970e5ca",
+  "source_description": {
+    "integridad": "ok",
+    "claves_foraneas": [],
+    "revision": "0004",
+    "recuentos": {
+      "alembic_version": 1,
+      "call_up": 3427,
+      "call_up_change": 0,
+      "call_up_stat": 91708,
+      "competition": 3,
+      "competition_external_id": 3,
+      "content": 1377,
+      "discrepancy": 0,
+      "discrepancy_observation": 0,
+      "discrepancy_reason": 0,
+      "discrepancy_value": 0,
+      "file_team_declaration": 21,
+      "identity_decision": 0,
+      "identity_decision_subject": 0,
+      "import_run": 3,
+      "import_run_file": 26,
+      "local_replacement": 2,
+      "match": 393,
+      "match_external_id": 393,
+      "match_state": 393,
+      "match_version_issue": 0,
+      "observation": 2338,
+      "player": 532,
+      "player_attribute_observation": 46344,
+      "player_external_id": 532,
+      "rule_set": 4,
+      "season": 3,
+      "season_external_id": 3,
+      "section_selection": 873,
+      "section_selection_history": 0,
+      "source_file": 25,
+      "stage": 3,
+      "stage_external_id": 3,
+      "team": 30,
+      "team_external_id": 30,
+      "team_name": 30
+    },
+    "huella": "eaddcded604fec2263a949ced67d1f7d98a996681bc47639e54887d265dc771e"
+  },
+  "test_directory": "C:\\Users\\broke\\AppData\\Local\\Temp\\rj-pilot-20261027-b5ed9c745447",
+  "test_base": "C:\\Users\\broke\\AppData\\Local\\Temp\\rj-pilot-20261027-b5ed9c745447\\pilot.sqlite",
+  "exact_logical_copy_verified": true,
+  "initial_verification": {
+    "base": "C:\\Users\\broke\\AppData\\Local\\Temp\\rj-pilot-20261027-b5ed9c745447\\pilot.sqlite",
+    "ok": true,
+    "problemas": [],
+    "cambios_en_seco": {},
+    "convocatorias_retiradas": 0
+  },
+  "explicit_rule_adoption_on_test_copy": {
+    "base": "C:\\Users\\broke\\AppData\\Local\\Temp\\rj-pilot-20261027-b5ed9c745447\\pilot.sqlite",
+    "run": 4,
+    "copia": "C:\\Users\\broke\\AppData\\Local\\Temp\\rj-pilot-20261027-b5ed9c745447\\copias\\pilot.20261027-084604-496431.antes-de-reconstruir.sqlite",
+    "cambios": {}
+  },
+  "verification": {
+    "base": "C:\\Users\\broke\\AppData\\Local\\Temp\\rj-pilot-20261027-b5ed9c745447\\pilot.sqlite",
+    "ok": true,
+    "problemas": [],
+    "cambios_en_seco": {},
+    "convocatorias_retiradas": 0
+  },
+  "inventory_sha256": "6990d584a9ef990496bd035b0123ed17e6ce30614dc672c787129155fdfba9a4",
+  "generation_id": "45f3de41-bd7b-44a2-a8cf-130f827b7a7e",
+  "teams": [
+    2815,
+    2840,
+    2841,
+    2877,
+    4487,
+    4489,
+    5069,
+    24265,
+    24322,
+    24323,
+    24326,
+    24329,
+    24338,
+    24363,
+    24368,
+    43751,
+    135672,
+    202074,
+    217210,
+    263407
+  ],
+  "retained": 382,
+  "current": 380,
+  "historical": [
+    {
+      "id": 16599919,
+      "current": false,
+      "replaced_by": 16969545,
+      "home": 24363,
+      "away": 5069,
+      "status": "postponed",
+      "tournament_id": 94191,
+      "season_id": 97382
+    },
+    {
+      "id": 16599956,
+      "current": false,
+      "replaced_by": 17118209,
+      "home": 24329,
+      "away": 4487,
+      "status": "postponed",
+      "tournament_id": 94191,
+      "season_id": 97382
+    }
+  ],
+  "calendar_only_ids": [
+    16599776,
+    16599788
+  ],
+  "pilot": {
+    "id": 16599363,
+    "current": true,
+    "replaced_by": null,
+    "home": 135672,
+    "away": 2841,
+    "status": "finished",
+    "tournament_id": 94191,
+    "season_id": 97382
+  },
+  "local_replacements": [
+    [
+      1,
+      274,
+      275,
+      "active"
+    ],
+    [
+      2,
+      364,
+      365,
+      "active"
+    ]
+  ],
+  "ids_originals_decisions_preserved": true,
+  "source_unchanged": true,
+  "external_requests": 0,
+  "docker_validation": "pending: Linux engine unavailable",
+  "real_provider_enabled": false,
+  "restart_generation_preserved": true,
+  "maintenance_rejected_while_coordinator_active": true,
+  "maintenance_succeeds_after_release": true,
+  "pilot_sections": [
+    {
+      "resource": "event",
+      "fetched_at": "2026-10-21T12:07:26+00:00",
+      "content_hash": "86f5747952be4b73c4a9856d32985eae062c058ca91d1487b4760111fdee43ad"
+    },
+    {
+      "resource": "incidents",
+      "fetched_at": "2026-10-21T12:07:31+00:00",
+      "content_hash": "bc974589ac618b377af092402e78ba4a561140e2de6a427db2cfaa66b6093a6f"
+    },
+    {
+      "resource": "lineups",
+      "fetched_at": "2026-10-21T12:07:31+00:00",
+      "content_hash": "dec0724642d47512a9ea07572f27841bbc168c532dbd4e77c65431cd309af709"
+    },
+    {
+      "resource": "statistics",
+      "fetched_at": "2026-10-21T12:07:30+00:00",
+      "content_hash": "3adc3c5b8528b6639775595effbeadde63ac8b4e3c22ed2b6b0d60be628da7d2"
+    }
+  ],
+  "event_status_counts": {
+    "finished": 80,
+    "notstarted": 300,
+    "postponed": 2
+  },
+  "test_description": {
+    "integridad": "ok",
+    "claves_foraneas": [],
+    "revision": "0004",
+    "recuentos": {
+      "alembic_version": 1,
+      "call_up": 3427,
+      "call_up_change": 0,
+      "call_up_stat": 91708,
+      "competition": 3,
+      "competition_external_id": 3,
+      "content": 1377,
+      "discrepancy": 0,
+      "discrepancy_observation": 0,
+      "discrepancy_reason": 0,
+      "discrepancy_value": 0,
+      "file_team_declaration": 21,
+      "identity_decision": 0,
+      "identity_decision_subject": 0,
+      "import_run": 4,
+      "import_run_file": 26,
+      "local_replacement": 2,
+      "match": 393,
+      "match_external_id": 393,
+      "match_state": 393,
+      "match_version_issue": 0,
+      "observation": 2338,
+      "player": 532,
+      "player_attribute_observation": 46344,
+      "player_external_id": 532,
+      "rule_set": 4,
+      "season": 3,
+      "season_external_id": 3,
+      "section_selection": 873,
+      "section_selection_history": 0,
+      "source_file": 25,
+      "stage": 3,
+      "stage_external_id": 3,
+      "team": 30,
+      "team_external_id": 30,
+      "team_name": 30
+    },
+    "huella": "347bb9051a1c71bc6597e3ce810eaab9d80e6a5c5540503e8605f82b88e3032b"
+  },
+  "team_manifest_correspondence_verified": true,
+  "producer_rules_verified": "261f0ff4cabfb2981f9ba5ad1407449a555fadee0c42756756401502a5522320"
+}

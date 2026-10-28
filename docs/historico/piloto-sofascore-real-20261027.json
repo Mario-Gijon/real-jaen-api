@@ -1,0 +1,39 @@
+{
+  "result": {
+    "attempt_count": 1,
+    "attempts": [
+      {
+        "finished_at": "2026-10-27T09:01:57.821041+00:00",
+        "number": 1,
+        "path": "/unique-tournament/17073/season/97382/events/round/1",
+        "payload_sha256": null,
+        "sent_at": "2026-10-27T09:01:57.739409+00:00",
+        "status": 403
+      }
+    ],
+    "browser_used": false,
+    "error": "Refusal/breaker: stop entire pilot",
+    "error_type": "PilotStopped",
+    "job_id": "32452100-3cbe-4bdd-8cd5-3b686fa190f9",
+    "max_attempts": 10,
+    "state": "failed"
+  },
+  "source": "explicitly authorized real five-GET pilot 16599363",
+  "platform": "Docker Desktop Linux x86_64",
+  "test_base": "C:\\Users\\broke\\AppData\\Local\\Temp\\rj-pilot-20261027-b5ed9c745447\\pilot.sqlite",
+  "test_base_sha256_unchanged": "56a877f201f08e46efb1076c9c9a54608594bc112749b32ad842034a9fdce481",
+  "generation_unchanged": "45f3de41-bd7b-44a2-a8cf-130f827b7a7e",
+  "inventory_unchanged": "6990d584a9ef990496bd035b0123ed17e6ce30614dc672c787129155fdfba9a4",
+  "bundle_created": false,
+  "publication_attempted": false,
+  "active_base_accessed": false,
+  "services_changed": false,
+  "evidence_directory": "C:\\Users\\broke\\AppData\\Local\\Temp\\rj-real-pilot-a694ac441f39",
+  "cache_volume_retained": "rj-real-pilot-a694ac441f39-cache",
+  "volume_identity_label": {
+    "rj.real.pilot": "32452100-3cbe-4bdd-8cd5-3b686fa190f9"
+  },
+  "stopped_container_removed": true,
+  "automatic_retry": false,
+  "credentials_or_cookies_used": false
+}

@@ -1,0 +1,23 @@
+{
+  "container": "rj-calendar-local-a3b7ce08f3f7",
+  "image": "sha256:eb4034e8aa8e7d13790e674d76fc15eb1a6fa985929b019b84555ff1381ec1e5",
+  "network": "none",
+  "external_requests": 0,
+  "exit_code": 0,
+  "seccomp_sha256": "abd5cc8ed37eb8a76b57b6aa9e8042e79ac7f04cb189782e2c8565c0765c5cb7",
+  "sporting_mounts": false,
+  "profile_storage": "exclusive container tmpfs",
+  "source_hashes": {
+    "acquisition/browser.py": "2e33d8af7ba1d1c1f7c993c52a15ebad4b47e70eb8cd71920e3429b6c3d44b12",
+    "acquisition/calendar_probe.py": "103f238bbab0559776d52dafd03ee780085cf2eafbed999d4ad12d8b662790cf",
+    "docker/acquisition/test_calendar_probe.py": "38d924787d890d7b7d572cd5d6255b56cf30798df854593f3cc23437ada06c1f"
+  },
+  "tests_run": 11,
+  "tests_passed": 11,
+  "duration_seconds": 11.851,
+  "callback_errors": false,
+  "external_mode": "disabled; offline-only release",
+  "evidence_directory": "C:\\Users\\broke\\AppData\\Local\\Temp\\rj-calendar-local-5e7f16580d",
+  "resources_removed": true,
+  "group_server_validation": "pending"
+}

@@ -1,0 +1,82 @@
+{
+  "schema": 1,
+  "status": "executed_once_stopped_http_403_reservation_consumed",
+  "execution_id": "adef868e-8d93-4aef-ba80-43df28e578a9",
+  "url": "https://www.sofascore.com/api/v1/unique-tournament/17073/season/97382/events/round/1",
+  "method": "GET",
+  "max_gets": 1,
+  "max_retries": 0,
+  "max_body_bytes": 2097152,
+  "max_tls_bytes": 2228224,
+  "activity_seconds": 30,
+  "forced_reap_seconds": 2,
+  "navigation_seconds": 20,
+  "max_upstream_connections": 1,
+  "browser_network": "none",
+  "gateway_network": "bridge",
+  "gateway_destination": "www.sofascore.com:443",
+  "gateway_interface": "private Unix socket; one TLS channel; no commands, URLs or sports storage",
+  "tls": "native Chromium validation; no MITM, no ignore_https_errors, no local test CA for real URL",
+  "profile": "explicit new isolated managed profile; retained named volume; no temporary fallback",
+  "stops": [
+    "403",
+    "429",
+    "challenge",
+    "CAPTCHA",
+    "redirect",
+    "additional page request",
+    "TLS error",
+    "network error",
+    "body or TLS limit",
+    "global deadline"
+  ],
+  "publication": false,
+  "real_execution_authorized": true,
+  "default_real_enabled": false,
+  "image": "sha256:eb4034e8aa8e7d13790e674d76fc15eb1a6fa985929b019b84555ff1381ec1e5",
+  "seccomp_sha256": "abd5cc8ed37eb8a76b57b6aa9e8042e79ac7f04cb189782e2c8565c0765c5cb7",
+  "source_sha256": {
+    "acquisition/__init__.py": "d9b70b02cbc7b54004a209c679756ab48ef3851d86a63abf4380bc13ce354030",
+    "acquisition/profile.py": "d81351c9a6df6f4edd74bb6efa40664b0bc6cac7a2974b2ed297a747edbf8455",
+    "acquisition/browser.py": "4a2eab263ca00ef74c85749a3bce9cb0b7ae649494a9a4277476f09a578508a9",
+    "acquisition/admin.py": "8f10cba25fed4d83eedb039433d9f1f6233216af26248614fd9ccdc0f469da37",
+    "acquisition/probe_network.py": "28846632381560293f6b7ff0044029069eb250dbefb3fe7d23f21983028596a0",
+    "acquisition/calendar_probe.py": "1faff9b7e6279660c7703aabb5c6f1e4518d9e53b916715cf1d060401b20a96a",
+    "acquisition/https_probe.py": "b9e5f671c5921df7bb97299b4f102e2f0b483b4a8e250ed880c3dd9b57640bef",
+    "acquisition/tls_portal.py": "a2c9298bb75ee49693b054a89e74ff7f73d126c690599d8fbc2636c2c314efef",
+    "scripts/run_https_calendar_once.py": "0c41196d77585bb15d28ee8fbeb8e09d81b1f5f6894d6b8b8fbeab64fe432ff0"
+  },
+  "validation_report": "calendario-https-validacion.json",
+  "server_group_validation": "pending",
+  "installation": "standalone diagnostic only; no SQLite/journal/backend/frontend mounts",
+  "retry_protection": "fixed execution identity, existing volumes rejected; immutable profile and gateway reservations retained",
+  "protocol": "HTTP/1.1 only; HTTP/2 and QUIC disabled to avoid multiplexing/retry channels",
+  "local_validation": {
+    "https_tests": 16,
+    "http_regression_tests": 23,
+    "external_requests": 0,
+    "maximum_gets_per_origin": 1,
+    "certificate_errors_rejected": true,
+    "separate_container_https_unix_channel": "passed; both network:none, read-only socket mount, no sporting mounts"
+  },
+  "gateway_mounts": [
+    "exclusive portal volume",
+    "read-only acquisition code"
+  ],
+  "browser_mounts": [
+    "exclusive managed profile",
+    "read-only portal volume",
+    "read-only acquisition code"
+  ],
+  "requires": [
+    "existing pinned Linux amd64 image and Docker engine",
+    "review and explicit one-GET plus new-profile confirmations",
+    "planned volume/container names absent; fail rather than reuse",
+    "source hashes match this preflight",
+    "no CA override for real destination"
+  ],
+  "real_execution_performed": true,
+  "resources_created": true,
+  "resources_current_state": "containers removed; exclusive profile and portal volumes retained; never reuse for retry",
+  "real_result": "calendario-https-real-20261027.json"
+}

@@ -1,0 +1,39 @@
+{
+  "status": "stopped_http_403",
+  "job": "rj-https-calendar-adef868e8d934aefba8043df28e578a9",
+  "url": "https://www.sofascore.com/api/v1/unique-tournament/17073/season/97382/events/round/1",
+  "http_status": 403,
+  "response_headers": {
+    "retry-after": "0",
+    "content-type": "application/json"
+  },
+  "get_attempts": 1,
+  "retries": 0,
+  "upstream_connections_verified": 1,
+  "tls_bytes": 4784,
+  "blocked_second_sofascore_connect": 1,
+  "other_requests_denied_locally": 14,
+  "calendar_verified": false,
+  "response_body_preserved": false,
+  "reason_body_not_preserved": "abort on HTTP403 before response-body processing; content-type does not prove calendar or challenge",
+  "sandbox": {
+    "namespaces": true,
+    "seccomp": true,
+    "proc_verified": true
+  },
+  "certificate_errors_ignored": false,
+  "managed_profile_generation": "bd87327e7c83466f81e7b8266a2bce08",
+  "children_closed": true,
+  "reservations_consumed": true,
+  "containers_removed": true,
+  "volumes_retained": {
+    "profile": "rj-https-calendar-adef868e8d934aefba8043df28e578a9-profile",
+    "portal": "rj-https-calendar-adef868e8d934aefba8043df28e578a9-portal"
+  },
+  "evidence_directory": "C:\\Users\\broke\\AppData\\Local\\Temp\\rj-sofascore-calendario-adef868e",
+  "import_attempted": false,
+  "publication_attempted": false,
+  "active_database_accessed": false,
+  "existing_services_modified": false,
+  "new_requests_after_stop": 0
+}

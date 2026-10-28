@@ -1,0 +1,39 @@
+{
+  "container": "rj-calendar-local-6b69be4bfcc9",
+  "image": "sha256:eb4034e8aa8e7d13790e674d76fc15eb1a6fa985929b019b84555ff1381ec1e5",
+  "network": "none",
+  "external_requests": 0,
+  "exit_code": 0,
+  "seccomp_sha256": "abd5cc8ed37eb8a76b57b6aa9e8042e79ac7f04cb189782e2c8565c0765c5cb7",
+  "sporting_mounts": false,
+  "profile_storage": "exclusive container tmpfs",
+  "source_hashes": {
+    "acquisition/browser.py": "3292591168c5a4d1dbb96d4d9236300bbdf60c4aaee4d5e3cdb2c5c84b360ad9",
+    "acquisition/probe_network.py": "28846632381560293f6b7ff0044029069eb250dbefb3fe7d23f21983028596a0",
+    "acquisition/calendar_probe.py": "69b9ab7df5096c476a0c0a0a191ee8177e4f906d5ad14f3e59135afaea38b3d6",
+    "docker/acquisition/test_calendar_probe.py": "c970454392726e2f3c96c198158563bc93a7f2ba4bfb17fa289039975411bca6"
+  },
+  "origin_requests": 17,
+  "maximum_requests_per_origin": 1,
+  "unplanned_origin_requests": 0,
+  "max_upstream_body_bytes": 2097152,
+  "tests_run": 23,
+  "tests_passed": 23,
+  "duration_seconds": 37.736,
+  "global_timeout_check": {
+    "seconds": 3.0273456850000002,
+    "reserved": true
+  },
+  "activity_deadline_seconds": 30,
+  "forced_reap_timeout_seconds": 2,
+  "body_budget_bytes": 2097152,
+  "retries": 0,
+  "canonical_reservation": "profile/control/calendar-probe.reservation.json; exclusive creation and fsync before upstream socket",
+  "external_mode": "disabled; HTTP loopback only and network:none",
+  "evidence_directory": "C:\\Users\\broke\\AppData\\Local\\Temp\\rj-calendar-budget-acabeaa95d",
+  "origin_request_log": "C:\\Users\\broke\\AppData\\Local\\Temp\\rj-calendar-budget-acabeaa95d\\origin-requests.jsonl",
+  "resources_removed": true,
+  "server_group_validation": "pending",
+  "limits_scope": "application-level upstream response body, not TCP framing/kernel buffers or all protocol headers",
+  "background_denied_in_reported_cases": 141
+}

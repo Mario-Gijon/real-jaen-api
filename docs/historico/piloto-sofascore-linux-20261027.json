@@ -1,0 +1,87 @@
+{
+  "project": "rj-pilot-v2-7e1ef91cca12",
+  "backend_image": "sha256:49b7b92dafa87f027c913ef1fbbe2efabda8c9b07268f4e358813cd09c1eaa8f",
+  "acquisition_image": "sha256:eb4034e8aa8e7d13790e674d76fc15eb1a6fa985929b019b84555ff1381ec1e5",
+  "network": "none",
+  "scraper_revision": "611e436a1528b0f487aa56a045f023e8ae8ae098",
+  "sdk_hashes": {
+    "services/pipeline.py": "fb9e3f6ec979359e5e803406fc0ec085ef62d9ca6a14fbd7ba500c1052e5682f",
+    "services/planning.py": "21f911b3b5ef2083477fdad0ae88524c72fd03fe24418b56fa7c58eb9a6694a9",
+    "services/listing.py": "b360b6d7db4dc9a63aefb0592665feaffa68ce8659397a817e932b8dace2976b",
+    "services/export.py": "526739ee50f53d1c34cb73054e0c60f38c849adcae3f893e514aae64b173fee2",
+    "store/export.py": "bc0767cb56a1d70fa40dcb6cb1ccbb273a9757f305eb1d014aa547cca518a0dc",
+    "store/backup.py": "b9db5e4366d6c9158f1bb3d1593eeee5ad5e6be6ff61774eb0a948935c7cf23d",
+    "slices.py": "42de601fe3b6bfe6fbd53a8e06c952112f81adc853882d928b08721a5ab982aa",
+    "sports.py": "9807a6c1886c123f361690ec480a83d42273e39eadaa8ba1ba3555014b6aa40f",
+    "status.py": "ab2ca6ca8e991064920a0e22131f8931955eaa2ca381f1f8d19dca6f2da71e41"
+  },
+  "source_revision": "0004",
+  "external_requests": 0,
+  "volumes": {
+    "state": "rj-pilot-v2-7e1ef91cca12-state",
+    "exchange": "rj-pilot-v2-7e1ef91cca12-exchange",
+    "cache": "rj-pilot-v2-7e1ef91cca12-cache"
+  },
+  "production_provider_enabled": false,
+  "results": {
+    "prepare-report.json": {
+      "calendar_only": [
+        16599776,
+        16599788
+      ],
+      "current": 380,
+      "historical": [
+        16599919,
+        16599956
+      ],
+      "inventory_sha256": "7dff8173c97829075f3ca6c3d8d5840679bfc0335b2a3c70fd96202d8a128e41",
+      "retained": 382,
+      "revision": "0004",
+      "stage": "backend_prepare"
+    },
+    "receive-report.json": {
+      "authentication_checked": true,
+      "base": "exclusive temporary pilot installation",
+      "browser_installed": false,
+      "default_disabled": true,
+      "duplicate_publication_idempotent": true,
+      "ids_preserved": true,
+      "integrity": "ok",
+      "local_decisions_preserved": true,
+      "original_observations_preserved": true,
+      "post_commit_candidate_failure": "principal and old snapshot preserved",
+      "publication": "completed",
+      "restart_generation_preserved": true,
+      "routes_equivalent": 2792,
+      "sdk_installed": false,
+      "stage": "backend_receive",
+      "stale_generation_rejected": true,
+      "tampered_bundles_rejected": 4
+    },
+    "bundle-meta.json": {
+      "attempts": 5,
+      "context": [
+        "414c4156-c35a-4c17-8897-0feb08ee208f",
+        "d4c7bad1-a6cc-4b2a-998b-7f5879dc8f4f"
+      ],
+      "descriptor": {
+        "bytes": 31587177,
+        "sha256": "eb717bd84f89a5e2228f8eba7b4c1d5313824c2f125404b94f4650e02ff88c10"
+      },
+      "external_requests": 0,
+      "rules_sha256": "261f0ff4cabfb2981f9ba5ad1407449a555fadee0c42756756401502a5522320"
+    }
+  },
+  "source_snapshot": "real-jaen.20261027-083912-846469.piloto-16599363.sqlite",
+  "source_sha256": "ebe99c6d305db4864b7a316244e60e87360e314e7f71dd1108563530a970e5ca",
+  "source_unchanged": true,
+  "platform": "Docker Desktop Linux x86_64",
+  "transport_tests": {
+    "run": 16,
+    "passed": 16,
+    "seconds": 11.215
+  },
+  "log_directory": "C:\\Users\\broke\\AppData\\Local\\Temp\\rj-pilot-linux-20261027-4a7453882c",
+  "resources_removed": true,
+  "retained_test_installation": "Windows installation remains; Linux acceptance volumes were disposable and removed"
+}

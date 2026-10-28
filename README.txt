@@ -488,6 +488,14 @@ no en la imagen. No hay migraciones automáticas, recarga en caliente ni botón 
 COORDINADOR INTERNO (fixtures, sin activar): diseno y limites en docs/coordinador-fixtures.md.
 No hay endpoints nuevos ni cambios en el arranque habitual; no ejecuta red ni scraper.
 
-Gestion de perfil y recuperacion administrativa offline implementadas (sin servicio ni integracion): docs/gestion-perfil-adquisicion.md.
-
-Contrato e integración interna SIMULADA validada, sin activar instalación habitual: docs/contrato-adquisicion-interno.md. Pila Docker de prueba independiente; sin recetas reales ni endpoints Next.
+ADQUISICIÓN SOFASCORE (sin integrar; objetivo de despliegue: Docker Compose)
+Estado vigente, flujo que ha funcionado, experimentos sustituidos y pendientes: docs/adquisicion-sofascore.md.
+- Receta de la imagen base del scraper: docs/scraper-empaquetado-linux.md (docker/scraper/).
+- Sandbox: diagnósticos y políticas en docs/diagnostico-sandbox-linux.md y docker/scraper/policies/.
+- Perfil: diseño final en docs/perfil-adquisicion-diseno-final.md; gestión y recuperación administrativa
+  offline implementadas en docs/gestion-perfil-adquisicion.md.
+- Contrato e integración interna SIMULADA (protocolo v1): docs/contrato-adquisicion-interno.md.
+- Protocolo v2 del piloto, conservado hasta que la solución definitiva iguale sus garantías:
+  docs/piloto-sofascore-tecnico.md.
+- Diseño del servicio separado: ../rj-analyst/docs/propuesta-servicio-adquisicion.md.
+- Informes y evidencias de los pilotos, archivados: docs/historico/README.md.
