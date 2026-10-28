@@ -6,7 +6,7 @@ RUN pip install --no-cache-dir -r requirements-sql.txt \
     && groupadd --gid 10001 analyst \
     && useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin analyst \
     && mkdir /state /imports && chown 10001:10001 /state /imports
-COPY api.py importar.py ambito.json alembic.ini productores-adquisicion.json ./
+COPY api.py control.py importar.py ambito.json alembic.ini productores-adquisicion.json ./
 COPY persistencia ./persistencia
 COPY scripts ./scripts
 USER 10001:10001

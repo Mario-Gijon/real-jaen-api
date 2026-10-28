@@ -483,7 +483,8 @@ Imagen de producción local: Dockerfile, Python 3.14.4 fijado y dependencias SQL
 el repositorio hermano rj-analyst/compose.yaml; procedimiento y límites en docs/docker.md y
 rj-analyst/docs/docker.md. api.py admite --host (por defecto 127.0.0.1); la imagen pide 0.0.0.0
 solo dentro de su red, sin publicar backend al host. Datos y copias viven en un volumen externo,
-no en la imagen. No hay migraciones automáticas, recarga en caliente ni botón Actualizar.
+no en la imagen. No hay migraciones automáticas. Con el overlay de adquisición, control.py sirve la API desde el
+coordinador y publica sin recarga manual (botón «Actualizar piloto», solo el alcance del piloto).
 
 COORDINADOR INTERNO (fixtures, sin activar): diseno y limites en docs/coordinador-fixtures.md.
 No hay endpoints nuevos ni cambios en el arranque habitual; no ejecuta red ni scraper.
@@ -491,7 +492,9 @@ No hay endpoints nuevos ni cambios en el arranque habitual; no ejecuta red ni sc
 ADQUISICIÓN SOFASCORE (servicio interno; Docker Compose con rj-analyst/compose.acquisition.yaml)
 Estado vigente, ejecuciones reales, salida de red y lo que se observa: docs/adquisicion-sofascore.md.
 - Contrato backend–adquisición, garantías, idempotencia y pruebas: docs/contrato-adquisicion-interno.md.
-  Disparo: python -m persistencia adquirir (API detenida); operación en ../rj-analyst/docs/docker.md.
+  Disparo: botón «Actualizar piloto» (control.py, modo control; contrato en
+  ../rj-analyst/docs/contrato-actualizaciones.md) o python -m persistencia adquirir (API detenida);
+  operación en ../rj-analyst/docs/docker.md.
 - Receta de la imagen base del scraper: docs/scraper-empaquetado-linux.md (docker/scraper/).
 - Sandbox: diagnósticos y políticas en docs/diagnostico-sandbox-linux.md y docker/scraper/policies/.
 - Perfil: diseño final en docs/perfil-adquisicion-diseno-final.md; gestión y recuperación administrativa

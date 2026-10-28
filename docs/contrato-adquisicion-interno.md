@@ -67,8 +67,11 @@ evidencia sellada siga siendo verificable.
 
 ## Recepción en el backend e idempotencia
 
-`Cliente.publicar(coordinador, request_id, receta)` (`persistencia/adquisicion.py`), o la orden
-`python -m persistencia adquirir` con la API detenida. Bajo `<base>.actualizaciones/adquisiciones/<request_id>/`
+`Cliente.publicar(coordinador, request_id, receta)` (`persistencia/adquisicion.py`), llamado por el control de
+actualizaciones del backend en modo control (`control.py`, el botón «Actualizar piloto» de la interfaz, contrato en
+`../rj-analyst/docs/contrato-actualizaciones.md`) o por la orden `python -m persistencia adquirir` con la API
+detenida. Ese control solo dispara la receta del piloto, con un único trabajo activo, claves de idempotencia y
+cancelación cooperativa mientras se adquiere; su registro de trabajos vive en `<base>.actualizaciones/control/`. Bajo `<base>.actualizaciones/adquisiciones/<request_id>/`
 anota cada paso antes de darlo: inventario, trabajo de adquisición, bundle descargado y cada intento de importación.
 
 - Repetir la misma solicitud reutiliza su inventario, su trabajo y su bundle verificado: no vuelve a consultar al
@@ -148,7 +151,7 @@ huella de inventario y generación, el receptor compara con la generación vigen
 coordinador vuelve a comprobarla con `generacion_esperada`. Tras el mantenimiento, el bundle real del 28-10 ya no se
 puede publicar; su aprobación de productor está limitada a su propia generación.
 
-Fuera de este contrato: botón y endpoint de la API (necesitan aprobación del contrato `/api/v1`), política
+Fuera de este contrato: identidad y rol de operador del servidor del grupo (hoy, una clave local compartida), política
 histórica y otros partidos, retención y cuotas de trabajos y bundles, TLS fuera de la red privada y rotación de
 secretos. Queda también validar en el servidor del grupo el kernel, el LSM, los namespaces, el sistema de archivos
 y los permisos del secreto.

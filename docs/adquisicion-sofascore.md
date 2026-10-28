@@ -3,6 +3,9 @@
 Actualizado el 28-10-2026. Punto de entrada; los informes de los pilotos están en [historico/](historico/README.md).
 Despliegue: **Docker Compose**, con el overlay `rj-analyst/compose.acquisition.yaml` (procedimiento en
 `rj-analyst/docs/docker.md`, «Adquisición»). Contrato y garantías: [contrato-adquisicion-interno.md](contrato-adquisicion-interno.md).
+Desde la interfaz, el operador lanza la misma receta con «Actualizar piloto»
+(`rj-analyst/docs/contrato-actualizaciones.md`): **solo el calendario de la jornada 1 y un partido**, no una jornada
+completa ni la temporada.
 Perfil del navegador: [perfil-adquisicion-diseno-final.md](perfil-adquisicion-diseno-final.md).
 
 ## Flujo que funciona

@@ -135,12 +135,14 @@ class Cliente:
     def cancelar(self, ident):
         return self._json('POST', '/' + self._id(ident) + '/cancel')
 
-    def esperar(self, ident, timeout=600):
+    def esperar(self, ident, timeout=600, avance=None):
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             state = self.estado(ident)
             if state['state'] not in ('queued', 'running', 'cancelling'):
                 return state
+            if avance is not None:
+                avance('acquiring', acquisition_id=ident, acquisition_state=state['state'])
             time.sleep(.5)
         raise AdquisicionRechazada('Adquisicion sigue en curso')
 
@@ -162,7 +164,10 @@ class Cliente:
         elif marker.exists():
             raise AdquisicionRechazada('Instalacion de prueba: proveedor real deshabilitado')
 
-    def publicar(self, coordinador, request_id, recipe_id, *, timeout=600):
+    def publicar(self, coordinador, request_id, recipe_id, *, timeout=600, avance=None):
+        """`avance(fase, **datos)`, if given, is told each phase (acquiring, verifying, publishing) before it starts;
+        an exception it raises stops the request there, before any import if raised before 'publishing'."""
+        avance = avance or (lambda fase, **datos: None)
         self._instalacion(coordinador)
         self._id(request_id)
         if recipe_id not in RECIPES:
@@ -188,16 +193,20 @@ class Cliente:
                 job = self.solicitar(request_id, recipe_id, baseline)
                 record['acquisition_id'] = job['id']
                 _record(path, record)
-                state = self.esperar(job['id'], timeout)
+                avance('acquiring', acquisition_id=job['id'], acquisition_state=job['state'])
+                state = self.esperar(job['id'], timeout, avance)
                 if state['state'] != 'completed':
                     raise AdquisicionRechazada(f"Adquisicion {state['state']}: no se importa nada ({state.get('error')})")
+                avance('verifying')
                 body = self.descargar(job['id'], state['bundle'])
                 _immutable(folder / 'bundle.json', body)
                 record['bundle'] = state['bundle']
                 _record(path, record)
-            return self.recibir(coordinador, folder, record, baseline)
+            else:
+                avance('verifying')
+            return self.recibir(coordinador, folder, record, baseline, avance)
 
-    def recibir(self, coordinador, folder, record, baseline):
+    def recibir(self, coordinador, folder, record, baseline, avance=None):
         """Verify the private copy and hand it to the coordinator. Records each coordinator attempt before it starts."""
         from .actualizacion import CoordinacionRechazada
         descriptor, job = record['bundle'], record['acquisition_id']
@@ -220,6 +229,8 @@ class Cliente:
                 _record(path, record)
             if inventory(coordinador.capturar())['sha256'] != baseline['sha256']:
                 raise Rejected('La generacion cambio durante la adquisicion')
+            if avance is not None:
+                avance('publishing')
             exports = []
             for name, raw in files.items():
                 _immutable(folder / name, raw)
