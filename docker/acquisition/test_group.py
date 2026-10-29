@@ -70,6 +70,9 @@ def main():
         files[name] = out / f'{name}-secret'
         files[name].write_text(value, encoding='ascii')
     tmp = tempfile.TemporaryDirectory(prefix=project + '-')
+    # The group checks never read the recorded real bundle: an empty folder satisfies the read-only mount.
+    evidence = Path(tmp.name) / 'evidence'
+    evidence.mkdir()
     sys.path.insert(0, str(ROOT))
     from persistencia.sqlite import copia_consistente
     from persistencia.actualizacion import preparar
@@ -156,7 +159,7 @@ def main():
                RJ_TEST_SNAPSHOT=str(snapshot), RJ_TEST_CONTROL_PORT=str(a.control_port),
                RJ_TEST_RECIPE='sofascore-group2-2627-v1', RJ_TEST_ROUTES=str(Path(tmp.name) / 'routes-1.json'),
                RJ_TEST_PROFILE_VOLUME=project + '-profiles', RJ_TEST_JOBS_VOLUME=project + '-jobs',
-               RJ_TEST_STATE_VOLUME=project + '-state', RJ_TEST_EVIDENCE_VOLUME='rj-real-sdk-37b257e89b03-exchange')
+               RJ_TEST_STATE_VOLUME=project + '-state', RJ_TEST_EVIDENCE_DIR=str(evidence))
     base = ['docker', 'compose', '-p', project, '-f', str(ROOT / 'docker/acquisition/compose.test.yaml'), '--profile', 'updates']
     control_url = f'http://127.0.0.1:{a.control_port}'
 

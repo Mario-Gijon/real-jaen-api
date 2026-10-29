@@ -1,24 +1,41 @@
 """Drive the isolated acquisition test stack (compose.test.yaml) in new exclusive resources. No network egress.
 
 python -X utf8 docker/acquisition/test_integration.py --acquisition-image IMG --backend-image IMG \
-    --snapshot <copias/...sqlite> --evidence-volume <exchange volume of the real run> --evidence <new folder>
+    --snapshot <copias/...sqlite> --evidence <new folder>
 
 The backend client works on a copy of the identified inactive snapshot; the acquisition service replays the original
-responses of the real bundle found in the evidence volume (mounted read-only, never modified).
+responses of the sealed real bundle of 2026-10-28 (fixtures/real-bundle-20261028.tar.xz: the bundle, its descriptor and
+its inventory, without cookies or secrets), extracted and checked against its sums, then mounted read-only.
 """
 import argparse
 import base64
+import hashlib
 import json
 import os
 from pathlib import Path
 import secrets
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
 import uuid
 
 ROOT = Path(__file__).resolve().parents[2]
+REAL_BUNDLE = Path(__file__).resolve().parent / 'fixtures' / 'real-bundle-20261028.tar.xz'
+
+
+def extract_real_bundle(target):
+    """The recorded real bundle in a new folder readable by the containers' users, each file checked against its sum."""
+    target.mkdir()
+    with tarfile.open(REAL_BUNDLE) as tar:
+        tar.extractall(target, filter='data')
+    for line in REAL_BUNDLE.with_suffix('').with_suffix('.sha256').read_text(encoding='ascii').splitlines():
+        digest, name = line.split()
+        assert hashlib.sha256((target / name).read_bytes()).hexdigest() == digest, name
+        (target / name).chmod(0o644)
+    target.chmod(0o755)
+    return target
 
 
 def main():
@@ -26,7 +43,6 @@ def main():
     parser.add_argument('--acquisition-image', required=True)
     parser.add_argument('--backend-image', required=True)
     parser.add_argument('--snapshot', type=Path, required=True)
-    parser.add_argument('--evidence-volume', required=True)
     parser.add_argument('--evidence', required=True, type=Path)
     args = parser.parse_args()
     if args.snapshot.name == 'real-jaen.sqlite' or args.snapshot.parent.name != 'copias':
@@ -45,12 +61,13 @@ def main():
     snapshot = Path(tmp.name) / 'inactive-snapshot.sqlite'
     copia_consistente(args.snapshot, snapshot)
     routes = Path(tmp.name) / 'routes.json'
+    evidence = extract_real_bundle(Path(tmp.name) / 'evidence')
     env.update(RJ_TEST_ACQUISITION_IMAGE=args.acquisition_image, RJ_TEST_BACKEND_IMAGE=args.backend_image, RJ_TEST_MODE='1',
                RJ_TEST_SECRET_FILE=str(secret), RJ_TEST_ROUTES=str(routes), RJ_TEST_SNAPSHOT=str(snapshot),
                RJ_TEST_PROFILE_VOLUME=project + '-profiles', RJ_TEST_JOBS_VOLUME=project + '-jobs',
-               RJ_TEST_STATE_VOLUME=project + '-state', RJ_TEST_EVIDENCE_VOLUME=args.evidence_volume)
+               RJ_TEST_STATE_VOLUME=project + '-state', RJ_TEST_EVIDENCE_DIR=str(evidence))
     base = ['docker', 'compose', '-p', project, '-f', str(ROOT / 'docker/acquisition/compose.test.yaml')]
-    results = {'project': project, 'cases': [], 'snapshot': str(args.snapshot), 'evidence_volume': args.evidence_volume,
+    results = {'project': project, 'cases': [], 'snapshot': str(args.snapshot), 'real_bundle': REAL_BUNDLE.name,
                'volumes': [env[k] for k in ('RJ_TEST_PROFILE_VOLUME', 'RJ_TEST_JOBS_VOLUME', 'RJ_TEST_STATE_VOLUME')]}
 
     def save():
@@ -85,7 +102,7 @@ def main():
             expect=1, name='service-disabled-without-provider')
     # Original responses of the real bundle (provenance.jsonl), byte for byte, as the routes of the local site.
     raw = command(['docker', 'run', '--rm', '--pull', 'never', '--network', 'none', '--cap-drop', 'ALL', '--mount',
-                   f'type=volume,source={args.evidence_volume},target=/evidence,readonly', '--entrypoint', 'python',
+                   f'type=bind,source={evidence},target=/evidence,readonly', '--entrypoint', 'python',
                    args.backend_image, '-B', '-c',
                    "import base64,json;e=json.load(open('/evidence/bundle.json'));rows=[json.loads(l) for l in "
                    "base64.b64decode(e['files']['provenance.jsonl']).splitlines()];"

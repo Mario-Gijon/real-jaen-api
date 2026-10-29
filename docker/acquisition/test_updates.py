@@ -3,7 +3,7 @@ service with its local provider, over a copy of an identified inactive snapshot.
 acquisition; nothing reaches SofaScore.
 
 python -X utf8 docker/acquisition/test_updates.py --acquisition-image IMG --backend-image IMG \
-    --snapshot <copias/...sqlite> --evidence-volume <exchange volume of the real run> --evidence <new folder> \
+    --snapshot <copias/...sqlite> --evidence <new folder> \
     [--frontend ../rj-analyst]
 
 The frontend needs a production build (npm run build). Screenshots (1440 and 390 px) and reports go to --evidence.
@@ -21,6 +21,8 @@ import urllib.error
 import urllib.request
 import uuid
 
+from test_integration import extract_real_bundle
+
 ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -29,7 +31,6 @@ def main():
     ap.add_argument('--acquisition-image', required=True)
     ap.add_argument('--backend-image', required=True)
     ap.add_argument('--snapshot', type=Path, required=True)
-    ap.add_argument('--evidence-volume', required=True)
     ap.add_argument('--evidence', type=Path, required=True)
     ap.add_argument('--frontend', type=Path, default=ROOT.parent / 'rj-analyst')
     ap.add_argument('--control-port', type=int, default=18001)
@@ -52,12 +53,13 @@ def main():
     snapshot = Path(tmp.name) / 'inactive-snapshot.sqlite'
     copia_consistente(a.snapshot, snapshot)
     routes = Path(tmp.name) / 'routes.json'
+    evidence = extract_real_bundle(Path(tmp.name) / 'evidence')
     env = os.environ.copy()
     env.update(RJ_TEST_ACQUISITION_IMAGE=a.acquisition_image, RJ_TEST_BACKEND_IMAGE=a.backend_image, RJ_TEST_MODE='1',
                RJ_TEST_SECRET_FILE=str(files['acquisition']), RJ_TEST_CONTROL_SECRET_FILE=str(files['control']),
                RJ_TEST_ROUTES=str(routes), RJ_TEST_SNAPSHOT=str(snapshot), RJ_TEST_CONTROL_PORT=str(a.control_port),
                RJ_TEST_PROFILE_VOLUME=project + '-profiles', RJ_TEST_JOBS_VOLUME=project + '-jobs',
-               RJ_TEST_STATE_VOLUME=project + '-state', RJ_TEST_EVIDENCE_VOLUME=a.evidence_volume)
+               RJ_TEST_STATE_VOLUME=project + '-state', RJ_TEST_EVIDENCE_DIR=str(evidence))
     base = ['docker', 'compose', '-p', project, '-f', str(ROOT / 'docker/acquisition/compose.test.yaml'), '--profile', 'updates']
     results = dict(project=project, cases=[], volumes=[env[k] for k in ('RJ_TEST_PROFILE_VOLUME', 'RJ_TEST_JOBS_VOLUME', 'RJ_TEST_STATE_VOLUME')])
     control_url = f'http://127.0.0.1:{a.control_port}'
@@ -111,7 +113,7 @@ def main():
         raise RuntimeError('Acquisition not ready')
 
     raw = command(['docker', 'run', '--rm', '--pull', 'never', '--network', 'none', '--cap-drop', 'ALL', '--mount',
-                   f'type=volume,source={a.evidence_volume},target=/evidence,readonly', '--entrypoint', 'python', a.backend_image, '-B', '-c',
+                   f'type=bind,source={evidence},target=/evidence,readonly', '--entrypoint', 'python', a.backend_image, '-B', '-c',
                    "import base64,json;e=json.load(open('/evidence/bundle.json'));rows=[json.loads(l) for l in "
                    "base64.b64decode(e['files']['provenance.jsonl']).splitlines()];"
                    "print(json.dumps({r['path']:r['body_b64'] for r in sorted(rows,key=lambda r:r['number'])}))"])

@@ -66,10 +66,11 @@ services:
         target: /imports/snapshot.sqlite
         read_only: true
         bind: {create_host_path: false}
-      - type: volume
-        source: evidence
+      - type: bind
+        source: ${RJ_TEST_EVIDENCE_DIR:?Set the folder with the recorded real bundle (fixtures/real-bundle-20261028.tar.xz)}
         target: /evidence
         read_only: true
+        bind: {create_host_path: false}
     networks: [control]
   # Update validation (test_updates.py): the backend in control mode over the same isolated copy, the only service
   # published, on loopback, for a Next production server on the host. Test installation only (modo prueba).
@@ -116,6 +117,3 @@ volumes:
   state:
     external: true
     name: ${RJ_TEST_STATE_VOLUME:?New exclusive test volume required}
-  evidence:
-    external: true
-    name: ${RJ_TEST_EVIDENCE_VOLUME:?Exchange volume of the real run, mounted read-only}
