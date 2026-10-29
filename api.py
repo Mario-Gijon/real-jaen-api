@@ -129,7 +129,7 @@ def aplicar_ambito(datos, competiciones):
                 jugadores_excluidos={p['player_id'] for p in datos['jugadores']} - {p['player_id'] for p in jugadores})
 
 def leer_sustituciones(ruta):
-    """Decisiones locales «este evento queda sustituido por este otro» (ver README.txt, SUSTITUCIONES LOCALES).
+    """Decisiones locales «este evento queda sustituido por este otro» (ver docs/importador-y-api.txt, SUSTITUCIONES LOCALES).
     Comprueba el archivo por sí mismo: campos, autorreferencias, eventos sustituidos dos veces y cadenas o ciclos
     (un evento vigente no puede estar sustituido). Cualquier error impide arrancar: nunca se aplica a medias."""
     contenido = json.loads(Path(ruta).read_text(encoding='utf-8'))

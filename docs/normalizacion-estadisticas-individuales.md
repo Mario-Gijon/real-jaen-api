@@ -210,7 +210,7 @@ observación de calidad en la sección 9.
 
 ## 6. Goles y asistencias: regla actual `omitted_zero`
 
-Actual (`actuacion()` en `api.py`; README, «Normalización de convocatorias»):
+Actual (`actuacion()` en `api.py`; docs/importador-y-api.txt, «NORMALIZACION DE CONVOCATORIAS»):
 
 - `unused` → 0 (`unused`); `unknown` → sin dato.
 - Clave presente y entera ≥ 0 → `reported`.

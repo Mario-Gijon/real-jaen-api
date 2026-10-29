@@ -73,9 +73,9 @@ evidencia sellada siga siendo verificable.
 ## Recepción en el backend e idempotencia
 
 `Cliente.publicar(coordinador, request_id, receta)` (`persistencia/adquisicion.py`), llamado por el control de
-actualizaciones del backend en modo control (`control.py`, el botón «Actualizar piloto» de la interfaz, contrato en
+actualizaciones del backend en modo control (`control.py`, el botón «Actualizar» de la interfaz, contrato en
 `../rj-analyst/docs/contrato-actualizaciones.md`) o por la orden `python -m persistencia adquirir` con la API
-detenida. Ese control solo dispara la receta del piloto, con un único trabajo activo, claves de idempotencia y
+detenida. Ese control dispara la receta configurada (por defecto la del Grupo 2; `control.SCOPES`), con un único trabajo activo, claves de idempotencia y
 cancelación cooperativa mientras se adquiere; su registro de trabajos vive en `<base>.actualizaciones/control/`. Bajo `<base>.actualizaciones/adquisiciones/<request_id>/`
 anota cada paso antes de darlo: inventario, trabajo de adquisición, bundle descargado y cada intento de importación.
 

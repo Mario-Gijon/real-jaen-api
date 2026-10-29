@@ -1,12 +1,17 @@
 # Coordinador interno de actualizacion: fixtures locales
 
+> Estado 29-10-2026: el coordinador (`persistencia/actualizacion.py`) está integrado. Lo usan `control.py` y el botón
+> «Actualizar» del dashboard con el servicio de adquisición (`rj-analyst/docs/contrato-actualizaciones.md`,
+> [adquisicion-sofascore.md](adquisicion-sofascore.md)). Las restricciones de abajo («sin endpoints, red ni botón»)
+> describen la primera entrega del 26-10; sus reglas de generación, captura y publicación siguen vigentes.
+
 Primera entrega, revision del 26-10-2026. Implementacion: persistencia/actualizacion.py.
 No se importa desde api.main ni cambia Compose. No hay endpoints, flag de activacion,
 red, scraper, navegador, autenticacion, boton ni actualizaciones automaticas. La instalacion
 habitual conserva su arranque y su instantanea estaticos. No abrir este control sobre ella.
 
-Diseno concretado antes de codificar: ../rj-analyst/docs/propuesta-actualizar.md, apartado
-«Primera entrega autorizada». El resto de aquella propuesta es trabajo futuro no autorizado.
+Contrato vigente del boton: ../rj-analyst/docs/contrato-actualizaciones.md (la propuesta inicial
+se retiro el 29-10-2026; recuperable en el historial de Git de rj-analyst).
 
 ## Interfaz interna y almacenamiento
 

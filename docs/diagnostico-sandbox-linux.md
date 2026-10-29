@@ -1,5 +1,9 @@
 # Diagnostico de sandbox: userns probado y siguiente delta clone sin aplicar
 
+> Estado 29-10-2026: resuelto. El servicio de adquisición usa `docker/acquisition/seccomp-linux-amd64.json` y su
+> sandbox se acreditó en la ejecución real del 29-10 ([adquisicion-sofascore.md](adquisicion-sofascore.md)). Este
+> diagnóstico sirve para un servidor nuevo cuyo kernel o AppArmor lo impida.
+
 > Diseño final vigente: [perfil-adquisicion-diseno-final.md](perfil-adquisicion-diseno-final.md). Recuperación administrativa manual, sin JSON de autorización ni socket Docker. Los mecanismos de confirmación del lanzador descritos aquí son históricos del diagnóstico, no el diseño de producción.
 
 Investigacion local del 26-10-2026. No hay peticiones externas, integracion del scraper,
@@ -322,10 +326,9 @@ una traza del hijo con un instrumento local autorizado por su administrador, o u
 de denegacion de seccomp del runtime. No se solicita SYS_PTRACE globalmente: su necesidad y
 alcance se tendrian que justificar con la politica efectiva de ese entorno.
 
-El diseno actualizado del servicio, sin integrar, esta en
-rj-analyst/docs/propuesta-servicio-adquisicion.md: acquisition carece de montaje deportivo,
+El diseno del servicio, hoy integrado, esta en contrato-adquisicion-interno.md: acquisition carece de montaje deportivo,
 cache/perfil propios, entrega bundles por interfaz interna y backend conserva importacion,
-validacion y publicacion. Ni la separacion ni el delta propuesto se han activado.
+validacion y publicacion. El 26-10 ni la separacion ni el delta estaban activados; hoy lo estan ambos.
 
 ## Prueba aprobada de clone exacto (26-10-2026)
 

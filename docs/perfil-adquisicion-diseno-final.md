@@ -1,5 +1,8 @@
 # Perfil de adquisición: diseño final con recuperación administrativa manual
 
+> Estado 29-10-2026: implementado e integrado en el servicio de adquisición. Perfil seccomp aplicado:
+> `docker/acquisition/seccomp-linux-amd64.json`. Estado general: [adquisicion-sofascore.md](adquisicion-sofascore.md).
+
 > Implementación parcial aprobada: [gestión del perfil y CLI offline](gestion-perfil-adquisicion.md). Solo profile.py, browser.py, admin.py, imágenes/pruebas y Compose administrativo independiente. El servicio completo y sus comandos de arranque siguen siendo futuros; los diagnósticos anteriores no se reutilizan como runtime. En esta entrega browser.py usa Patchright directamente, sin integrar BrowserBridge ni su fallback; su conexión futura al scraper queda fuera del alcance.
 
 Decisión aprobada el 26-10-2026. Especificación, NO implementación ni integración.

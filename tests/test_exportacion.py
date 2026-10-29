@@ -25,7 +25,7 @@ import api  # noqa: E402
 
 DATOS = RAIZ / 'datos'
 if not all((DATOS / f'{n}.json').exists() for n in ('equipos', 'jugadores', 'partidos', 'jugador_partido', 'originales')):
-    raise unittest.SkipTest('Sin la exportación real en datos/: ver README.txt')
+    raise unittest.SkipTest('Sin la exportación real en datos/: ver docs/importador-y-api.txt')
 FINALIZADO = 16599363   # CE Europa 0-3 Real Jaén, con estadísticas, alineaciones e incidencias
 PENDIENTE = 16599386    # notstarted: solo el registro `event` en originales
 INEXISTENTE = 1

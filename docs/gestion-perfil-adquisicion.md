@@ -1,5 +1,9 @@
 # Gestión del perfil de adquisición: entrega interna offline
 
+> Estado 29-10-2026: el servicio de adquisición y su overlay (`rj-analyst/compose.acquisition.yaml`) existen y están
+> en uso; este documento describe la gestión del perfil (`acquisition/profile.py`, `browser.py`, `admin.py`), que
+> sigue vigente. Estado general: [adquisicion-sofascore.md](adquisicion-sofascore.md).
+
 Implementado únicamente `acquisition/profile.py`, `browser.py` y `admin.py`.
 No hay servicio HTTP, descarga, integración deportiva, autorización entre servicios,
 recetas, exportador ni botón. No modifica el scraper instalado. El diseño de referencia

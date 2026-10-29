@@ -1,5 +1,8 @@
 # Persistencia de api-real-jaen: diseño (SQLite, SQLAlchemy, Alembic)
 
+> Estado 29-10-2026: fases 0 a 4 implementadas y en uso; la base de la instalación habitual está en la revisión
+> `0004` ([fase4-sincronizacion.md](fase4-sincronizacion.md)).
+
 **Estado: diseño aprobado como orientación, revisado con precisiones (24-10-2026).** Fases 0 a 3 implementadas
 (resultados en la sección 6). La revisión crítica de simplicidad tras la fase 3 está en
 `docs/revision-simplicidad-persistencia.md`. Fase 4 (importación incremental con sincronización completa) implementada

@@ -1,4 +1,7 @@
-API LOCAL REAL JAEN — Python 3.10+, sin instalar dependencias.
+IMPORTADOR Y API DE DATOS — referencia de comportamiento (api.py, importar.py, persistencia)
+Entrada al repositorio, instalacion y estado vigente: ../README.md. En la instalacion habitual
+(Docker) la API sirve la base SQLite desde control.py; las secciones sobre la carpeta de
+importacion JSON describen el modo --almacen json y el importador, que sigue alimentando la base.
 
 NECESITA DATOS (no incluidos en el repositorio)
 La API sirve exportaciones de SofaScore ya importadas. Esos datos no se versionan
@@ -65,10 +68,10 @@ no da payload raw a esos partidos: un pendiente conocido por el calendario sigue
 hasta que termine. Este complemento se conserva.
 
 PARCHE LOCAL DEL SCRAPER (paginas de proximos partidos)
-Repositorio: C:\Users\broke\dev\sofascore_scraper\sofascore_scraper, commit c697852 en la rama
-local real-jaen/follow-next-pages, sobre dd9f061 (main, sin cambios: igual que el original). Para
-sincronizar con la correccion, esa rama debe estar activa. Copia del parche fuera de Git:
-  C:\Users\broke\dev\sofascore_scraper\importador-real-jaen\parches\scraper-next-paginas_2026-10-22.patch
+Commit propio c697852 de la rama real-jaen/follow-next-pages, sobre dd9f061 (main del original);
+la revision fijada 611e436 anade las fichas de jugadores. Ambos commits se conservan en
+docker/scraper/real-jaen-follow-next-pages.bundle; recuperacion y exportacion en
+docs/scraper-empaquetado-linux.md, «Parches propios del scraper».
 Archivos: sofascore_scraper/services/follow_sync.py (list_follow lee next/0, next/1, ...),
 services/sync.py (motivos del FailedListing), tests/test_fx19_follow_sync.py (11 casos nuevos),
 docs/design/02-services.md y CHANGELOG.md. No toca frontend/package-lock.json (cambio ajeno previo).
@@ -84,7 +87,8 @@ Tras actualizar el repositorio original:
   0. main no lleva el parche: git switch main y git pull.
   1. Si upstream ya lo corrige, en tests/test_fx19_follow_sync.py o en follow_sync.py aparecera
      la lectura de next/1 y la rama se abandona; si no: git switch real-jaen/follow-next-pages y
-     git rebase main (si no aplica, revisar list_follow a mano con el commit o el .patch como guia).
+     git rebase main (si no aplica, revisar list_follow a mano con el commit como guia). Un rebase
+     cambia los identificadores: nuevo bundle y nueva REVISION en docker/scraper/export_source.py.
   2. Probar sin red: python -m pytest -q tests/test_fx19_follow_sync.py
      (las pruebas de varias paginas fallan si falta la correccion).
   3. Comprobacion real puntual, opcional: sincronizar un unico seguimiento de equipo con partido
@@ -178,10 +182,9 @@ Con la exportacion del 2026-10-21 (38 partidos) el ambito sirve 37: 8 finalizado
 29 pendientes de Primera Federacion, Grupo 2; Copa del Rey queda fuera.
 Los JSON se cargan al arrancar. Reinicia para leer una nueva importacion.
 Solo lectura; no descarga ni refresca SofaScore. No modifica los JSON.
-Escucha exclusivamente en 127.0.0.1, puerto 8001. Sin autenticacion: prototipo
-local, no destinado a exponerse a Internet ni a despliegue de produccion.
-El backend del dashboard podra consultar este servicio. No incluye CORS
-para llamadas directas desde el navegador ni conexion al dashboard aun.
+Por defecto escucha en 127.0.0.1, puerto 8001, sin autenticacion propia: solo la consulta
+el servidor del dashboard (rj-analyst), que exige la contrasena de acceso. En Docker escucha
+dentro de la red interna, sin puerto publicado. No incluye CORS para llamadas desde el navegador.
 Los jugadores del equipo son los observados en las convocatorias de la muestra,
 no una plantilla completa/actual. La ficha es la ultima observada en la muestra.
 played=null indica minutos desconocidos. Los ausentes no se convierten en cero.
@@ -360,29 +363,13 @@ GET /api/v1/matches/{matchId}/statistics | /lineups | /incidents
   Los identificadores son los de SofaScore y el payload no se transforma:
   ningun valor ausente se convierte en cero.
 
-REINICIAR EL SERVICIO
+REINICIAR EL SERVICIO (desarrollo local, fuera de Docker)
 Los datos y el codigo se cargan al arrancar: tras cambiar api.py o los JSON,
 detenlo con Ctrl+C en su terminal y vuelve a ejecutar: python api.py
 Si no encuentras la terminal (Windows, PowerShell):
   Get-NetTCPConnection -LocalPort 8001 -State Listen | ForEach-Object { Stop-Process -Id $_.OwningProcess }
   python api.py
 Comprueba: http://127.0.0.1:8001/health
-
-PERSISTENCIA FUTURA
-Los JSON son una etapa del prototipo. Lo que este formato ya prepara para una base de datos:
-  - Datos maestros (jugadores.json: identidad, nacimiento, estatura, pie, pais) separados de
-    las relaciones por partido (jugador_partido: equipo, dorsal, lado) y de los datos
-    deportivos (partidos, originales). jugador-equipo-temporada y dorsales se derivan de
-    jugador_partido; hoy no hay tabla propia.
-  - Claves naturales de SofaScore (event_id, key, sub; match_id; player_id; team_id) para
-    reimportar sin duplicar; content_hash para versiones; export/line para procedencia.
-  - Una exportacion parcial no borra nada: cada importacion se hace desde todas las
-    exportaciones conservadas. Para actualizar se añade la nueva exportacion y se reimporta
-    a una carpeta nueva; los datos activos siguen disponibles si falla.
-  - fetched_at (obtencion) e imported_at (actualizacion local) son distintos.
-Decisiones que afectaran a la persistencia: la reimportacion completa (no incremental), la
-seleccion por seccion y el formato de discrepancias.json; la API carga todo en memoria.
-Diseno propuesto (SQLite, SQLAlchemy, Alembic; sin implementar): docs/persistencia-sqlite.md.
 
 PRUEBAS
 Desde esta carpeta: python -m unittest discover -s tests -v
@@ -476,28 +463,3 @@ Pruebas: tests/test_fichas.py cubre identidad, estructura, zonas horarias, nulos
 conflictos de valores, reimportacion, aislamiento de relaciones/deporte, reconstruccion
 por ambito y registros Slice del scraper (propietario, clave, identidad, sin ficha).
 Todas las pruebas de la API se ejecutan con unittest discover -s tests.
-
-
-DOCKER LOCAL (sin activar servicios existentes)
-Imagen de producción local: Dockerfile, Python 3.14.4 fijado y dependencias SQL. Compose vive en
-el repositorio hermano rj-analyst/compose.yaml; procedimiento y límites en docs/docker.md y
-rj-analyst/docs/docker.md. api.py admite --host (por defecto 127.0.0.1); la imagen pide 0.0.0.0
-solo dentro de su red, sin publicar backend al host. Datos y copias viven en un volumen externo,
-no en la imagen. No hay migraciones automáticas. Con el overlay de adquisición, control.py sirve la API desde el
-coordinador y publica sin recarga manual (botón «Actualizar piloto», solo el alcance del piloto).
-
-COORDINADOR INTERNO (fixtures, sin activar): diseno y limites en docs/coordinador-fixtures.md.
-No hay endpoints nuevos ni cambios en el arranque habitual; no ejecuta red ni scraper.
-
-ADQUISICIÓN SOFASCORE (servicio interno; Docker Compose con rj-analyst/compose.acquisition.yaml)
-Estado vigente, ejecuciones reales, salida de red y lo que se observa: docs/adquisicion-sofascore.md.
-- Contrato backend–adquisición, garantías, idempotencia y pruebas: docs/contrato-adquisicion-interno.md.
-  Disparo: botón «Actualizar piloto» (control.py, modo control; contrato en
-  ../rj-analyst/docs/contrato-actualizaciones.md) o python -m persistencia adquirir (API detenida);
-  operación en ../rj-analyst/docs/docker.md.
-- Receta de la imagen base del scraper: docs/scraper-empaquetado-linux.md (docker/scraper/).
-- Sandbox: diagnósticos y políticas en docs/diagnostico-sandbox-linux.md y docker/scraper/policies/.
-- Perfil: diseño final en docs/perfil-adquisicion-diseno-final.md; gestión y recuperación administrativa
-  en docs/gestion-perfil-adquisicion.md.
-- Diseño del servicio separado: ../rj-analyst/docs/propuesta-servicio-adquisicion.md.
-- Informes, protocolos retirados (v1 simulado, v2 del piloto) y evidencias: docs/historico/README.md.

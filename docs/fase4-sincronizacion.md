@@ -1,5 +1,8 @@
 # Fase 4: importación incremental con sincronización completa
 
+> Estado 29-10-2026: activa. La base de la instalación habitual está en la revisión `0004` y cada actualización
+> publicada entra con esta importación incremental (registros `import_run`).
+
 **Estado (25-10-2026): implementada; sin activar en la base real.** Diseño aprobado con cuatro decisiones
 (UNIQUE de la convocatoria, FK a la observación más comprobación en código, `call_up_change`, migrar la base activa
 solo cuando se pida). Probada sobre bases temporales y copias de la base real; la base activa no se ha migrado ni
