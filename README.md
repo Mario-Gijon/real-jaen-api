@@ -63,13 +63,43 @@ python3.14 -m venv .venv && .venv/bin/python -m pip install -r requirements-sql.
 
 `test_integration.py` y `test_updates.py` reproducen las respuestas de la ejecución real del 28-10-2026: el bundle
 sellado, su descriptor y su inventario, sin cookies ni secretos, en `docker/acquisition/fixtures/real-bundle-20261028.tar.xz`
-(sumas en `.sha256`). `--snapshot` es una copia inactiva de una carpeta `copias/`. Imágenes de prueba, sin red, desde
-un `git archive` de esta revisión (la del scraper, `RJ_SCRAPER_RUNTIME_IMAGE`, y la del backend ya construidas):
+(sumas en `.sha256`).
+
+*Snapshot* (`--snapshot`): una copia inactiva dentro de una carpeta llamada `copias/`, nunca `real-jaen.sqlite` de
+una instalación. Las pruebas trabajan sobre su propia copia y no la modifican.
+
+- `test_integration.py` y `test_updates.py`: la base del respaldo de la instalación
+  (`../rj-analyst/scripts/respaldo-instalacion.sh`; comprobado con `respaldo-habitual-20261029`):
+
+  ```sh
+  (cd RESPALDO && sha256sum -c SHA256SUMS)
+  mkdir -p ../pruebas/copias && cp RESPALDO/real-jaen.sqlite ../pruebas/copias/real-jaen.respaldo-AAAAMMDD.sqlite
+  ```
+
+- `test_group.py` simula la jornada 9 y necesita una base en la que aún no se ha jugado: la copia del 27-10
+  `real-jaen.20261027-083912-846469.piloto-16599363.sqlite` (SHA256
+  `ebe99c6d305db4864b7a316244e60e87360e314e7f71dd1108563530a970e5ca`), que va con la entrega
+  (`../rj-analyst/docs/despliegue-servidor.md`, «Entrega»). Los respaldos posteriores al 29-10 no sirven.
+
+*Imagen base del scraper* (`rj-scraper-package-efcadb386d:candidate`, con Chromium): se carga de `imagenes.tar.gz`
+de la entrega. Construirla de nuevo desde la revisión fijada (`docs/scraper-empaquetado-linux.md`: clon del original,
+commits propios desde `docker/scraper/real-jaen-follow-next-pages.bundle`, `export_source.py` y `docker buildx
+build`) necesita red hacia PyPI, Debian y la descarga de Chromium, y da otra imagen: hay que repetir entonces las
+pruebas y `test_offline.py` antes de usarla.
+
+Imágenes de prueba, sin red, desde un `git archive` de esta revisión:
 
 ```sh
-docker build --network none --pull=false --target test --build-arg PROFILE_RUNTIME=rj-scraper-package-efcadb386d:candidate   --build-context implementation=./acquisition --build-context backend=. --build-context checks=./tests/acquisition   -f docker/acquisition/Dockerfile -t rj-acq-portable:test docker/acquisition
-docker build --network none --pull=false --target backend-test --build-arg BACKEND_IMAGE=rj-analyst-backend:2c4008b   --build-context backend=. --build-context fixtures=./tests --build-context checks=./tests/acquisition   -f docker/acquisition/Dockerfile.integration -t rj-backend-portable:test docker/acquisition
-python -X utf8 docker/acquisition/test_integration.py --acquisition-image rj-acq-portable:test   --backend-image rj-backend-portable:test --snapshot RUTA/copias/COPIA.sqlite --evidence CARPETA-NUEVA
+docker build --network none --pull=false --target test \
+  --build-arg PROFILE_RUNTIME=rj-scraper-package-efcadb386d:candidate \
+  --build-context implementation=./acquisition --build-context backend=. --build-context checks=./tests/acquisition \
+  -f docker/acquisition/Dockerfile -t rj-acq-portable:test docker/acquisition
+docker build --network none --pull=false --target backend-test --build-arg BACKEND_IMAGE=rj-analyst-backend:2c4008b \
+  --build-context backend=. --build-context fixtures=./tests --build-context checks=./tests/acquisition \
+  -f docker/acquisition/Dockerfile.integration -t rj-backend-portable:test docker/acquisition
+python -X utf8 docker/acquisition/test_integration.py --acquisition-image rj-acq-portable:test \
+  --backend-image rj-backend-portable:test --snapshot ../pruebas/copias/real-jaen.respaldo-AAAAMMDD.sqlite \
+  --evidence CARPETA-NUEVA
 ```
 
 Cada prueba conserva sus volúmenes (`rj-acq-test-*`, `rj-upd-test-*`, `rj-grp-test-*`) para inspección; se retiran a
