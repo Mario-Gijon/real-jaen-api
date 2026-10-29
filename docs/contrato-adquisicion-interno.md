@@ -29,8 +29,13 @@ Despliegue y operación: `rj-analyst/compose.acquisition.yaml` y `rj-analyst/doc
 | POST /internal/v1/acquisitions/{id}/cancel | Cancelación cooperativa, idempotente |
 | GET /internal/v1/acquisitions/{id}/bundle | Solo `completed`: bundle inmutable, `Content-Length` y `ETag` con su SHA-256 |
 
-Receta única: `sofascore-pilot-16599363-v1`. No se aceptan comandos, URLs, rutas, demoras ni parámetros del
-scraper. Un trabajo activo a la vez; `request_id` durable: la misma clave con otra receta o inventario da 409.
+Recetas aprobadas:
+
+- `sofascore-group2-2627-v1`: el Grupo 2 con cobertura parcial; formato `group-v1` y verificador `_verify_group`.
+  Diseño, garantías y validación: [diseno-receta-grupo2.md](diseno-receta-grupo2.md).
+- `sofascore-pilot-16599363-v1`: formato `pilot-v2`.
+
+No se aceptan comandos, URLs, rutas, demoras ni parámetros del scraper. Un trabajo activo a la vez; `request_id` durable: la misma clave con otra receta o inventario da 409.
 Estados: queued, running, cancelling, cancelled, completed, failed, interrupted. Al reiniciar, los no terminados
 pasan a interrupted y no se reanudan; repetir su clave devuelve el mismo trabajo interrumpido.
 

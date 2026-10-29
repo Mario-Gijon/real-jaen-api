@@ -27,10 +27,11 @@ import uuid
 from .profile import Profile, ProfileError, atomic_json, sync_dir
 
 PREFIX = '/internal/v1/acquisitions'
-RECIPES = {'sofascore-pilot-16599363-v1'}
+RECIPES = {'sofascore-pilot-16599363-v1', 'sofascore-group2-2627-v1'}
 ACTIVE = {'queued', 'running', 'cancelling'}
 MAX_REQUEST = 32 * 1024 * 1024  # inventory of the current generation (about 12 MB with 380 events)
-JOB_LIMIT = 480                 # hard limit of the job process; the recipe itself has 300 s
+# Hard limit of the job process per recipe; the recipes themselves have 300 s and 900 s.
+JOB_LIMITS = {'sofascore-pilot-16599363-v1': 480, 'sofascore-group2-2627-v1': 1200}
 CANCEL_GRACE = 30
 
 
@@ -58,7 +59,7 @@ def subprocess_runner(folder, spec, cancelled):
         if cancelled() and asked is None:
             (folder / 'cancel').touch()
             asked = elapsed
-        if elapsed > JOB_LIMIT or (asked is not None and elapsed - asked > CANCEL_GRACE):
+        if elapsed > JOB_LIMITS[spec['recipe_id']] or (asked is not None and elapsed - asked > CANCEL_GRACE):
             os.killpg(process.pid, signal.SIGKILL)
             process.wait()
             return 'killed'
@@ -280,7 +281,13 @@ def configuration(environ):
         routes = environ.get('ACQ_FIXTURE_ROUTES')
         if importlib.util.find_spec('sdk_fixture') is None or not routes or not Path(routes).is_file():
             raise SystemExit('Test provider requires the test image and its recorded routes')
-        return provider, dict(fixture_routes=routes, fixture_scenario=environ.get('ACQ_FIXTURE_SCENARIO', 'challenge'))
+        extra = dict(fixture_routes=routes, fixture_scenario=environ.get('ACQ_FIXTURE_SCENARIO', 'challenge'))
+        # Simulated time and a smaller budget, to test the group recipe's plan; only with the local provider.
+        if environ.get('ACQ_TEST_NOW'):
+            extra['test_now'] = datetime.fromisoformat(environ['ACQ_TEST_NOW']).timestamp()
+        if environ.get('ACQ_TEST_PLANNED_ATTEMPTS'):
+            extra['test_planned_attempts'] = int(environ['ACQ_TEST_PLANNED_ATTEMPTS'])
+        return provider, extra
     raise SystemExit('No acquisition provider enabled: set ACQ_PROVIDER=sofascore with ACQ_ENABLE_REAL=1, '
                      'or the isolated test provider')
 

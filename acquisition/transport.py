@@ -20,12 +20,21 @@ from persistencia.bundle import PATHS, encode, fingerprint, parse
 def iso(at):return datetime.fromtimestamp(at,timezone.utc).isoformat()
 
 class Stopped(RuntimeError):pass
+class Exhausted(Stopped):
+    """The job's attempts or time ran out: not a refusal. A recipe with partial coverage leaves the rest pending."""
+
+# Approved limits per recipe: (logical attempts, seconds of the job). The pilot's are the original ones.
+LIMITS={'pilot':(16,300),'group':(120,900)}
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self,*args):return None
 
 class Transport:
     def __init__(self,root,*,job_id,request_id,inventory_sha256,loopback_url=None,enable_real=False,
-                 max_attempts=16,seconds=300,clock=time.time,sleep=asyncio.sleep,cancelled=lambda:False,breaker=None):
+                 max_attempts=16,seconds=300,clock=time.time,sleep=asyncio.sleep,cancelled=lambda:False,breaker=None,
+                 allowed=None,limits='pilot'):
+        """allowed: predicate of the paths this job may request (default: the pilot's fixed paths). limits: the
+        recipe whose approved limits apply; 'group' also turns an exhausted budget or deadline into a failed
+        outcome with reason 'budget' (pending coverage) instead of stopping the job. Refusals always stop it."""
         import uuid
         if any(str(uuid.UUID(v))!=v for v in (job_id,request_id)):raise ValueError('Invalid job context')
         self.root=Path(root);self.root.mkdir(parents=True,exist_ok=True)
@@ -38,7 +47,9 @@ class Transport:
             self.base=loopback_url
         elif enable_real:self.base='https://www.sofascore.com/api/v1'
         else:raise Stopped('Proveedor real deshabilitado')
-        if type(max_attempts) is not int or not 1<=max_attempts<=16 or type(seconds) is not int or not 1<=seconds<=300:raise ValueError('Unapproved pilot limits')
+        top_attempts,top_seconds=LIMITS[limits]
+        if type(max_attempts) is not int or not 1<=max_attempts<=top_attempts or type(seconds) is not int or not 1<=seconds<=top_seconds:raise ValueError('Unapproved limits')
+        self.allowed=allowed or (lambda path:path in PATHS);self.deferrable=limits!='pilot'
         self.max_attempts=max_attempts;self.seconds=seconds;self.clock=clock;self.sleep=sleep;self.cancelled=cancelled
         self.state=parse(self.path.read_bytes()) if self.path.exists() else dict(context=self.context,started_at=iso(clock()),attempts=[])
         if self.state['context']!=self.context:raise Stopped('Job identity reused with another inventory')
@@ -76,14 +87,14 @@ class Transport:
     def _check(self):
         if self.owner is None:raise Stopped('No owner')
         if self.cancelled():raise InterruptedError('Pilot cancelled')
-        if self.clock()>=datetime.fromisoformat(self.state['started_at']).timestamp()+self.seconds:raise Stopped('Pilot time limit')
+        if self.clock()>=datetime.fromisoformat(self.state['started_at']).timestamp()+self.seconds:raise Exhausted('Pilot time limit')
         if self.breaker.tripped:raise Stopped('Circuit breaker open')
         if self.retry.get('_blocked',{}).get('admin'):raise Stopped('Operator review required after refusal')
         if self.retry.get('_blocked',{}).get('next_at',0)>self.clock():raise Stopped('Pilot stopped after refusal/breaker')
 
     async def _wait_until(self,at):
         deadline=datetime.fromisoformat(self.state['started_at']).timestamp()+self.seconds
-        if at>=deadline:raise Stopped('Retry does not fit job deadline')
+        if at>=deadline:raise Exhausted('Retry does not fit job deadline')
         while self.clock()<at:
             self._check();await self.sleep(min(.25,at-self.clock()))
 
@@ -107,7 +118,15 @@ class Transport:
 
     async def get(self,path,retries=None):
         from sofascore_scraper.slices import Outcome
-        if path not in PATHS:raise Stopped('Path not in fixed pilot allowlist')
+        if not self.allowed(path):raise Stopped('Path not in the allowlist of this job')
+        try:
+            return await self._get(path)
+        except Exhausted:
+            if not self.deferrable:raise
+            return Outcome('failed',reason='budget')  # nothing sent: the resource stays pending
+
+    async def _get(self,path):
+        from sofascore_scraper.slices import Outcome
         async with self.serial:
             self._check()
             if path in self.memo:return self.memo[path]
@@ -115,10 +134,14 @@ class Transport:
                 self._check()
                 prior=self.retry.get(path,{})
                 if prior.get('admin'):raise Stopped('Resource requires administrative review')
+                if self.deferrable and prior.get('next_at',0)-self.clock()>60:
+                    # A resource still in its backoff (an earlier empty, 404 or error) is not asked again in this job:
+                    # it stays pending with its previous reason instead of the job waiting for it.
+                    return Outcome('failed',reason=prior.get('reason') or 'error')
                 await self._wait_until(prior.get('next_at',0))
                 attempts=[a for a in self.state['attempts'] if a['path']==path]
                 if attempts and attempts[-1]['status']==200 and path not in self.retry:raise Stopped('Resource already acquired: use its verified cache/bundle')
-                if len(attempts)>=2 or len(self.state['attempts'])>=self.max_attempts:raise Stopped('Pilot attempt budget exhausted')
+                if len(attempts)>=2 or len(self.state['attempts'])>=self.max_attempts:raise Exhausted('Pilot attempt budget exhausted')
                 await self._wait_until(self.retry.get('_last_sent',{}).get('at',0)+1)
                 self._check()
                 a=dict(number=len(self.state['attempts'])+1,path=path,sent_at=iso(self.clock()),finished_at=None,status=None,payload_sha256=None)

@@ -9,7 +9,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 
 # Las reglas de versiones y de datos maestros son las del importador: una sola implementación.
-from importar import ficha_combinada, ficha_de_entrada, validar_ficha
+from importar import ficha_combinada, ficha_de_entrada, rasgos_evento, validar_ficha
 
 # Secciones de detalle de partido: ruta -> clave `key` de originales.json.
 SECCIONES = {'statistics': 'statistics', 'lineups': 'lineups', 'incidents': 'incidents'}
@@ -38,8 +38,21 @@ def componer(datos, competiciones, sustituciones):
     originales ya indexados): fichas validadas, ámbito y sustituciones locales. Un solo camino para ambos modos."""
     for r in datos['fichas_originales']:
         validar_ficha(r)
-    datos = aplicar_ambito(datos, competiciones)
+    datos = apartar_alineaciones_de_otros_equipos(aplicar_ambito(datos, competiciones))
     return aplicar_sustituciones(datos, sustituciones)
+
+def apartar_alineaciones_de_otros_equipos(datos):
+    """Las convocatorias de una alineación leída antes de un cambio de equipos del evento. El importador las asigna al
+    equipo del lado en el evento vigente, pero son de los equipos anteriores: se apartan (`convocatorias_apartadas`)
+    y no se atribuyen a ningún equipo ni jugador del partido vigente. La alineación original se conserva como
+    evidencia en su sección (`meta.predates_team_change`)."""
+    cambiados = {d['event_id'] for d in datos['discrepancias']
+                 if d.get('key') == 'event' and 'identity_changed' in (d.get('reasons') or [])}
+    apartados = {m for m in cambiados if 'teams' in anterior_a(datos, m, 'lineups')}
+    if not apartados:
+        return datos
+    return dict(datos, jugador_partido=[r for r in datos['jugador_partido'] if r['match_id'] not in apartados],
+                convocatorias_apartadas=[r for r in datos['jugador_partido'] if r['match_id'] in apartados])
 
 def leer_ambito(ruta):
     """Competiciones permitidas. Un ámbito ausente o incompleto impide arrancar: nunca se sirve todo por defecto."""
@@ -213,6 +226,51 @@ def discrepancia_de(datos, ident, key):
     d = next((d for d in datos['discrepancias'] if d.get('event_id') == ident and d.get('key') == key), None)
     return {'reasons': d['reasons'], 'integrity': d['integrity']} if d else None
 
+def instante(texto):
+    """Un instante ISO-8601 en segundos, o None si no se puede leer."""
+    try:
+        return datetime.fromisoformat(texto.replace('Z', '+00:00')).timestamp()
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+# Correcciones del evento que dejan atrás las secciones leídas antes: los campos que cambian en cada una.
+CORRECCIONES = {'score': ('status', 'home_score', 'away_score'), 'teams': ('home_team_id', 'away_team_id')}
+
+def correcciones_del_evento(datos, ident):
+    """Las correcciones del evento vigente, {'score' | 'teams': (fetched_at, instante)}, con el momento en que se
+    observó por primera vez lo vigente: un marcador final que corrige a otro (discrepancia `final_score_corrected`) o
+    unos equipos distintos de los de otra versión (`identity_changed`). Sin una fecha legible, esa corrección no se
+    afirma."""
+    d = discrepancia_de(datos, ident, 'event')
+    evento = datos['originales'].get((ident, 'event'))
+    if not d or not evento:
+        return {}
+    def rasgos(r, campos):
+        valores = rasgos_evento(r.get('payload'))
+        return tuple(valores[c] for c in campos)
+    motivos = {'score': 'final_score_corrected', 'teams': 'identity_changed'}
+    correcciones = {}
+    for tipo, campos in CORRECCIONES.items():
+        if motivos[tipo] not in d['reasons'] or len({rasgos(r, campos) for r in evento['todas']}) < 2:
+            continue
+        vigente = rasgos(evento['registro'], campos)
+        vistas = [(instante(r.get('fetched_at')), r.get('fetched_at')) for r in evento['todas'] if rasgos(r, campos) == vigente]
+        if vistas and all(i is not None for i, _ in vistas):
+            momento, texto = min(vistas)
+            correcciones[tipo] = (texto, momento)
+    return correcciones
+
+def anterior_a(datos, ident, key):
+    """Las correcciones del evento ('score', 'teams') posteriores a la lectura de la sección elegida: sus datos son de
+    antes (por ejemplo, porque su relectura falló y se conservó la anterior). Vacío si no hay correcciones o si la
+    fecha de la sección no se lee: no se afirma lo que no se sabe."""
+    correcciones = correcciones_del_evento(datos, ident)
+    seccion = datos['originales'].get((ident, key))
+    if not correcciones or seccion is None:
+        return set()
+    leida = instante(seccion['registro'].get('fetched_at'))
+    return set() if leida is None else {tipo for tipo, (_, momento) in correcciones.items() if leida < momento}
+
 def vacia(seccion, payload):
     """Contenido vacío: el registro existe pero no trae elementos de esa categoría."""
     if not payload:
@@ -243,9 +301,13 @@ def detalle_partido(datos, ident, partes):
         return 404, {'error':'Ruta inexistente'}
     estado, entrada = disponibilidad(datos, ident, seccion)
     registro = entrada['registro'] if entrada else {}
+    anteriores = anterior_a(datos, ident, SECCIONES[seccion])
     meta = {'match_id':ident,'section':seccion,'source':'Sofascore','source_key':SECCIONES[seccion],'availability':estado,
             'fetched_at':registro.get('fetched_at'),'versions':entrada['versiones'] if entrada else 0,
-            'discrepancy':discrepancia_de(datos, ident, SECCIONES[seccion]),'note':NOTA_FETCHED_AT}
+            'discrepancy':discrepancia_de(datos, ident, SECCIONES[seccion]),
+            # Leída antes del marcador corregido o de los equipos vigentes: se sirve como evidencia, no se ha actualizado.
+            'predates_score_correction':'score' in anteriores,'predates_team_change':'teams' in anteriores,
+            'note':NOTA_FETCHED_AT}
     respuesta = {'data':registro.get('payload'),'meta':meta}
     if seccion == 'lineups':
         # La participación de cada convocado según las reglas de esta fuente; el payload original no se toca.
@@ -438,12 +500,17 @@ def contexto_partido(datos, ident):
     """Lo que alineaciones e incidencias originales dicen del partido, para resolver participaciones y contrastar
     goles. `cobertura[lado]`: alineación confirmada, incidencias guardadas y las entradas de ese lado coinciden
     exactamente con los suplentes con minutos (una sección guardada no basta por sí sola). `goles` es None si las
-    incidencias no cuadran con el marcador o traen una clase de gol desconocida: entonces no se contrasta."""
+    incidencias no cuadran con el marcador, traen una clase de gol desconocida o se leyeron antes de un marcador
+    corregido: entonces no se contrasta. Unas incidencias leídas antes de un cambio de equipos no se usan para nada.
+    `anteriores`: las correcciones del evento posteriores a cada sección."""
     partido = next((m for m in datos['partidos'] if m['match_id'] == ident), {})
     alineacion = (datos['originales'].get((ident, 'lineups')) or {}).get('registro', {}).get('payload')
     versiones = {k: [version(r) for r in (datos['originales'].get((ident, k)) or {}).get('todas', [])] for k in ('lineups', 'incidents')}
     incidencias = ((datos['originales'].get((ident, 'incidents')) or {}).get('registro', {}).get('payload') or {})
     incidencias = incidencias.get('incidents') if isinstance(incidencias, dict) else None
+    anteriores = {k: anterior_a(datos, ident, k) for k in ('lineups', 'incidents')}
+    if 'teams' in anteriores['incidents']:
+        incidencias = None  # de los equipos anteriores: ni entradas ni goles del partido vigente
     confirmada = isinstance(alineacion, dict) and alineacion.get('confirmed') is True
     lista = [i for i in incidencias if isinstance(i, dict)] if isinstance(incidencias, list) and incidencias else None
     def jugador(valor):
@@ -474,10 +541,12 @@ def contexto_partido(datos, ident):
         cobertura[lado] = confirmada and lista is not None and usados == entradas[lado]
     marcador = (partido.get('home_score'), partido.get('away_score'))
     contrastable = (lista is not None and all(c in CLASES_DE_GOL | {'ownGoal'} for c in clases)
-                    and all(marcador_valido(v) for v in marcador) and len(clases) == sum(marcador))
+                    and all(marcador_valido(v) for v in marcador) and len(clases) == sum(marcador)
+                    and 'score' not in anteriores['incidents'])
     return {'alineacion_confirmada': confirmada, 'entradas': entradas, 'con_eventos': con_eventos, 'cobertura': cobertura,
             'goles': goles if contrastable else None, 'asistencias': asistencias if contrastable else None,
             'versiones': versiones, 'desacuerdos': desacuerdos_de_alineacion(datos, ident),
+            'anteriores': anteriores, 'correcciones': correcciones_del_evento(datos, ident),
             'conflictos_estadisticas': conflictos_de_estadisticas(datos, ident)}
 
 def jugadores_de_alineacion(payload):
@@ -772,10 +841,19 @@ def actuacion(filas, partido, contexto):
             evidencia(base, participacion_original(), FUENTES_PARTICIPACION)
     sustanciales = (minutos is not None and minutos > 0
                     and len(claves - ESTADISTICAS_DE_BANQUILLO - {'minutesPlayed'}) >= MIN_CLAVES_SUSTANCIALES)
+    # Una alineación leída antes del marcador corregido no dice los goles ni las asistencias del partido corregido.
+    previa = estado == 'played' and 'score' in contexto['anteriores']['lineups']
+    if previa:
+        incidencias.append('lineups_before_score_correction')
+        evidencia('lineups_before_score_correction',
+                  {'lineups.fetched_at': [r.get('fetched_at') for r in filas],
+                   'score_observed_at': contexto['correcciones']['score'][0],
+                   'score': [partido.get('home_score'), partido.get('away_score')]},
+                  ['originales:lineups', 'originales:event'])
     def contribucion(clave, eventos, codigo):
         if estado == 'unused':
             return valor(0, 'unused')
-        if estado != 'played':
+        if estado != 'played' or previa:
             return valor(None, None)
         presente = comun([clave in estadisticas_de(r) for r in filas])
         if presente:
@@ -796,7 +874,8 @@ def actuacion(filas, partido, contexto):
     asistencias = contribucion('goalAssist', contexto['asistencias'], 'assists_mismatch')
     registros = [estadisticas_de(r) for r in filas]
     conflictos = contexto['conflictos_estadisticas'].get(jugador, {})
-    gol = estado_de_gol(registros, None if contexto['goles'] is None else contexto['goles'].get(jugador, 0), conflictos)
+    gol = (('dudoso', None) if previa else
+           estado_de_gol(registros, None if contexto['goles'] is None else contexto['goles'].get(jugador, 0), conflictos))
     estadisticas, problemas = estadisticas_de_actuacion(registros, estado, conflictos, gol,
                                                         conflicto_de_partido=partido.get('version_conflict') is True)
     for codigo, grupo, claves_grupo in problemas:

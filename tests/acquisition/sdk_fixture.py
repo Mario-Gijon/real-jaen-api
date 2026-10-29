@@ -17,6 +17,11 @@ from urllib.parse import parse_qs, urlsplit
 API = '/api/v1'
 TOKEN = 'eyJhbGciOiJub25lIn0.eyJleHAiOjQxMDI0NDQ4MDB9.prueba-local'
 ROBOTS = b'User-agent: *\nDisallow:\n'
+# A route whose body is this marker answers 500 (a server error of the provider).
+SERVER_ERROR = b'__500__'
+# This one answers 500 to the browser (with the cookie) and then refuses without a challenge (plain 403) the retry
+# without the cookie: a refusal after a server error, which must stop everything.
+SERVER_ERROR_THEN_FORBIDDEN = b'__500_403__'
 
 
 def load_downloaded(folder):
@@ -101,6 +106,10 @@ class FixtureSite:
                     return self.send(404, b'{}')
                 if s == 'prohibido':
                     return self.send(403, b'{"error":{"code":403,"reason":"Forbidden"}}')
+                if site.routes.get(url.path[len(API):]) == SERVER_ERROR_THEN_FORBIDDEN:
+                    if cookie:
+                        return self.send(500, b'{"error":{"code":500}}')
+                    return self.send(403, b'{"error":{"code":403,"reason":"Forbidden"}}')
                 if s != 'directo' and not cookie:
                     return self.send(403, b'{"error":{"code":403,"reason":"challenge"}}')
                 if s == 'limite-navegador' and cookie:
@@ -110,6 +119,8 @@ class FixtureSite:
                     if n > 1:
                         return self.send(429, b'{"error":{"code":429}}', headers=(('Retry-After', '120'),))
                 body = site.routes.get(url.path[len(API):])
+                if body == SERVER_ERROR:
+                    return self.send(500, b'{"error":{"code":500}}')
                 return self.send(200, body) if body is not None else self.send(404, b'{"error":{"code":404}}')
 
         class Server(ThreadingHTTPServer):

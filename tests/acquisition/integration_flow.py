@@ -244,6 +244,64 @@ def refusal():
     save('refusal-report.json', dict(outcomes=outcomes, published=False))
 
 
+def group_check():
+    """After the group updates (docker/acquisition/test_group.py): integrity, identities kept, and the group verifier
+    rejecting tampered copies of the sealed bundles it published (each against its own inventory and context)."""
+    assert sincronizacion.verificar(BASE)['ok']
+    ids_before, ids_after = parse((ROOT / 'ids-before.json').read_bytes()), identity()
+    for table in ('team', 'player', 'match', 'observation', 'local_replacement'):
+        assert {tuple(r) for r in ids_before[table]} <= {tuple(r) for r in ids_after[table]}, table
+    folders = sorted((BASE.with_name(BASE.name + '.actualizaciones') / 'adquisiciones').iterdir(), key=lambda f: f.stat().st_mtime)
+    sealed = []
+    for folder in folders:
+        record = parse((folder / 'solicitud.json').read_bytes())
+        if record['bundle'] is not None:
+            sealed.append((parse((folder / 'bundle.json').read_bytes()), (folder / 'bundle.json').read_bytes(),
+                           parse((folder / 'inventory.json').read_bytes()), (record['acquisition_id'], record['request_id'])))
+    assert len(sealed) == 3, len(sealed)
+
+    def check(body, baseline, context):
+        return verificar_sellado(body, dict(bytes=len(body), sha256=sha(body)), baseline, context, test_transport=True)
+
+    def rebuilt(envelope, name=None, lines=None):
+        envelope = json.loads(json.dumps(envelope))
+        if name is not None:
+            raw = b''.join(encode(line) + b'\n' for line in lines)
+            envelope['files'][name] = base64.b64encode(raw).decode()
+            entry = next(e for e in envelope['manifest']['files'] if e['name'] == name)
+            entry.update(bytes=len(raw), sha256=sha(raw))
+        return encode(envelope)
+
+    def lines(envelope, name):
+        return [json.loads(line) for line in base64.b64decode(envelope['files'][name]).splitlines()]
+
+    tampered = {}
+    first, raw_first, baseline1, context1 = sealed[0]
+    second, raw_second, baseline2, context2 = sealed[1]
+    for envelope, raw, baseline, context in sealed:
+        check(raw, baseline, context)  # each sealed bundle still verifies as it was published
+    # A pending resource without data presented as data.
+    altered = json.loads(json.dumps(first))
+    entry = next(c for c in altered['manifest']['coverage'] if c['status'] == 'pending' and c['origin'] == 'none')
+    entry.update(status='data', origin='attempt', reason=None)
+    tampered['pending-as-data'] = rejected(lambda: check(rebuilt(altered), baseline1, context1), Rejected)
+    # A previous original dropped behind a pending entry.
+    altered = json.loads(json.dumps(second))
+    entry = next(c for c in altered['manifest']['coverage'] if c['status'] == 'pending' and c['origin'] == 'inventory')
+    entry.update(origin='none', evidence=None)
+    tampered['previous-dropped'] = rejected(lambda: check(rebuilt(altered), baseline2, context2), Rejected)
+    # A new match that no consulted round listed.
+    calendar = lines(first, 'calendar.jsonl')
+    ghost = dict(json.loads(json.dumps(calendar[0])), id=99999999)
+    tampered['unlisted-new-match'] = rejected(lambda: check(rebuilt(first, 'calendar.jsonl', calendar + [ghost]), baseline1, context1), Rejected)
+    # An unconsulted original altered.
+    kept = next(c for c in first['manifest']['coverage'] if c['status'] == 'data' and c['origin'] == 'inventory' and c['resource'] == 'statistics')
+    rows = lines(first, kept['evidence']['file'])
+    rows[kept['evidence']['line'] - 1]['payload'] = {'statistics': []}
+    tampered['unconsulted-altered'] = rejected(lambda: check(rebuilt(first, kept['evidence']['file'], rows), baseline1, context1), Rejected)
+    save('group-check-report.json', dict(integrity='ok', ids_preserved=True, sealed_bundles=len(sealed), tampered_rejected=tampered))
+
+
 if __name__ == '__main__':
-    {'prepare': prepare, 'auth-probe': auth_probe, 'real-bundle': real_bundle, 'flow': flow,
+    {'prepare': prepare, 'auth-probe': auth_probe, 'real-bundle': real_bundle, 'flow': flow, 'group-check': group_check,
      'restart-start': restart_start, 'restart-check': restart_check, 'refusal': refusal}[sys.argv[1]]()

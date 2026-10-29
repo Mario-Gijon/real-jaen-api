@@ -7,7 +7,8 @@ generation once and a publication swaps it without cutting requests in flight. S
 api.py; api.py itself (static snapshot) is unchanged. Contract: ../rj-analyst/docs/contrato-actualizaciones.md.
 
 Environment: RJ_CONTROL_SECRET_FILE (bearer secret of /internal/v1/updates, shared only with Next's server),
-RJ_ACQUISITION_URL and RJ_ACQUISITION_SECRET_FILE (the acquisition service), RJ_ACQUISITION_TEST=1 only on an
+RJ_ACQUISITION_URL and RJ_ACQUISITION_SECRET_FILE (the acquisition service), RJ_UPDATE_RECIPE (the group's by
+default; the pilot's for its tests), RJ_ACQUISITION_TEST=1 only on an
 installation marked by its test fixture (persistencia.adquisicion, modo 'prueba'). Without the control secret the
 mode refuses to start. This module is outside persistencia/: it does not change the coordinator's rule fingerprint.
 """
@@ -27,9 +28,22 @@ import threading
 import uuid
 from urllib.parse import urlsplit
 
-RECIPE = 'sofascore-pilot-16599363-v1'
-SCOPE = dict(kind='pilot', recipe=RECIPE, round=1, match_ids=[16599363],
-             label='Actualización piloto: calendario de la jornada 1 y un partido')
+PILOT = 'sofascore-pilot-16599363-v1'
+GROUP = 'sofascore-group2-2627-v1'
+# What each recipe really consults, as the interface must say it (never more than the recipe covers).
+SCOPES = {
+    PILOT: dict(kind='pilot', recipe=PILOT, round=1, match_ids=[16599363], action='Actualizar piloto',
+                label='Actualización piloto: calendario de la jornada 1 y un partido',
+                description='Consulta el calendario de la jornada 1 y un partido. No actualiza el resto de la jornada '
+                            'ni de la temporada: los demás partidos se conservan tal como están publicados.'),
+    GROUP: dict(kind='group', recipe=GROUP, round=None, match_ids=[], action='Actualizar Grupo 2',
+                label='Actualización del Grupo 2 (Primera Federación 26/27)',
+                description='Consulta los partidos finalizados que faltan, los aplazados, los cambios de calendario de '
+                            'las jornadas próximas y, por turnos, de las lejanas, y revisa las correcciones de las '
+                            'últimas 72 horas. Lo que no se obtenga queda pendiente: se conservan los datos anteriores, '
+                            'nunca se sustituyen por ceros.'),
+}
+RECIPE = GROUP
 ACTIVE = ('queued', 'running')
 CANCELLABLE_PHASES = ('queued', 'acquiring')
 POLL_SECONDS = 3
@@ -68,6 +82,8 @@ class Actualizaciones:
     """One active update at a time, durable jobs and idempotency keys under <base>.actualizaciones/control/."""
 
     def __init__(self, coordinador, cliente, *, recipe=RECIPE):
+        if recipe not in SCOPES:
+            raise ValueError('Receta no aprobada')
         self.c, self.cliente, self.recipe = coordinador, cliente, recipe
         self.root = coordinador.directorio / 'control'
         self.root.mkdir(exist_ok=True)
@@ -203,7 +219,7 @@ class Actualizaciones:
                 item = self.get(ident)
                 item.update(status='completed', phase='finished', published=True, finished_at=now(),
                             result=dict(published_at=now(), generation=result['generation_id'],
-                                        reused_bundle=item['reused_bundle']))
+                                        reused_bundle=item['reused_bundle'], coverage=self._named(result.get('coverage'))))
                 self.save(item)
         except Exception as error:
             text = str(error)
@@ -226,6 +242,21 @@ class Actualizaciones:
                 self._fail(item, code, resumable=resumable, status=status)
                 self.save(item)
 
+    def _named(self, coverage):
+        """The coverage with the names of the matches it mentions, from the generation just published (the interface
+        shows them without asking the data API)."""
+        if not coverage:
+            return coverage
+        ids = {p['event_id'] for p in coverage['pending']} | set(coverage['deferred'])
+        ids |= {m['id'] for m in coverage['new_matches']} | {r for m in coverage['new_matches'] for r in m['replaces']}
+        data = self.c.capturar()._datos
+        teams = {e['team_id']: e['name'] for e in data['equipos']}
+        names = {}
+        for m in data['partidos']:
+            if m['match_id'] in ids:
+                names[str(m['match_id'])] = f"{teams.get(m['home_team_id']) or '?'} – {teams.get(m['away_team_id']) or '?'}"
+        return dict(coverage, names=names)
+
     def public(self, item):
         if item is None:
             return None
@@ -235,15 +266,19 @@ class Actualizaciones:
                     requested_at=item['requested_at'], finished_at=item['finished_at'], poll_after_seconds=POLL_SECONDS,
                     error=item['error'],
                     result=None if item['result'] is None else dict(published_at=item['result']['published_at'],
-                                                                     reused_bundle=item['result']['reused_bundle']))
+                                                                     reused_bundle=item['result']['reused_bundle'],
+                                                                     coverage=item['result'].get('coverage')))
 
     def actual(self):
         active = self._rows("WHERE state IN ('queued','running')")
         last = self._last_finished()
         published = [r for r in self._rows("WHERE state='completed'")]
         latest = max(published, key=lambda r: r['finished_at']) if published else None
-        return dict(scope=SCOPE, active_job=self.public(active[0] if active else None), last_job=self.public(last),
-                    last_published=None if latest is None else dict(at=latest['result']['published_at']))
+        return dict(scope=SCOPES[self.recipe], active_job=self.public(active[0] if active else None), last_job=self.public(last),
+                    # With the coverage of that publication: its pending resources and deferred refreshes stay visible
+                    # while their previous data are served, even after a later update failed or was cancelled.
+                    last_published=None if latest is None else dict(at=latest['result']['published_at'],
+                                                                    coverage=latest['result'].get('coverage')))
 
     def close(self, timeout=5):
         for thread in self.threads:
@@ -331,7 +366,7 @@ def main():
     cliente = Cliente(os.environ.get('RJ_ACQUISITION_URL', 'http://acquisition:8002'),
                       os.environ.get('RJ_ACQUISITION_SECRET_FILE', '/run/secrets/acquisition-token'), modo=modo)
     with Coordinador(args.base, args.ambito) as coordinador:
-        control = Actualizaciones(coordinador, cliente)
+        control = Actualizaciones(coordinador, cliente, recipe=os.environ.get('RJ_UPDATE_RECIPE', RECIPE))
         server = ThreadingHTTPServer((args.host, args.port), handler_for(coordinador, control, token))
         server.daemon_threads = True
         signal.signal(signal.SIGTERM, lambda *a: threading.Thread(target=server.shutdown, daemon=True).start())

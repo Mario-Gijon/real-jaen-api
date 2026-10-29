@@ -21,9 +21,9 @@ import urllib.parse
 import urllib.request
 import uuid
 
-from .bundle import MAX_WIRE, Rejected, encode, inventory, parse, verify
+from .bundle import MAX_WIRE, Rejected, coverage_summary, encode, inventory, parse, verify
 
-RECIPES = {'sofascore-pilot-16599363-v1'}
+RECIPES = {'sofascore-pilot-16599363-v1', 'sofascore-group2-2627-v1'}
 MAX_STATUS = 1024 * 1024
 TEST_MARKER = '.acquisition-test-installation'
 TEST_CONTENT = 'isolated-acquisition-test\n'
@@ -211,8 +211,10 @@ class Cliente:
         from .actualizacion import CoordinacionRechazada
         descriptor, job = record['bundle'], record['acquisition_id']
         body = (folder / 'bundle.json').read_bytes()
-        _, files = verificar_sellado(body, descriptor, baseline, (job, record['request_id']),
-                                     test_transport=self.modo == 'prueba')
+        manifest, files = verificar_sellado(body, descriptor, baseline, (job, record['request_id']),
+                                            test_transport=self.modo == 'prueba')
+        if manifest['recipe_id'] != record['recipe_id']:
+            raise Rejected('Bundle of another recipe')
         path = folder / 'solicitud.json'
         last = record['intentos'][-1] if record['intentos'] else None
         state = None
@@ -244,8 +246,14 @@ class Cliente:
         result = coordinador.esperar(last, timeout=300)
         if result['estado'] != 'completed':
             raise AdquisicionRechazada('Publicacion fallida: se conserva la generacion valida')
-        return dict(state='published', generation_id=result['generacion'], job_id=last, acquisition_id=job,
-                    request_id=record['request_id'], bundle=descriptor, attempts=len(record['intentos']))
+        published = dict(state='published', generation_id=result['generacion'], job_id=last, acquisition_id=job,
+                         request_id=record['request_id'], bundle=descriptor, attempts=len(record['intentos']))
+        if manifest['contract'] == 'group-v1':
+            # Partial coverage: what is new, what was kept from before and what stays pending (never absence).
+            plan = manifest['plan']
+            published['coverage'] = dict(coverage_summary(manifest), new_matches=plan['new_matches'], rounds=plan['rounds'],
+                                         deferred=sorted(int(i) for i in plan['deferred']))
+        return published
 
 
 def verificar_sellado(body, descriptor, baseline, context, *, test_transport=False):

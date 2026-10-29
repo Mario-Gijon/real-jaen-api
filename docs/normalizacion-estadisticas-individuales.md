@@ -219,6 +219,27 @@ Actual (`actuacion()` en `api.py`; README, «Normalización de convocatorias»):
 - Si las incidencias cuadran con el marcador (clases `regular`, `penalty`, `ownGoal` y su número
   igual a la suma del marcador), goles (`regular` y `penalty`) y asistencias (`assist1`) deben
   coincidir; si no, sin dato y `goals_mismatch` / `assists_mismatch`.
+- **Marcador corregido con secciones anteriores** (`anterior_a`, corrección `score`). El evento trae la discrepancia
+  `final_score_corrected` y una sección se leyó antes de observarse el marcador vigente, por ejemplo porque su
+  relectura falló y se conservó la anterior:
+  - la sección se sirve igual, como evidencia, con `meta.predates_score_correction: true`;
+  - unas incidencias así no se contrastan, aunque su número de goles cuadre por casualidad;
+  - unas alineaciones así dejan sin dato los goles y asistencias de los que jugaron, con la incidencia
+    `lineups_before_score_correction` y su evidencia (fechas de lectura, cuándo se observó el marcador y cuál es).
+    El gol se trata como dudoso: no permite deducir tiros;
+  - la participación, los minutos, las demás estadísticas individuales y las del equipo no dependen del marcador:
+    se siguen usando;
+  - el resultado del partido cuenta con el marcador corregido.
+
+  Si una fecha no se puede leer, no se afirma nada. Cuando la sección se vuelve a leer, la señal desaparece.
+- **Cambio de equipos con secciones anteriores** (corrección `teams`). El evento trae `identity_changed` con otros
+  equipos, y una sección se leyó antes de observarse los equipos vigentes:
+  - se sirve igual, como evidencia, con `meta.predates_team_change: true`;
+  - la alineación nunca se usa como vigente. El importador asigna sus convocatorias al equipo del lado en el evento
+    vigente; la API las aparta (`apartar_alineaciones_de_otros_equipos`, en `componer`). No cuentan para ningún
+    equipo ni jugador del partido: ni plantilla observada, ni partidos del jugador, ni acumulados;
+  - las incidencias no se usan para nada (ni entradas ni goles);
+  - el partido ya queda fuera del balance y de los acumulados por el conflicto de versiones.
 
 En la importación activa:
 

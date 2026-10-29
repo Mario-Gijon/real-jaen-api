@@ -19,7 +19,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from sdk_fixture import FixtureSite, load_downloaded  # noqa: E402
+from sdk_fixture import SERVER_ERROR, SERVER_ERROR_THEN_FORBIDDEN, FixtureSite, load_downloaded  # noqa: E402
 
 PATHS = ('/unique-tournament/17073/season/97382/events/round/1', '/event/16599363', '/event/16599363/lineups',
          '/event/16599363/statistics', '/event/16599363/incidents')
@@ -55,11 +55,17 @@ def run_scenario(name, folder):
     cert = certificate(folder) if name.startswith('tls') else None
     if name.startswith('tls') and cert is None:
         return dict(skipped='sin certificado de prueba')
-    kind = 'challenge' if name in ('tls-navegador', 'tls-curl', 'perfil-ocupado', 'ruta-no-permitida') else name
+    kind = 'challenge' if name in ('tls-navegador', 'tls-curl', 'perfil-ocupado', 'ruta-no-permitida', 'servidor-500',
+                                 'servidor-500-prohibido') else name
+    served = routes()
+    if name == 'servidor-500':
+        served[PATHS[1]] = SERVER_ERROR
+    if name == 'servidor-500-prohibido':
+        served[PATHS[1]] = SERVER_ERROR_THEN_FORBIDDEN
     statuses, errors = [], []
     with contextlib.ExitStack() as stack:
         # tls-curl: la API usa el certificado no confiable; tls-navegador: solo las páginas del sitio lo usan.
-        api_site = stack.enter_context(FixtureSite(routes(), scenario=kind, cert=cert if name == 'tls-curl' else None))
+        api_site = stack.enter_context(FixtureSite(served, scenario=kind, cert=cert if name == 'tls-curl' else None))
         page_site = stack.enter_context(FixtureSite({}, scenario=kind, cert=cert)) if name == 'tls-navegador' else None
         origin = page_site.origin if page_site else api_site.origin
         adapter = SdkAdapter(profile, PATHS, api=api_site.api, site=origin, require_sandbox=sandbox, local_test=True)
@@ -116,6 +122,23 @@ class Adaptador(unittest.TestCase):
         self.assertIn('captcha-page-parked', [e['kind'] for e in rep['events']])
         if os.environ.get('RJ_REQUIRE_SANDBOX') == '1':
             self.assertEqual(rep['sandbox'], {'namespaces': True, 'seccomp': True, 'proc_verified': True})
+
+    def test_error_del_servidor_tras_el_challenge_no_es_un_rechazo(self):
+        # The SDK retries a browser 5xx by curl, meets the normal challenge and reports 403: it is still a 500.
+        r = self.scenario('servidor-500')
+        self.assertEqual(r['statuses'], [200, 500])
+        self.assertIsNone(r['report']['stopped'])
+        self.assertIn(('bridge', PATHS[1], 500), self.sends(r))
+
+    def test_403_sin_challenge_tras_el_error_del_servidor_detiene(self):
+        # Same 500 in the browser, but the retry meets a refusal without a challenge: everything stops there.
+        r = self.scenario('servidor-500-prohibido')
+        self.assertEqual(r['statuses'], [200, 403])
+        self.assertIsNotNone(r['report']['stopped'])
+        sends = [(s['channel'], s['path'], s['status'], s['challenge']) for s in r['report']['sends'] if s['sent']]
+        self.assertIn(('bridge', PATHS[1], 500, False), sends)
+        self.assertEqual(sends[-1], ('curl', PATHS[1], 403, False), 'the last send is the refusal, nothing after it')
+        self.assertEqual(len(r['api_hits']), len(sends))
 
     def test_403_sin_challenge_detiene_sin_navegador(self):
         r = self.scenario('prohibido')

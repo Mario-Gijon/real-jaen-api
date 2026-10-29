@@ -8,9 +8,9 @@
       "generacion": "0e80fdde-95d9-44b0-a2ea-8426bce14b03"
     },
     {
-      "rules_sha256": "836b85894c1fa0cd70da0c3187db3fe37f537af5e7ba1ae8a16738cd6fb13ceb",
-      "productor": "acquisition/{recipe,transport,sdk_adapter,job}.py del servicio definitivo",
-      "uso": "Servicio de adquisición"
+      "rules_sha256": "0d91666a2e4710b33a8266e776c9ed0a213ca1663a20f997c92eebe03717d01b",
+      "productor": "acquisition/{recipe,group_plan,transport,sdk_adapter,job}.py del servicio definitivo",
+      "uso": "Servicio de adquisición: recetas del piloto y del Grupo 2"
     }
   ]
 }

@@ -124,7 +124,7 @@ class DetallePartido(unittest.TestCase):
             self.assertEqual(cuerpo['meta'], {
                 'match_id': FINALIZADO, 'section': seccion, 'source': 'Sofascore', 'source_key': seccion,
                 'availability': 'stored', 'fetched_at': original['fetched_at'], 'versions': 1, 'discrepancy': None,
-                'note': api.NOTA_FETCHED_AT,
+                'predates_score_correction': False, 'predates_team_change': False, 'note': api.NOTA_FETCHED_AT,
             })
         # Identificadores de SofaScore intactos dentro del payload.
         alineaciones = consultar(f'/api/v1/matches/{FINALIZADO}/lineups')[1]['data']

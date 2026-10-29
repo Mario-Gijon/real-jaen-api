@@ -5,7 +5,7 @@ passes the session's profile directory. A process per job because the SDK keeps 
 browser-first mode, token) and the adapter installs once per process.
 
 The job directory holds job.json (identity, recipe, provider, profile, limits) and inventory.json (sent by the
-backend); this process writes bundle.json (sealed, read-only) and report.json. The file `cancel` in that directory
+backend); this process runs its recipe (the pilot's or the group's, acquisition/recipe.py) and writes bundle.json (sealed, read-only) and report.json. The file `cancel` in that directory
 requests a cooperative stop. The cache and the SDK's own data stay under the job directory; the transport's durable
 budget and refusal blocks under the service's transport root, shared by all jobs.
 
@@ -120,14 +120,28 @@ def run(folder):
 
     from acquisition.sdk_adapter import SdkAdapter, configure_environment
     configure_environment(folder / 'sdk')  # before importing the SDK
-    from acquisition.recipe import collect, seed_cache
+    from acquisition import group_plan
+    from acquisition.recipe import GroupScope, collect, collect_group, seed_cache
     from acquisition.transport import SdkTransport
-    from persistencia.bundle import PATHS, encode, parse
+    from persistencia.bundle import GROUP_RECIPE, PATHS, encode, parse
     from sofascore_scraper.store import Store
 
     baseline = parse((folder / 'inventory.json').read_bytes())
     if baseline['sha256'] != spec['inventory_sha256']:
         raise SystemExit('Inventario distinto del registrado para este trabajo')
+    group = spec['recipe_id'] == GROUP_RECIPE
+    # Simulated time exists only for the local provider: the plan's "now" and the transport's clock move together.
+    offset = (spec['test_now'] - time.time()) if provider == 'fixture-site' and spec.get('test_now') else 0.0
+    clock = lambda: time.time() + offset  # noqa: E731
+    if group:
+        started = clock()  # one "now" for the rounds of the allowlist and the plan
+        listed_at = group_plan.round_listings(spec['transport_root'])
+        scope = GroupScope(sorted(set().union(*group_plan.rounds_to_list(baseline, started, listed_at=listed_at))))
+        paths, sends, seconds = scope.permits, group_plan.MAX_SENDS, group_plan.SECONDS
+        limits = dict(allowed=scope.permits, limits='group', max_attempts=group_plan.MAX_SENDS - 4, seconds=seconds)
+    else:
+        paths, sends, seconds = PATHS, MAX_SENDS, SECONDS
+        limits = dict(max_attempts=len(PATHS), seconds=SECONDS, breaker=StrictBreaker())
     cancel = folder / 'cancel'
     profile = Path(spec['profile'])
     error, attempts, report, descriptor = None, [], None, None
@@ -138,23 +152,30 @@ def run(folder):
             from sdk_fixture import FixtureSite, routes_from_file  # test images only
             site = FixtureSite(routes_from_file(spec['fixture_routes']), scenario=spec.get('fixture_scenario', 'challenge'))
             site.__enter__()
-            adapter = SdkAdapter(profile, PATHS, api=site.api, site=site.origin, max_sends=MAX_SENDS,
+            adapter = SdkAdapter(profile, paths, api=site.api, site=site.origin, max_sends=sends,
                                  require_sandbox=True, local_test=True)
             urls = dict(loopback_url=site.api)
         else:
-            adapter = SdkAdapter(profile, PATHS, max_sends=MAX_SENDS, require_sandbox=True)
+            adapter = SdkAdapter(profile, paths, max_sends=sends, require_sandbox=True)
             urls = dict(enable_real=True)
         adapter.install()
         try:
             with SdkTransport(Path(spec['transport_root']), adapter=adapter, job_id=spec['job_id'],
                               request_id=spec['request_id'], inventory_sha256=baseline['sha256'],
-                              max_attempts=len(PATHS), seconds=SECONDS, breaker=StrictBreaker(),
-                              cancelled=cancel.exists, **urls) as transport:
+                              cancelled=cancel.exists, clock=clock, **limits, **urls) as transport:
                 try:
-                    descriptor = collect(store, transport, baseline, folder / 'bundle.json', cancelled=cancel.exists)
-                    sends = len(adapter.sends)
-                    assert collect(store, transport, baseline, folder / 'bundle.json') == descriptor
-                    assert len(adapter.sends) == sends  # the sealed bundle is re-verified without network
+                    output = folder / 'bundle.json'
+                    if group:
+                        budget = spec.get('test_planned_attempts') if provider == 'fixture-site' else None
+                        descriptor = collect_group(store, transport, scope, baseline, output, now=started,
+                                                   cancelled=cancel.exists, budget=budget, listed_at=listed_at)
+                        again = lambda: collect_group(store, transport, scope, baseline, output, now=clock())  # noqa: E731
+                    else:
+                        descriptor = collect(store, transport, baseline, output, cancelled=cancel.exists)
+                        again = lambda: collect(store, transport, baseline, output)  # noqa: E731
+                    sends_done = len(adapter.sends)
+                    assert again() == descriptor
+                    assert len(adapter.sends) == sends_done  # the sealed bundle is re-verified without network
                 except BaseException as e:
                     error = f'{type(e).__name__}: {e}'[:400]
                 attempts = transport.state['attempts']
@@ -166,7 +187,7 @@ def run(folder):
     connections = monitor.stop()
     summary = dict(provider=provider, started_at=spec['started_at'], finished_at=now(), error=error,
                    cancelled=cancel.exists(), stopped=report['stopped'], descriptor=descriptor, attempts=attempts,
-                   limits=dict(paths=list(PATHS), attempts=len(PATHS), sends=MAX_SENDS, job_s=SECONDS),
+                   recipe=spec['recipe_id'], limits=dict(sends=sends, job_s=seconds),
                    sends=report['sends'], requests=report['requests'], sandbox=report['sandbox'],
                    sessions=report['sessions'], launches=report['launches'], browser=report['browser'],
                    events=report['events'], connections=connections)

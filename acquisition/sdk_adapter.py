@@ -87,8 +87,17 @@ class SdkAdapter:
         elif (api, site) != (API, SITE):
             raise ValueError('Fuera de un ensayo local solo se admite el sitio de SofaScore')
         self.profile, self.api, self.site = Path(profile), api, site
-        self.allowed = frozenset(paths)
-        self.max_sends = max_sends if max_sends is not None else 2 * len(self.allowed) + 2
+        # paths: a fixed collection, or a predicate for a recipe whose allowlist grows with what it lists (its
+        # rounds, then only the matches of its scope); max_sends is then required.
+        if callable(paths):
+            if max_sends is None:
+                raise ValueError('Un predicado de rutas exige un presupuesto explícito')
+            self.permits = paths
+        else:
+            allowed = frozenset(paths)
+            self.permits = allowed.__contains__
+            max_sends = max_sends if max_sends is not None else 2 * len(allowed) + 2
+        self.max_sends = max_sends
         self.require_sandbox, self.local_test = require_sandbox, local_test
         parts = urlsplit(api)
         self.api_scheme, self.api_host, self.api_prefix = parts.scheme, parts.hostname, parts.path
@@ -138,7 +147,7 @@ class SdkAdapter:
         with self.lock:
             if self.stopped is not None:
                 refused = 'adaptador detenido'
-            elif rel is None or not (rel in self.allowed or (channel == 'bridge' and rel == PROBE_PATH)):
+            elif rel is None or not (self.permits(rel) or (channel == 'bridge' and rel == PROBE_PATH)):
                 refused = 'ruta no permitida'
             elif len([s for s in self.sends if s.get('sent')]) >= self.max_sends:
                 refused = 'presupuesto de envíos agotado'
@@ -347,7 +356,7 @@ class SdkAdapter:
                                                   SofaScoreScraperError)
         if self.stopped is not None:
             return 403, {}, b''
-        if path not in self.allowed:
+        if not self.permits(path):
             self.stop(f'ruta no permitida: {path}')
             return 403, {}, b''
         mark, started = len(self.sends), time.monotonic()
@@ -375,6 +384,12 @@ class SdkAdapter:
             status, error = refusal, None
         elif error is not None and any(not s['sent'] for s in physical):
             status, error = 403, None
+        elif status == 403 and all(s.get('challenge') for s in physical if s.get('status') == 403):
+            # The SDK's 403 summary can hide a server error: after a 5xx in the browser it retries by curl, meets the
+            # normal challenge again and gives up with "403". Every 403 was a challenge: the answer is the 5xx.
+            server = next((s['status'] for s in physical if isinstance(s.get('status'), int) and s['status'] >= 500), None)
+            if server is not None:
+                status = server
         with self.lock:
             self.requests.append(dict(path=path, status=status, via=trace.via, sends=len(physical), error=error,
                                       seconds=round(time.monotonic() - started, 3)))

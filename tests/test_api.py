@@ -5,6 +5,7 @@ proyecto y arrancan api.py en un puerto libre para las comprobaciones HTTP.
 Ejecutar desde la carpeta de la API:  python -m unittest discover -s tests -v
 Para regenerar la muestra:  python tests/fixtures/crear.py
 """
+import copy
 import json
 import socket
 import subprocess
@@ -321,6 +322,160 @@ class Normalizacion(unittest.TestCase):
         alineacion = {a['player_id']: a for a in cuerpo['normalized']['players']}
         self.assertEqual(alineacion[crear.SUPLENTE], normalizadas[crear.FINALIZADO])
         self.assertEqual(cuerpo['data']['confirmed'], True)
+
+
+class CorreccionDelEvento(unittest.TestCase):
+    """Un evento corregido (marcador final 0-2 -> 0-3, o cambio de equipos) cuyas secciones no se pudieron releer: se
+    sirven como evidencia, señaladas como anteriores a la corrección, y lo que la corrección hace incompatible deja de
+    usarse en fichas, tablas y agregados, sin convertirse en cero."""
+    CORREGIDO = '2026-10-25T12:00:00+00:00'
+    OTRO_EQUIPO = 9999
+
+    def corregido(self, secciones_leidas=(), equipos=False):
+        datos = copy.deepcopy(DATOS)
+        evento = datos['originales'][(crear.FINALIZADO, 'event')]
+        # La muestra guarda un evento mínimo: se le da el resultado y los equipos que publica (0-2) y se corrige.
+        evento['registro']['payload']['event'].update(
+            status={'type': 'finished'}, homeScore={'current': 0}, awayScore={'current': 2},
+            homeTeam={'id': 9001}, awayTeam={'id': crear.JAEN})
+        nuevo = copy.deepcopy(evento['registro'])
+        partido = next(m for m in datos['partidos'] if m['match_id'] == crear.FINALIZADO)
+        if equipos:
+            # El rival local pasa a ser otro: integridad, el partido queda marcado y fuera de los agregados.
+            nuevo['payload']['event']['homeTeam'] = {'id': self.OTRO_EQUIPO}
+            partido.update(home_team_id=self.OTRO_EQUIPO, version_conflict=True)
+            motivos, integridad = ['identity_changed'], True
+        else:
+            nuevo['payload']['event']['awayScore'] = {'current': 3}
+            partido['away_score'] = 3
+            motivos, integridad = ['final_score_corrected'], False
+        nuevo['fetched_at'] = self.CORREGIDO
+        for r in evento['todas']:
+            r['selected'] = False
+        evento.update(registro=nuevo, versiones=2, todas=evento['todas'] + [dict(nuevo, selected=True)])
+        datos['discrepancias'].append({'event_id': crear.FINALIZADO, 'key': 'event', 'sub': '', 'reasons': motivos,
+                                       'integrity': integridad})
+        for k in secciones_leidas:
+            datos['originales'][(crear.FINALIZADO, k)]['registro']['fetched_at'] = '2026-10-26T12:00:00+00:00'
+        return datos
+
+    @staticmethod
+    def meta(datos, k):
+        return api.consultar(datos, f'/api/v1/matches/{crear.FINALIZADO}/{k}')[1]
+
+    def test_sin_correccion_nada_es_anterior(self):
+        for k in SECCIONES:
+            self.assertEqual(api.anterior_a(DATOS, crear.FINALIZADO, k), set())
+            self.assertEqual((self.meta(DATOS, k)['meta']['predates_score_correction'],
+                              self.meta(DATOS, k)['meta']['predates_team_change']), (False, False))
+
+    def test_las_secciones_se_conservan_y_se_senalan(self):
+        datos = self.corregido()
+        for k in SECCIONES:
+            cuerpo = self.meta(datos, k)
+            # La evidencia es la misma que antes de la corrección, con su fecha; solo cambia la señal.
+            self.assertEqual(cuerpo['data'], consultar(f'/api/v1/matches/{crear.FINALIZADO}/{k}')[1]['data'])
+            self.assertEqual((cuerpo['meta']['availability'], cuerpo['meta']['predates_score_correction'],
+                              cuerpo['meta']['predates_team_change']), ('stored', True, False), k)
+        self.assertEqual(api.consultar(datos, f'/api/v1/matches/{crear.FINALIZADO}')[1]['data']['away_score'], 3)
+
+    def test_las_incidencias_anteriores_no_se_contrastan(self):
+        # Antes de la corrección cuadraban con el marcador (UNO marcó); con el corregido ya no se usan para los goles.
+        self.assertEqual(api.contexto_partido(DATOS, crear.FINALIZADO)['goles'], {crear.UNO: 1})
+        contexto = api.contexto_partido(self.corregido(), crear.FINALIZADO)
+        self.assertIsNone(contexto['goles'])
+        self.assertEqual(contexto['anteriores'], {'lineups': {'score'}, 'incidents': {'score'}})
+
+    def test_goles_y_asistencias_de_la_alineacion_anterior_quedan_sin_dato(self):
+        datos = self.corregido()
+        a = api.actuaciones_del_partido(datos, crear.FINALIZADO)[crear.UNO]
+        self.assertEqual((a['participation'], a['goals'], a['assists']),
+                         ('played', {'value': None, 'source': None}, {'value': None, 'source': None}))
+        self.assertIn('lineups_before_score_correction', a['issues'])
+        [evidencia] = [e for e in a['evidence'] if e['issue'] == 'lineups_before_score_correction']
+        self.assertEqual((evidencia['fields']['score_observed_at'], evidencia['fields']['score']), (self.CORREGIDO, [0, 3]))
+        # Las estadísticas independientes del marcador siguen: minutos y las que ya tenía (nada nuevo sin dato).
+        antes = api.actuaciones_del_partido(DATOS, crear.FINALIZADO)[crear.UNO]
+        self.assertEqual(a['minutes'], antes['minutes'])
+        self.assertEqual({m: s for m, s in a['stats'].items() if s['value'] is not None},
+                         {m: s for m, s in antes['stats'].items() if s['value'] is not None and s['source'] != 'derived'})
+        # La participación no depende del marcador: el suplente no utilizado sigue siéndolo, con sus ceros.
+        suplente = api.actuaciones_del_partido(datos, crear.FINALIZADO)[crear.SUPLENTE]
+        self.assertEqual((suplente['participation'], suplente['goals'], suplente['issues']),
+                         ('unused', {'value': 0, 'source': 'unused'}, []))
+
+    def test_en_la_ficha_del_jugador_y_en_los_acumulados_queda_sin_dato_no_en_cero(self):
+        datos = self.corregido()
+        [fila] = [f for f in api.consultar(datos, f'/api/v1/players/{crear.UNO}/matches')[1]['data']
+                  if f['match_id'] == crear.FINALIZADO]
+        self.assertEqual((fila['normalized']['goals'], fila['normalized']['assists']),
+                         ({'value': None, 'source': None}, {'value': None, 'source': None}))
+        jugador = lambda d: next(p for p in api.acumulados_jugadores(d, crear.JAEN)['competitions'][0]['players']  # noqa: E731
+                                 if p['player_id'] == crear.UNO)
+        antes, despues = jugador(DATOS), jugador(datos)
+        for k in ('goals', 'assists'):
+            # Una convocatoria menos con dato, de las mismas; el total no la cuenta como 0.
+            self.assertEqual((despues[k]['matches'], despues[k]['of']), (antes[k]['matches'] - 1, antes[k]['of']), k)
+        self.assertEqual(despues['goals']['value'], antes['goals']['value'] - 1 if antes['goals']['matches'] > 1 else None)
+        self.assertEqual(despues['minutes'], antes['minutes'])
+
+    def test_el_partido_cuenta_con_el_marcador_corregido(self):
+        competicion = DATOS['competiciones'][0]
+        _, resultados = api.partidos_contados(self.corregido(), crear.JAEN, competicion)
+        [r] = [r for r in resultados if r['match']['match_id'] == crear.FINALIZADO]
+        self.assertEqual((r['goals_for'], r['goals_against']), (3, 0))
+
+    def test_releidas_despues_de_la_correccion_vuelven_a_usarse(self):
+        datos = self.corregido(secciones_leidas=SECCIONES)
+        for k in SECCIONES:
+            self.assertEqual(api.anterior_a(datos, crear.FINALIZADO, k), set())
+            self.assertFalse(self.meta(datos, k)['meta']['predates_score_correction'])
+        self.assertNotIn('lineups_before_score_correction', api.actuaciones_del_partido(datos, crear.FINALIZADO)[crear.UNO]['issues'])
+
+    def test_una_fecha_ilegible_no_se_afirma(self):
+        datos = self.corregido()
+        datos['originales'][(crear.FINALIZADO, 'lineups')]['registro']['fetched_at'] = 'sin fecha'
+        self.assertEqual(api.anterior_a(datos, crear.FINALIZADO, 'lineups'), set())
+
+    def test_con_otros_equipos_nada_antiguo_se_atribuye_a_los_nuevos(self):
+        datos = api.apartar_alineaciones_de_otros_equipos(self.corregido(equipos=True))
+        # La evidencia original sigue en sus secciones, señalada.
+        for k in SECCIONES:
+            self.assertEqual((self.meta(datos, k)['meta']['predates_team_change'], self.meta(datos, k)['data']),
+                             (True, consultar(f'/api/v1/matches/{crear.FINALIZADO}/{k}')[1]['data']), k)
+        # Las convocatorias de la alineación anterior no son de ningún equipo vigente: apartadas, no reasignadas.
+        self.assertEqual(api.actuaciones_del_partido(datos, crear.FINALIZADO), {})
+        self.assertTrue(datos['convocatorias_apartadas'])
+        self.assertTrue(all(r['match_id'] == crear.FINALIZADO for r in datos['convocatorias_apartadas']))
+        self.assertEqual(api.consultar(datos, f'/api/v1/teams/{self.OTRO_EQUIPO}/players')[0], 404)  # sin entidad
+        datos['equipos'].append({'source': 'Sofascore', 'team_id': self.OTRO_EQUIPO, 'name': 'Equipo nuevo'})
+        self.assertEqual(api.consultar(datos, f'/api/v1/teams/{self.OTRO_EQUIPO}/players')[1]['data'], [])
+        self.assertEqual(api.acumulados_jugadores(datos, self.OTRO_EQUIPO)['competitions'][0]['players'], [])
+        self.assertEqual(api.rendimiento(datos, self.OTRO_EQUIPO)['competitions'][0]['record']['played'], 0)
+        for jugador in {r['player_id'] for r in datos['convocatorias_apartadas']}:
+            filas = api.consultar(datos, f'/api/v1/players/{jugador}/matches')[1].get('data', [])
+            self.assertNotIn(crear.FINALIZADO, [f['match_id'] for f in filas], jugador)
+        # Las incidencias anteriores tampoco: ni entradas ni goles para los equipos vigentes.
+        contexto = api.contexto_partido(datos, crear.FINALIZADO)
+        self.assertEqual((contexto['goles'], contexto['entradas']), (None, {'home': set(), 'away': set()}))
+        # Ni estadísticas: el partido está fuera del balance de los dos equipos vigentes.
+        for equipo in (self.OTRO_EQUIPO, crear.JAEN):
+            cuenta, resultados = api.partidos_contados(datos, equipo, DATOS['competiciones'][0])
+            self.assertNotIn(crear.FINALIZADO, [r['match']['match_id'] for r in resultados], equipo)
+        self.assertEqual(api.partidos_contados(datos, crear.JAEN, DATOS['competiciones'][0])[0]['excluded_by_version_conflict'], 1)
+
+    def test_releida_con_los_equipos_vigentes_vuelve_a_usarse(self):
+        datos = api.apartar_alineaciones_de_otros_equipos(self.corregido(equipos=True, secciones_leidas=SECCIONES))
+        self.assertEqual({k: api.anterior_a(datos, crear.FINALIZADO, k) for k in SECCIONES}, {k: set() for k in SECCIONES})
+        self.assertNotIn('convocatorias_apartadas', datos)
+        self.assertIn(crear.UNO, api.actuaciones_del_partido(datos, crear.FINALIZADO))
+
+    def test_las_metricas_que_dependen_del_gol_no_se_derivan(self):
+        # Sin un gol fiable no se fija ningún tiro a puerta por la partición de tiros: queda lo que da la fuente.
+        datos = self.corregido()
+        for jugador, a in api.actuaciones_del_partido(datos, crear.FINALIZADO).items():
+            if 'lineups_before_score_correction' in a['issues']:
+                self.assertTrue(all(s['source'] != 'derived' for s in a['stats'].values()), jugador)
 
 
 class AcumuladosJugadores(unittest.TestCase):

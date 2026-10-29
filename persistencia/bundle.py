@@ -68,7 +68,12 @@ def check_inventory(value):
     return events
 
 def verify(body,descriptor,baseline,*,context,expected_rules,test_transport=False):
-    try:return _verify(body,descriptor,baseline,context=context,expected_rules=expected_rules,test_transport=test_transport)
+    """Dispatch on the bundle's contract: 'pilot-v2' (the pilot's rules, unchanged) or 'group-v1' (the Group 2
+    recipe with partial coverage). Returns (manifest, files)."""
+    try:
+        contract=parse(body).get('manifest',{}).get('contract') if len(body)<=MAX_WIRE else None
+        check=_verify_group if contract=='group-v1' else _verify
+        return check(body,descriptor,baseline,context=context,expected_rules=expected_rules,test_transport=test_transport)
     except Rejected:raise
     except (ValueError,TypeError,KeyError,AttributeError,IndexError,UnicodeError,OverflowError):raise Rejected('Malformed v2 bundle') from None
 
@@ -189,4 +194,180 @@ def _verify(body,descriptor,baseline,*,context,expected_rules,test_transport):
             if c['origin']!='attempt' or c['checked_at']!=a['finished_at'] or (at is not None and instant(at)>instant(c['checked_at'])):raise Rejected('Pilot resource not newly checked')
             if key!='calendar' and fingerprint(row['payload'])!=a['payload_sha256']:raise Rejected('Payload/attempt mismatch')
     if seen!=required:raise Rejected('Resource coverage missing')
+    return m,decoded
+
+
+# --- Group 2 recipe (sofascore-group2-2627-v1): partial coverage, see docs/diseno-receta-grupo2.md -------------
+
+GROUP_RECIPE='sofascore-group2-2627-v1'
+UNIQUE_TOURNAMENT,TOURNAMENT,SEASON=17073,94191,97382
+ROUND_NUMBERS=range(1,39)
+MAX_GROUP_ATTEMPTS=120
+MAX_PROVENANCE=24*1024*1024
+PENDING_REASONS=frozenset({'empty','not_found','parse','error','budget','not_requested'})
+GROUP_FIELDS=frozenset({'schema','contract','job_id','request_id','recipe_id','provider_revision','transport','inventory_sha256',
+                        'generation_id','rules_sha256','policy','started_at','finished_at','files','coverage','retained',
+                        'attempts','errors','plan'})
+
+def round_path(number):return f'/unique-tournament/{UNIQUE_TOURNAMENT}/season/{SEASON}/events/round/{number}'
+def event_path(ident,key='event'):return f'/event/{ident}'+('' if key=='event' else '/'+key)
+ROUND_PATHS={round_path(n):n for n in ROUND_NUMBERS}
+
+def pending_reason(attempt_reason):
+    """Transport reason of a failed or empty answer as a pending reason. Never absence, never zero."""
+    return {'empty':'empty','404':'not_found','parse':'parse','budget':'budget'}.get(attempt_reason,'error')
+
+def coverage_summary(manifest):
+    """New data, previous data kept and pending resources of a group bundle (calendar excluded), by match."""
+    new=kept=0;pending={}
+    for c in manifest['coverage']:
+        if c['resource']=='calendar':continue
+        if c['status']=='data':
+            if c['origin']=='attempt':new+=1
+            else:kept+=1
+        elif c['status']=='pending':
+            pending.setdefault(c['event_id'],[]).append(dict(resource=c['resource'],reason=c['reason'],kept=c['origin']=='inventory'))
+    return dict(new=new,kept=kept,pending=[dict(event_id=i,resources=r) for i,r in sorted(pending.items())])
+
+def _verify_group(body,descriptor,baseline,*,context,expected_rules,test_transport):
+    """Like _verify, generalized from the pilot match to the set the job consulted. What was not consulted equals
+    the inventory; what was, matches its attempt; a resource with a previous original is never dropped: it is new
+    data, the same original, or pending with that original kept. Empty, 404, unreadable or not asked: pending with
+    its reason, never data and never absence. New matches only from a listed round of the scope."""
+    expected=check_inventory(baseline)
+    if set(descriptor)!={'bytes','sha256'} or type(descriptor['bytes']) is not int or len(body)!=descriptor['bytes'] or len(body)>MAX_WIRE or sha(body)!=descriptor['sha256']:raise Rejected('Bundle descriptor mismatch')
+    obj=parse(body)
+    if set(obj)!={'manifest','files'}:raise Rejected('Unknown envelope')
+    m=obj['manifest']
+    if set(m)!=GROUP_FIELDS or type(m['schema']) is not int or m['schema']!=2 or m['contract']!='group-v1':raise Rejected('Incompatible contract')
+    if any(str(uuid.UUID(m[k]))!=m[k] for k in ('job_id','request_id')) or tuple(m[k] for k in ('job_id','request_id'))!=tuple(context):raise Rejected('Wrong job context')
+    if m['recipe_id']!=GROUP_RECIPE or m['provider_revision']!='611e436a1528b0f487aa56a045f023e8ae8ae098':raise Rejected('Wrong recipe/revision')
+    if m['transport']!=('loopback-fixture' if test_transport else 'sofascore-https'):raise Rejected('Wrong transport provenance')
+    if not expected_rules or m['rules_sha256']!=expected_rules:raise Rejected('Unapproved producer rules')
+    if m['inventory_sha256']!=baseline['sha256'] or m['generation_id']!=baseline['generation_id']:raise Rejected('Inventory generation mismatch')
+    if m['errors'] or m['policy']!={'window_s':259200,'interval_s':21600}:raise Rejected('Incomplete acquisition or unexpected policy')
+    begin,end=instant(m['started_at']),instant(m['finished_at'])
+    if end<begin:raise Rejected('Invalid clock')
+    retained=sorted(e['id'] for e in expected.values() if not e['current'])
+    if m['retained']!=retained:raise Rejected('Local history changed')
+    attempts=m['attempts'];latest={};counts={}
+    if not 1<=len(attempts)<=MAX_GROUP_ATTEMPTS:raise Rejected('Attempt budget mismatch')
+    for n,a in enumerate(attempts,1):
+        if set(a)!={'number','path','sent_at','finished_at','status','payload_sha256'} or a['number']!=n:raise Rejected('Unplanned attempt')
+        counts[a['path']]=counts.get(a['path'],0)+1
+        if counts[a['path']]>2:raise Rejected('Per-resource budget exceeded')
+        if not begin<=instant(a['sent_at'])<=instant(a['finished_at'])<=end:raise Rejected('Invalid attempt clock')
+        latest[a['path']]=a
+    wanted={f'team_{i}.jsonl':i for i in baseline['teams']};wanted['calendar.jsonl']=None;wanted['provenance.jsonl']=None
+    if set(obj['files'])!=set(wanted) or len(m['files'])!=len(wanted):raise Rejected('Own exports/calendar missing')
+    entries={e['name']:e for e in m['files']}
+    if len(entries)!=len(wanted) or set(entries)!=set(wanted):raise Rejected('Duplicate file descriptor')
+    rows={};total=0;decoded={}
+    for name,owner in wanted.items():
+        d=entries[name]
+        if set(d)!={'name','kind','team_external_id','bytes','sha256'} or d['team_external_id']!=owner or d['kind']!=(('calendar' if name=='calendar.jsonl' else 'provenance') if owner is None else 'own_export'):raise Rejected('Invalid file owner')
+        raw=base64.b64decode(obj['files'][name],validate=True);total+=len(raw)
+        limit=MAX_PROVENANCE if name=='provenance.jsonl' else MAX_FILE
+        if len(raw)>limit or total>MAX_TOTAL or type(d['bytes']) is not int or d['bytes']!=len(raw) or sha(raw)!=d['sha256']:raise Rejected('Invalid file size/hash')
+        lines=raw.splitlines()
+        if any(not l or len(l)>MAX_LINE for l in lines):raise Rejected('Invalid JSONL')
+        decoded[name]=raw;rows[name]=[parse(l) for l in lines]
+    # Original answers: every successful attempt, byte for byte; the rounds actually listed and what they listed.
+    provenance={};listed={}
+    for e in rows['provenance.jsonl']:
+        if set(e)!={'number','path','received_at','body_b64'} or type(e['number']) is not int or e['number'] in provenance or not 1<=e['number']<=len(attempts):raise Rejected('Invalid original response')
+        a=attempts[e['number']-1];payload=parse(base64.b64decode(e['body_b64'],validate=True))
+        selected=importar.evento_de(payload) if a['path'] not in ROUND_PATHS and a['path'].count('/')==2 else payload
+        if a['status']!=200 or e['path']!=a['path'] or e['received_at']!=a['finished_at'] or fingerprint(selected)!=a['payload_sha256']:raise Rejected('Original response/attempt mismatch')
+        provenance[e['number']]=payload
+        if a['path'] in ROUND_PATHS and latest[a['path']] is a:
+            for row in payload.get('events') or []:
+                if isinstance(row,dict) and (row.get('tournament') or {}).get('id')==TOURNAMENT:listed[row.get('id')]=(row,a)
+    if not {a['number'] for a in latest.values() if a['status']==200}<=set(provenance):raise Rejected('Original successful responses missing')
+    calendar={}
+    for row in rows['calendar.jsonl']:
+        ident=row['id']
+        if type(ident) is not int or ident in calendar:raise Rejected('Duplicate calendar ID')
+        parsed=importar.partido_de_listado(row)
+        if (row['tournament_id'],parsed['tournament_id'],parsed['season_id'])!=(UNIQUE_TOURNAMENT,TOURNAMENT,SEASON):raise Rejected('Calendar scope mismatch')
+        if not {parsed['home_team_id'],parsed['away_team_id']}<=set(baseline['teams']) or parsed['home_team_id']==parsed['away_team_id']:raise Rejected('Calendar participants outside scope')
+        if ident in expected and (parsed['home_team_id'],parsed['away_team_id'])!=(expected[ident]['home'],expected[ident]['away']):raise Rejected('Calendar changed identity')
+        if ident in retained and parsed['status']!=expected[ident]['status']:raise Rejected('Historical event modified')
+        if ident not in expected and ident not in listed:raise Rejected('New event not listed in a consulted round')
+        calendar[ident]=(row,parsed)
+    if not set(expected)<=set(calendar):raise Rejected('Inventory events missing from calendar')
+    order=list(calendar)
+    current={i for i in calendar if i not in expected or expected[i]['current']}
+    participants={i:((expected[i]['home'],expected[i]['away']) if i in expected else (p['home_team_id'],p['away_team_id'])) for i,(_,p) in calendar.items()}
+    for path in latest:
+        if path in ROUND_PATHS:continue
+        parts=path.split('/')
+        if len(parts) not in (3,4) or parts[1]!='event' or not parts[2].isdigit() or int(parts[2]) not in current or (len(parts)==4 and parts[3] not in SECTIONS):raise Rejected('Unplanned attempt')
+    prior={(v['record']['event_id'],v['record']['key']):v['record'] for v in baseline['records']}
+    raw_records={};owned={};refs={}
+    for name,owner in wanted.items():
+        if owner is None:continue
+        seen=set()
+        for line,row in enumerate(rows[name],1):
+            ident,key=row['event_id'],row['key'];pair=(ident,key)
+            if ident not in current or key not in ('event',*SECTIONS) or row.get('sub')!='' or pair in seen:raise Rejected('Unexpected raw resource')
+            seen.add(pair)
+            if owner not in participants[ident]:raise Rejected('Wrong own export')
+            if pair in raw_records and record(row)!=raw_records[pair]:raise Rejected('Shared resource conflict')
+            raw_records[pair]=record(row);owned.setdefault(pair,set()).add(owner);refs.setdefault(pair,dict(file=name,line=line))
+            if key=='event':
+                event=importar.evento_de(row['payload'])
+                if (event['id'],event['tournament']['id'],event['tournament']['uniqueTournament']['id'],event['season']['id'])!=(ident,TOURNAMENT,UNIQUE_TOURNAMENT,SEASON):raise Rejected('Raw scope mismatch')
+                if (event['homeTeam']['id'],event['awayTeam']['id'])!=participants[ident]:raise Rejected('Raw identity mismatch')
+    for pair,owners in owned.items():
+        if owners!=set(participants[pair[0]]):raise Rejected('Shared event missing own export')
+    required={(i,k) for i in current for k in ('calendar','event',*SECTIONS)}
+    coverage=m['coverage'];seen=set()
+    if len(encode(coverage))>8*1024*1024:raise Rejected('Coverage too large')
+    for c in coverage:
+        if set(c)!={'event_id','resource','status','origin','evidence','checked_at','reason'}:raise Rejected('Invalid coverage')
+        pair=c['event_id'],c['resource']
+        if pair not in required or pair in seen:raise Rejected('Unexpected coverage')
+        seen.add(pair);ident,key=pair
+        if key=='calendar':
+            row,_=calendar[ident]
+            if c['status']!='data' or c['reason'] is not None or c['evidence']!=dict(file='calendar.jsonl',line=order.index(ident)+1):raise Rejected('Calendar evidence mismatch')
+            if c['origin']=='attempt':
+                if ident not in listed or c['checked_at']!=listed[ident][1]['finished_at']:raise Rejected('Calendar not newly checked')
+            elif c['origin']=='inventory':
+                if ident not in expected:raise Rejected('New event without its listing')
+                at=(row.get('quality') or {}).get('observed_at_utc');old=prior.get((ident,'listing'))
+                if at is None and (old is None or old['payload']!=row):raise Rejected('Unknown calendar provenance not preserved')
+                if c['checked_at']!=at:raise Rejected('Invented observation timestamp')
+            else:raise Rejected('Invalid calendar origin')
+            continue
+        row=raw_records.get(pair);old=prior.get(pair);a=latest.get(event_path(ident,key))
+        if c['status']=='data':
+            if c['reason'] is not None or row is None or c['evidence']!=refs[pair]:raise Rejected('Invalid data coverage')
+            if key in SECTIONS and (not isinstance(row['payload'],(dict,list)) or api.vacia(key,row['payload'])):raise Rejected('Empty resource cannot mean data')
+            if c['origin']=='attempt':
+                if a is None or a['status']!=200 or fingerprint(row['payload'])!=a['payload_sha256'] or c['checked_at']!=a['finished_at']:raise Rejected('Resource not newly checked')
+                if row['fetched_at'] is not None and instant(row['fetched_at'])>instant(c['checked_at']):raise Rejected('Future evidence')
+            elif c['origin']=='inventory':
+                if old is None or row!=record(old) or c['checked_at']!=old['fetched_at']:raise Rejected('Unqueried resource altered')
+            else:raise Rejected('Invalid data origin')
+        elif c['status']=='pending':
+            if c['reason'] not in PENDING_REASONS:raise Rejected('Invalid pending reason')
+            if c['origin']=='inventory':
+                if old is None or row!=record(old) or c['evidence']!=refs[pair]:raise Rejected('Pending must keep the previous original')
+            elif c['origin']=='none':
+                if old is not None:raise Rejected('A previous original was dropped')
+                if row is not None or c['evidence'] is not None:raise Rejected('Pending resource without data carries data')
+            else:raise Rejected('Invalid pending origin')
+            if c['checked_at'] is not None and (a is None or c['checked_at']!=a['finished_at']):raise Rejected('Invalid pending check time')
+        elif c['status']=='not_applicable':
+            ev=raw_records.get((ident,'event'));status=(importar.evento_de(ev['payload']).get('status') or {}).get('type') if ev else calendar[ident][1]['status']
+            if key not in SECTIONS and not (key=='event' and ev is None):raise Rejected('Not applicable invalid resource')
+            if status not in api.PENDIENTES and status!='inprogress':raise Rejected('Not applicable invalid phase')
+            if c['evidence'] is not None or c['origin']!='phase' or c['reason'] is not None or row is not None or old is not None:raise Rejected('Invalid phase proof')
+        else:raise Rejected('Unknown coverage status')
+    if seen!=required:raise Rejected('Resource coverage missing')
+    # Nothing outside the coverage: every raw row is covered by a data or a kept pending entry.
+    covered={(c['event_id'],c['resource']) for c in coverage if c['evidence'] is not None and c['resource']!='calendar'}
+    if set(raw_records)!=covered:raise Rejected('Raw resource outside coverage')
     return m,decoded

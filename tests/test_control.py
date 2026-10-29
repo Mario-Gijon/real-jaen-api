@@ -18,6 +18,7 @@ class FakeCliente:
     """What persistencia.adquisicion.Cliente.publicar does, seen from the control: phases, records, coordinator."""
     def __init__(self, fixture):
         self.fixture, self.mode, self.calls, self.cancelled = fixture, 'ok', [], []
+        self.coverage = None
         self.gate = threading.Event()
         self.gate.set()
 
@@ -51,7 +52,7 @@ class FakeCliente:
         result = coord.esperar(ident)
         if result['estado'] != 'completed':
             raise AdquisicionRechazada('Publicacion fallida: se conserva la generacion valida')
-        return dict(generation_id=result['generacion'])
+        return dict(generation_id=result['generacion'], coverage=self.coverage)
 
 
 def wait(control, ident, timeout=30):
@@ -101,7 +102,7 @@ class Control(unittest.TestCase):
             self.assertEqual((again['id'], reused), (job['id'], True))
             current = control.actual()
             self.assertEqual(current['last_published']['at'], done['result']['published_at'])
-            self.assertEqual(current['scope']['kind'], 'pilot')
+            self.assertEqual((current['scope']['kind'], current['scope']['action']), ('group', 'Actualizar Grupo 2'))
             self.assertEqual(len(self.cliente.calls), 1)
 
     def test_un_unico_trabajo_activo(self):
@@ -161,6 +162,23 @@ class Control(unittest.TestCase):
             again, _ = control.solicitar(str(uuid.uuid4()))
             self.assertNotEqual(again['request_id'], job['request_id'])
             self.assertFalse(wait(control, again['id'])['result']['reused_bundle'])
+
+    def test_los_aplazados_de_la_ultima_publicacion_siguen_visibles_tras_un_rechazo(self):
+        # A group publication with deferred refreshes, then a refused update: the status keeps that coverage, with
+        # the names, while the previous data are served.
+        self.cliente.coverage = dict(new=3, kept=40, pending=[], new_matches=[], rounds=dict(near=[9], far=[], failed=[]),
+                                     deferred=[999])
+        coord, control = self.open()
+        with coord:
+            done = wait(control, control.solicitar(str(uuid.uuid4()))[0]['id'])
+            self.cliente.mode = 'refused'
+            failed = wait(control, control.solicitar(str(uuid.uuid4()))[0]['id'])
+            self.assertEqual(failed['status'], 'failed')
+            current = control.actual()
+            self.assertEqual(current['last_job']['id'], failed['id'])
+            self.assertEqual(current['last_published']['at'], done['result']['published_at'])
+            self.assertEqual(current['last_published']['coverage']['deferred'], [999])
+            self.assertIn('999', current['last_published']['coverage']['names'])
 
     def test_bundle_rechazado(self):
         self.cliente.mode = 'tampered'
