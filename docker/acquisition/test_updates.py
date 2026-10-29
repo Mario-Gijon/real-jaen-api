@@ -41,7 +41,7 @@ def main():
     out.mkdir(parents=True, exist_ok=False)
     (out / 'capturas').mkdir()
     project = 'rj-upd-test-' + uuid.uuid4().hex[:10]
-    tokens = {name: secrets.token_hex(32) for name in ('acquisition', 'control', 'operator')}
+    tokens = {name: secrets.token_hex(32) for name in ('acquisition', 'control', 'access', 'session')}
     files = {}
     for name, value in tokens.items():
         files[name] = out / f'{name}-secret'
@@ -132,15 +132,16 @@ def main():
         status, body = http(control_url + '/internal/v1/updates/current', tokens['control'])
         assert status == 200 and body['scope']['kind'] == 'pilot' and body['last_published'] is None, body
         results['initial'] = body
-        node_env = dict(env, DATA_MODE='real', LOCAL_DATA_API_URL=control_url, RJ_OPERATOR_KEY_FILE=str(files['operator']),
+        node_env = dict(env, DATA_MODE='real', LOCAL_DATA_API_URL=control_url, RJ_ACCESS_PASSWORD_FILE=str(files['access']),
+                        RJ_SESSION_SECRET_FILE=str(files['session']),
                         RJ_CONTROL_SECRET_FILE=str(files['control']), NODE_ENV='production')
         log = (out / 'next-server.log').open('wb')
         next_process = subprocess.Popen(['node', 'node_modules/next/dist/bin/next', 'start', '-H', '127.0.0.1', '-p', str(a.frontend_port)],
                                         cwd=a.frontend, env=node_env, stdout=log, stderr=subprocess.STDOUT)
-        wait_http(front_url + '/api/v1/source')
+        wait_http(front_url + '/api/v1/session')
 
         def browser(phase):
-            raw = command(['node', 'scripts/validate-updates-stack.mjs', phase, front_url, str(files['operator']), str(out / 'capturas'),
+            raw = command(['node', 'scripts/validate-updates-stack.mjs', phase, front_url, str(files['access']), str(out / 'capturas'),
                            str(files['control']), str(files['acquisition'])], name='browser-' + phase, cwd=a.frontend, timeout=900)
             report = json.loads(raw.decode().strip().splitlines()[-1])
             results['browser-' + phase] = report
@@ -199,6 +200,44 @@ def main():
         status, restarted = http(control_url + '/internal/v1/updates/current', tokens['control'])
         assert restarted['last_published'] == after_publish['last_published'] and restarted['active_job'] is None, restarted
         results['after_restart'] = restarted
+        # The access session: it survives restarting the frontend (its key comes from the secret files), and rotating
+        # the session secret in place revokes the cookie issued before.
+        def front(path, method='GET', cookie=None, body=None):
+            headers = {'Origin': front_url, **({'Cookie': cookie} if cookie else {}),
+                       **({'Content-Type': 'application/json'} if body is not None else {})}
+            req = urllib.request.Request(front_url + path, method=method, headers=headers,
+                                         data=json.dumps(body).encode() if body is not None else None)
+            try:
+                with urllib.request.urlopen(req, timeout=15) as response:
+                    return response.status, response.headers, response.read()
+            except urllib.error.HTTPError as error:
+                payload = error.read()
+                error.close()
+                return error.code, error.headers, payload
+
+        status, headers, _ = front('/api/v1/session', 'POST', body={'password': tokens['access']})
+        assert status == 204, status
+        session_cookie = headers['Set-Cookie'].split(';')[0]
+        assert 'Max-Age=7776000' in headers['Set-Cookie'] and 'HttpOnly' in headers['Set-Cookie'], headers['Set-Cookie']
+        assert front('/api/v1/source')[0] == 401
+        assert front('/api/v1/source', cookie=session_cookie)[0] == 200
+        next_process.terminate()
+        next_process.wait(30)
+        log = (out / 'next-server.log').open('ab')
+        next_process = subprocess.Popen(['node', 'node_modules/next/dist/bin/next', 'start', '-H', '127.0.0.1', '-p', str(a.frontend_port)],
+                                        cwd=a.frontend, env=node_env, stdout=log, stderr=subprocess.STDOUT)
+        wait_http(front_url + '/api/v1/session')
+        survived = front('/api/v1/source', cookie=session_cookie)[0]
+        signed_in = json.loads(front('/api/v1/session', cookie=session_cookie)[2])['signedIn']
+        assert (survived, signed_in) == (200, True), (survived, signed_in)
+        tokens['session'] = secrets.token_hex(32)
+        files['session'].write_text(tokens['session'], encoding='ascii')  # in place: same file, new content
+        revoked = front('/api/v1/source', cookie=session_cookie)[0]
+        assert revoked == 401, revoked
+        status, headers, _ = front('/api/v1/session', 'POST', body={'password': tokens['access']})
+        assert status == 204 and front('/api/v1/source', cookie=headers['Set-Cookie'].split(';')[0])[0] == 200
+        results['access-session'] = dict(survives_frontend_restart=True, revoked_by_rotation=True, new_session_after_rotation=True)
+        save()
         logs = command(base + ['logs', '--no-color'], name='service-logs-secret-audit')
         assert not leaked(logs)
         results['ok'] = True
