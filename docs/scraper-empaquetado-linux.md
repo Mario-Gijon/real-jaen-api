@@ -1,13 +1,15 @@
-# Empaquetado offline del scraper y Chromium (candidato, sin integrar)
+# Empaquetado offline del scraper y Chromium
 
-Revision del 26-10-2026. Archivos en docker/scraper/. No modifica Dockerfile de produccion,
-Compose, api.main ni el coordinador. No crea un tercer servicio. No hay endpoints, consultas
-historicas, autenticacion o boton. El empaquetado queda SIN COMMIT para revisar sus resultados.
+> Estado 29-10-2026: integrado. La imagen de este empaquetado es la base (`RJ_SCRAPER_RUNTIME_IMAGE`) de la imagen de
+> adquisición (`docker/acquisition/Dockerfile`, overlay `rj-analyst/compose.acquisition.yaml`). El fallo de sandbox
+> de los resultados del 26-10 se resolvió con el perfil seccomp `docker/acquisition/seccomp-linux-amd64.json`
+> ([diagnostico-sandbox-linux.md](diagnostico-sandbox-linux.md)). Estado vigente: [adquisicion-sofascore.md](adquisicion-sofascore.md).
+> Los apartados de resultados y decisión conservan lo medido el 26-10-2026.
 
 ## Fuente y dependencias
 
 Fuente exclusiva: sofascore_scraper 3.1.0, commit
-611e436a1528b0f487aa56a045f023e8ae8ae098, que incluye paginacion next y fichas.
+611e436a1528b0f487aa56a045f023e8ae8ae098, que incluye paginacion next y fichas (apartado siguiente).
 export_source.py usa git archive de ese objeto, nunca copia el working tree. Lista permitida:
 pyproject.toml, requirements.txt, constraints.txt, LICENSE, locales/ y sofascore_scraper/.
 No exporta frontend/, package-lock.json, .git, .venv, configuracion local ni datos. El cambio
@@ -29,6 +31,32 @@ runtime-system.txt quedan en /opt para auditar las versiones realmente instalada
 apt no estan fijados a un repositorio snapshot: aun con la base y revision fijadas, no se
 promete reconstruccion bit a bit entre fechas. La imagen ya construida se identifica por ID.
 No se fija arquitectura de CPU; esta ejecucion es Linux x86_64, otras requieren validacion.
+
+## Parches propios del scraper (bundle)
+
+La revision fijada no esta en el repositorio original: son dos commits propios sobre `main` del original
+(`dd9f061`, https://github.com/tunjayoff/sofascore_scraper):
+
+- `c697852` fix(follow): lee todas las paginas de proximos partidos de un equipo;
+- `611e436` feat(players): descarga y exporta las fichas individuales de jugadores.
+
+Se conservan en `docker/scraper/real-jaen-follow-next-pages.bundle` (rama `real-jaen/follow-next-pages`; requiere
+`dd9f061`). Un bundle conserva los identificadores, que `export_source.py` exige; aplicar los cambios como parche
+daria otros. Recuperacion en un clon del original, sin la rama local:
+
+```sh
+set -eu
+git clone --single-branch --branch main https://github.com/tunjayoff/sofascore_scraper.git ../sofascore_scraper/sofascore_scraper
+git -C ../sofascore_scraper/sofascore_scraper bundle verify "$PWD/docker/scraper/real-jaen-follow-next-pages.bundle"
+git -C ../sofascore_scraper/sofascore_scraper fetch "$PWD/docker/scraper/real-jaen-follow-next-pages.bundle"   real-jaen/follow-next-pages:real-jaen/follow-next-pages
+python3 docker/scraper/export_source.py ../sofascore_scraper/sofascore_scraper ../packaging-scraper/source
+```
+
+Comprobado el 29-10-2026 en un clon que solo tenia `main`: la exportacion resultante es identica a la del checkout
+original (SHA256 del archivo Git `19c53bf0b9aaa9716fa789566c78c4bf1c95b45226e5b42f67e48089170c1f74`, 155 archivos).
+Si el original reescribiera `main` y `dd9f061` dejara de existir, el bundle no basta: conservar entonces un bundle
+completo (`git bundle create ... real-jaen/follow-next-pages`, unos 37 MB) junto a las copias de la instalacion.
+Al cambiar los parches: nuevo commit en esa rama, nuevo bundle y nueva `REVISION` en `export_source.py`.
 
 ## Reproduccion portable (POSIX, sin PowerShell)
 
