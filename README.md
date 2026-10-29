@@ -29,7 +29,10 @@ Instrucciones para agentes: [AGENTS.md](AGENTS.md).
 
 ## Instalación y operación
 
-Se hace con Docker Compose desde rj-analyst; no hay otra instalación vigente:
+Se hace con Docker Compose desde rj-analyst, clonado en una carpeta hermana de esta
+(`git clone -b feature/rj-analyst ssh://git@serezade.ujaen.es:8032/fjmimbre/app-real-jaen.git rj-analyst`); no hay
+otra instalación vigente. Puesta en marcha: [../rj-analyst/README.md](../rj-analyst/README.md), «Puesta en marcha con
+Docker». Además:
 
 - instalación, arranque, mantenimiento, copias y adquisición: [../rj-analyst/docs/docker.md](../rj-analyst/docs/docker.md);
 - servidor del grupo: [../rj-analyst/docs/despliegue-servidor.md](../rj-analyst/docs/despliegue-servidor.md);
