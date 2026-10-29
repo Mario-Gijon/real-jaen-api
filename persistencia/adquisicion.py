@@ -81,13 +81,15 @@ class Cliente:
     """modo='real': the Compose service `acquisition` and the real provider. modo='prueba': only an installation
     marked by its test fixture (never by an HTTP response) and bundles from the loopback test transport."""
 
-    def __init__(self, url, secret_file, *, modo='real'):
+    def __init__(self, url, secret_file, *, modo='real', restriccion=None):
         parsed = urllib.parse.urlsplit(url)
         hosts = {'real': ('acquisition',), 'prueba': ('acquisition', '127.0.0.1')}.get(modo, ())
         if (parsed.scheme != 'http' or parsed.hostname not in hosts or parsed.username or parsed.password
                 or parsed.path not in ('', '/') or parsed.query or parsed.fragment):
             raise AdquisicionRechazada('Configuracion interna invalida')
         self.modo = modo
+        # dict(limits=dict(attempts, sends), detail_rounds=[...]): a bundle must declare exactly this (control.py).
+        self.restriccion = restriccion
         self.url = url.rstrip('/') + '/internal/v1/acquisitions'
         self._secret = Path(secret_file).read_bytes().strip()
         if not 32 <= len(self._secret) <= 256 or not self._secret.isascii() or any(c <= 32 for c in self._secret):
@@ -215,6 +217,7 @@ class Cliente:
                                             test_transport=self.modo == 'prueba')
         if manifest['recipe_id'] != record['recipe_id']:
             raise Rejected('Bundle of another recipe')
+        comprobar_restriccion(manifest, self.restriccion)
         path = folder / 'solicitud.json'
         last = record['intentos'][-1] if record['intentos'] else None
         state = None
@@ -252,8 +255,20 @@ class Cliente:
             # Partial coverage: what is new, what was kept from before and what stays pending (never absence).
             plan = manifest['plan']
             published['coverage'] = dict(coverage_summary(manifest), new_matches=plan['new_matches'], rounds=plan['rounds'],
-                                         deferred=sorted(int(i) for i in plan['deferred']))
+                                         deferred=sorted(int(i) for i, why in plan['deferred'].items() if why == 'budget'),
+                                         restricted=sorted(int(i) for i, why in plan['deferred'].items() if why == 'restricted'),
+                                         limits=plan['limits'], detail_rounds=plan['detail_rounds'])
         return published
+
+
+def comprobar_restriccion(manifest, restriccion):
+    """With a restriction configured (limits and detail rounds), the bundle must declare exactly it: a producer that
+    ignored or widened it is rejected before anything reaches the coordinator."""
+    if restriccion is None:
+        return
+    plan = manifest.get('plan') or {}
+    if dict(limits=plan.get('limits'), detail_rounds=plan.get('detail_rounds')) != restriccion:
+        raise Rejected('Bundle outside the restriction of this installation')
 
 
 def verificar_sellado(body, descriptor, baseline, context, *, test_transport=False):

@@ -119,6 +119,11 @@ class SdkAdapter:
         with self.lock:
             self.events.append(dict(at=now(), kind=kind, detail=detail))
 
+    def remaining_sends(self):
+        """Physical sends this adapter may still make (curl and the browser's fetch(), sent or not refused)."""
+        with self.lock:
+            return self.max_sends - len([s for s in self.sends if s.get('sent')])
+
     def report(self):
         with self.lock:
             hosts = {}

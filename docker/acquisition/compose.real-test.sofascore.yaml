@@ -1,0 +1,7 @@
+# Real provider overlay of compose.real-test.yaml. Without compose.real-test.egress.yaml the service has no egress:
+# that combination is the offline rehearsal of the definitive images (every send fails, nothing is published).
+services:
+  acquisition:
+    environment:
+      ACQ_PROVIDER: sofascore
+      ACQ_ENABLE_REAL: ${RJ_REAL_ENABLE:?Set to 1 explicitly}

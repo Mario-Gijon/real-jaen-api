@@ -73,6 +73,20 @@ def secret(path):
     return value
 
 
+def restriccion(environ):
+    """The restriction a bundle of this installation must declare, if any: RJ_ACQUISITION_MAX_ATTEMPTS,
+    RJ_ACQUISITION_MAX_SENDS and RJ_ACQUISITION_DETAIL_ROUNDS, all three or none (the acquisition service has the
+    same values; this side refuses a bundle that does not declare exactly them)."""
+    names = ('RJ_ACQUISITION_MAX_ATTEMPTS', 'RJ_ACQUISITION_MAX_SENDS', 'RJ_ACQUISITION_DETAIL_ROUNDS')
+    values = [environ.get(n) for n in names]
+    if not any(values):
+        return None
+    if not all(values) or not values[0].isdigit() or not values[1].isdigit():
+        raise SystemExit('Set the three of ' + ', '.join(names) + ' or none')
+    rounds = sorted({int(p) for p in values[2].split(',')})
+    return dict(limits=dict(attempts=int(values[0]), sends=int(values[1])), detail_rounds=rounds)
+
+
 class Unavailable(Exception): pass
 class NotCancellable(Exception): pass
 class Cancelled(Exception): pass
@@ -247,7 +261,7 @@ class Actualizaciones:
         shows them without asking the data API)."""
         if not coverage:
             return coverage
-        ids = {p['event_id'] for p in coverage['pending']} | set(coverage['deferred'])
+        ids = {p['event_id'] for p in coverage['pending']} | set(coverage['deferred']) | set(coverage.get('restricted', ()))
         ids |= {m['id'] for m in coverage['new_matches']} | {r for m in coverage['new_matches'] for r in m['replaces']}
         data = self.c.capturar()._datos
         teams = {e['team_id']: e['name'] for e in data['equipos']}
@@ -364,7 +378,8 @@ def main():
     from persistencia.adquisicion import Cliente
     modo = 'prueba' if os.environ.get('RJ_ACQUISITION_TEST') == '1' else 'real'
     cliente = Cliente(os.environ.get('RJ_ACQUISITION_URL', 'http://acquisition:8002'),
-                      os.environ.get('RJ_ACQUISITION_SECRET_FILE', '/run/secrets/acquisition-token'), modo=modo)
+                      os.environ.get('RJ_ACQUISITION_SECRET_FILE', '/run/secrets/acquisition-token'), modo=modo,
+                      restriccion=restriccion(os.environ))
     with Coordinador(args.base, args.ambito) as coordinador:
         control = Actualizaciones(coordinador, cliente, recipe=os.environ.get('RJ_UPDATE_RECIPE', RECIPE))
         server = ThreadingHTTPServer((args.host, args.port), handler_for(coordinador, control, token))

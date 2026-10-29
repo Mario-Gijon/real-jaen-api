@@ -302,6 +302,103 @@ def group_check():
     save('group-check-report.json', dict(integrity='ok', ids_preserved=True, sealed_bundles=len(sealed), tampered_rejected=tampered))
 
 
+# --- Single real run of the Group 2 recipe and its rehearsals (docker/acquisition/real_group.py) ------------------
+
+def expected_restriction():
+    import os
+    import control
+    return control.restriccion(os.environ)
+
+
+def prepare_real():
+    """Like prepare, for the real run and its rehearsals: the copy must be the identified one (sha256), and only the
+    fixture rehearsal marks the installation as a test (the real provider refuses a marked one)."""
+    import hashlib
+    import os
+    expected = os.environ['RJ_REAL_SNAPSHOT_SHA256']
+    digest = hashlib.sha256(Path('/imports/snapshot.sqlite').read_bytes()).hexdigest()
+    assert digest == expected, ('snapshot', digest)
+    assert expected_restriction() is not None, 'the run requires its restriction'
+    prepare()
+    if os.environ.get('RJ_REAL_PROVIDER') != 'fixture-site':
+        BASE.with_name(BASE.name + TEST_MARKER).unlink()
+    save('snapshot.json', dict(sha256=digest))
+
+
+def requests_of_this_copy():
+    folder = BASE.with_name(BASE.name + '.actualizaciones') / 'adquisiciones'
+    return [parse((f / 'solicitud.json').read_bytes()) | dict(folder=str(f))
+            for f in sorted(folder.iterdir(), key=lambda f: f.stat().st_mtime)] if folder.exists() else []
+
+
+def real_report():
+    """The acquisition service's report of each job of this copy (sends, attempts, stops, browser, connections),
+    taken while the service is still up and idle; nothing is requested from the provider."""
+    import os
+    modo = 'prueba' if os.environ.get('RJ_REAL_PROVIDER') == 'fixture-site' else 'real'
+    reports = {}
+    for record in requests_of_this_copy():
+        if record.get('acquisition_id'):
+            reports[record['acquisition_id']] = client(modo).informe(record['acquisition_id'])
+    save('acquisition-reports.json', reports)
+
+
+def real_check():
+    """With every service stopped: integrity and identities of the copy, and each sealed bundle verified again,
+    with exactly the configured restriction, its attempts inside the declared limits and its details only from the
+    declared rounds. Summarizes what the run published for the report."""
+    import os
+    from persistencia.adquisicion import comprobar_restriccion
+    from persistencia.bundle import ROUND_PATHS
+    test = os.environ.get('RJ_REAL_PROVIDER') == 'fixture-site'
+    restriction = expected_restriction()
+    assert sincronizacion.verificar(BASE)['ok']
+    ids_before, ids_after = parse((ROOT / 'ids-before.json').read_bytes()), identity()
+    for table in ('team', 'player', 'match', 'observation', 'local_replacement'):
+        assert {tuple(r) for r in ids_before[table]} <= {tuple(r) for r in ids_after[table]}, table
+    prepared = parse((ROOT / 'prepare-report.json').read_bytes())
+    with Coordinador(BASE, AMBITO, reserva=0) as c:
+        generation = c.capturar()
+        published = inventory(generation)
+        datos = generation._datos
+    sealed = []
+    for record in requests_of_this_copy():
+        if record['bundle'] is None:
+            continue
+        folder = Path(record['folder'])
+        body, baseline = (folder / 'bundle.json').read_bytes(), parse((folder / 'inventory.json').read_bytes())
+        manifest, _ = verificar_sellado(body, record['bundle'], baseline, (record['acquisition_id'], record['request_id']),
+                                        test_transport=test)
+        comprobar_restriccion(manifest, restriction)
+        plan, attempts = manifest['plan'], manifest['attempts']
+        calendar = {json.loads(l)['id']: json.loads(l) for l in base64.b64decode(
+            parse(body)['files']['calendar.jsonl']).splitlines()}
+        details = sorted({int(a['path'].split('/')[2]) for a in attempts if a['path'] not in ROUND_PATHS})
+        outside = [i for i in details if (calendar[i].get('round') or {}).get('number') not in plan['detail_rounds']]
+        assert not outside, ('details outside the declared rounds', outside)
+        assert len(attempts) <= plan['limits']['attempts']
+        coverage = [c for c in manifest['coverage'] if c['resource'] != 'calendar']
+        sealed.append(dict(acquisition_id=record['acquisition_id'], attempts=len(attempts), limits=plan['limits'],
+                           detail_rounds=plan['detail_rounds'], listed=sorted(ROUND_PATHS[a['path']] for a in attempts
+                                                                              if a['path'] in ROUND_PATHS and a['status'] == 200),
+                           failed_rounds=plan['rounds']['failed'], consulted=details,
+                           restricted=sorted(int(i) for i, w in plan['deferred'].items() if w == 'restricted'),
+                           deferred=sorted(int(i) for i, w in plan['deferred'].items() if w == 'budget'),
+                           new=sum(c['status'] == 'data' and c['origin'] == 'attempt' for c in coverage),
+                           kept=sum(c['status'] == 'data' and c['origin'] == 'inventory' for c in coverage),
+                           pending=sorted((c['event_id'], c['resource'], c['reason']) for c in coverage if c['status'] == 'pending'),
+                           new_matches=plan['new_matches']))
+    rounds = {}
+    for m in datos['partidos']:
+        if m['match_id'] in {d for s in sealed for d in s['consulted']}:
+            rounds[m['match_id']] = dict(status=m['status'], score=[m.get('home_score'), m.get('away_score')],
+                                         sections={k: (datos['originales'].get((m['match_id'], k)) or {}).get('registro', {}).get('fetched_at')
+                                                   for k in ('lineups', 'statistics', 'incidents')})
+    save('real-check-report.json', dict(integrity='ok', ids_preserved=True, generation_before=prepared['generation_id'],
+                                        generation_after=published['generation_id'], sealed=sealed, consulted_matches=rounds))
+
+
 if __name__ == '__main__':
     {'prepare': prepare, 'auth-probe': auth_probe, 'real-bundle': real_bundle, 'flow': flow, 'group-check': group_check,
-     'restart-start': restart_start, 'restart-check': restart_check, 'refusal': refusal}[sys.argv[1]]()
+     'restart-start': restart_start, 'restart-check': restart_check, 'refusal': refusal,
+     'prepare-real': prepare_real, 'real-report': real_report, 'real-check': real_check}[sys.argv[1]]()

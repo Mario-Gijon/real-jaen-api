@@ -1,0 +1,8 @@
+# The only overlay that gives the acquisition service an egress network. Used by real_group.py in mode "real" only,
+# after its one-time ledger is written. Docker does not filter by domain: what limits the traffic is the service's
+# closed list of routes, the reduced limits and the restriction to the declared rounds.
+services:
+  acquisition:
+    networks: [control, egress]
+networks:
+  egress: {}

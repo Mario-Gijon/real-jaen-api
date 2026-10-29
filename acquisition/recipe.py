@@ -223,15 +223,19 @@ class GroupListing:
 def refused(transport):
     return bool(transport.retry.get('_blocked')) or transport.breaker.tripped
 
-def collect_group(store,transport,scope,baseline,output,*,now,cancelled=lambda:False,budget=None,listed_at=None):
+def collect_group(store,transport,scope,baseline,output,*,now,cancelled=lambda:False,budget=None,listed_at=None,
+                  limits=None,detail_rounds=None):
     """One manual update of the group. A refusal or the breaker stops it without a bundle; an exhausted budget or an
-    unanswered resource leaves that resource pending and the rest is sealed."""
+    unanswered resource leaves that resource pending and the rest is sealed. limits: dict(attempts, sends) of this
+    job (the production maxima unless the installation lowers them); detail_rounds: the only rounds whose matches may
+    be consulted (None: any). Both are declared in the manifest and checked by the verifier."""
     from sofascore_scraper.services.pipeline import FetchPipeline
     from sofascore_scraper.services.planning import WorkItem
     from sofascore_scraper.store import Ref
     from persistencia.bundle import verify as verify_bundle
-    from .group_plan import PLANNED_ATTEMPTS, plan_matches, rounds_to_list
+    from .group_plan import MAX_ATTEMPTS, MAX_SENDS, PLANNED_ATTEMPTS, plan_matches, rounds_to_list
     check_inventory(baseline)
+    limits=dict(limits or dict(attempts=MAX_ATTEMPTS,sends=MAX_SENDS))
     output=Path(output)
     context=(transport.context['job_id'],transport.context['request_id']);test=transport.mode=='loopback-fixture'
     if output.exists():
@@ -254,13 +258,15 @@ def collect_group(store,transport,scope,baseline,output,*,now,cancelled=lambda:F
             if cancelled():raise InterruptedError('cancelled')
             if refused(transport):raise Stopped('Refusal/breaker while listing: nothing is published')
             listed={i:row for i,(row,_) in listing.listed.items()}
-            planned,deferred=plan_matches(baseline,listed,now,budget=(budget or PLANNED_ATTEMPTS)-len(rounds))
+            total=min(PLANNED_ATTEMPTS,limits['attempts'],budget or PLANNED_ATTEMPTS)
+            planned,deferred=plan_matches(baseline,listed,now,budget=total-len(rounds),detail_rounds=detail_rounds)
             for p in planned:scope.admit(p['id'],p['keys'])
             items=[WorkItem(Ref.event(p['id']),'refill',tuple((k,'') for k in p['keys']),'football',p['reason']) for p in planned]
             if items:await pipeline.run(items,cancelled=cancelled)
             if cancelled():raise InterruptedError('cancelled')
             if refused(transport):raise Stopped('Refusal/breaker while consulting: nothing is published')
-            state.update(listing=listing,planned=planned,deferred=deferred,near=near,far=far)
+            state.update(listing=listing,planned=planned,deferred=deferred,near=near,far=far,limits=limits,
+                         detail_rounds=detail_rounds)
         import asyncio
         try:
             asyncio.run(run())
@@ -277,7 +283,7 @@ def collect_group(store,transport,scope,baseline,output,*,now,cancelled=lambda:F
         output.chmod(0o400);sync_dir(output.parent)
         return descriptor
 
-def assemble_group(store,baseline,transport,workspace,*,now,listing,planned,deferred,near,far):
+def assemble_group(store,baseline,transport,workspace,*,now,listing,planned,deferred,near,far,limits,detail_rounds):
     """The bundle of a group job. Per resource: new data (a successful attempt with data), the previous original kept
     (not consulted, or consulted without data), pending (no data, with its reason) or not applicable (match not
     played yet). Never an empty answer as data, never a previous original dropped."""
@@ -313,7 +319,7 @@ def assemble_group(store,baseline,transport,workspace,*,now,listing,planned,defe
     planned_keys={p['id']:('event',*p['keys']) for p in planned}
     participants={i:((expected[i]['home'],expected[i]['away']) if i in expected else
                      ((listed[i][0].get('homeTeam') or {}).get('id'),(listed[i][0].get('awayTeam') or {}).get('id'))) for i in ids}
-    rows={};drafts=[]
+    rows={};drafts=[];refreshed=set()
     for ident in current:
         if ident in listed and (latest.get(round_path(listed[ident][1])) or {}).get('status')==200:
             drafts.append(dict(event_id=ident,resource='calendar',status='data',origin='attempt',checked_at=latest[round_path(listed[ident][1])]['finished_at'],reason=None))
@@ -324,6 +330,7 @@ def assemble_group(store,baseline,transport,workspace,*,now,listing,planned,defe
             fresh=(a is not None and a['status']==200 and new is not None and fingerprint(new['payload'])==a['payload_sha256']
                    and (key=='event' or body_state(key,new['payload'])=='data'))
             if fresh:
+                if key=='event':refreshed.add(ident)
                 rows[pair]=record(new);drafts.append(dict(event_id=ident,resource=key,status='data',origin='attempt',checked_at=a['finished_at'],reason=None))
             elif a is not None:
                 # Asked now without data: pending; a previous original, if any, is kept as it was.
@@ -336,14 +343,20 @@ def assemble_group(store,baseline,transport,workspace,*,now,listing,planned,defe
                 # Not asked in this update (not due, deferred by the budget or still in a backoff): previous data kept.
                 rows[pair]=record(old);drafts.append(dict(event_id=ident,resource=key,status='data',origin='inventory',checked_at=old['fetched_at'],reason=None))
             else:
+                # The phase of what this update knows best: the event read now, else this update's listing (a match it
+                # shows finished is due even if the event kept from before says otherwise), else the kept event.
                 event=rows.get((ident,'event'))
-                phase=phase_of(classify_status(event['payload'] if event else calendar[ident]).value)
+                basis=(event['payload'] if event and (ident in refreshed or ident not in listed)
+                       else listed[ident][0] if ident in listed else calendar[ident])
+                phase=phase_of(classify_status(basis).value)
                 if (key in SECTIONS and phase in ('pre','live')) or (key=='event' and phase=='pre'):
                     drafts.append(dict(event_id=ident,resource=key,status='not_applicable',origin='phase',checked_at=None,reason=None))
                 else:
                     if path in transport.retry:
                         why=pending_reason(transport.retry[path].get('reason'))  # still in the backoff of an earlier answer
-                    elif ident in deferred or (key in planned_keys.get(ident,()) and latest.get(event_path(ident)) is None):
+                    elif ident in deferred:
+                        why=deferred[ident]  # 'budget' (did not fit) or 'restricted' (outside this installation's rounds)
+                    elif key in planned_keys.get(ident,()) and latest.get(event_path(ident)) is None:
                         why='budget'  # never reached: the attempts or the time of this update ran out
                     else:
                         why='not_requested'  # not due in this update, or its event failed so its sections were not asked
@@ -368,7 +381,8 @@ def assemble_group(store,baseline,transport,workspace,*,now,listing,planned,defe
     plan=dict(now=iso(now),rounds=dict(near=near,far=far,failed=sorted(listing.failed)),
               planned=[dict(id=p['id'],reason=p['reason'],keys=list(p['keys'])) for p in planned],
               deferred={str(k):v for k,v in sorted(deferred.items())},
-              new_matches=new_matches(baseline,{i:row for i,(row,_) in listed.items()}))
+              new_matches=new_matches(baseline,{i:row for i,(row,_) in listed.items()}),
+              limits=dict(limits),detail_rounds=detail_rounds)
     m=dict(schema=2,contract='group-v1',**{k:transport.context[k] for k in ('job_id','request_id','inventory_sha256')},
            recipe_id='sofascore-group2-2627-v1',provider_revision=REVISION,transport=transport.mode,
            generation_id=baseline['generation_id'],rules_sha256=producer_rules(),policy=dict(window_s=259200,interval_s=21600),

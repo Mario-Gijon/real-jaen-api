@@ -184,6 +184,57 @@ class Matches(unittest.TestCase):
         self.assertNotIn(5, [p['id'] for p in planned])
 
 
+class Restriction(unittest.TestCase):
+    """An explicit restriction of the installation: only the matches of the given rounds are consulted; whatever the
+    listings detect elsewhere is deferred as 'restricted', whatever the date or the budget."""
+    def setUp(self):
+        self.w = World()
+        nine = self.w.add(event(1, 9, NOW - 4 * 86400), fetched=NOW - 5 * 86400)
+        ten = self.w.add(event(2, 10, NOW + 3 * 86400, home=90001, away=90002), fetched=NOW - 5 * 86400)
+        far = self.w.add(event(3, 20, NOW + 60 * 86400, home=90003, away=90004), fetched=NOW - 5 * 86400)
+        self.w.add(event(4, 8, NOW - 30 * H, 'finished', score=(2, 2), home=90005, away=90006), fetched=NOW - 20 * H,
+                   sections=g.SECTIONS)  # a refresh due by the 72 h / 6 h rule, in round 8
+        self.listed = {r['id']: r for r in (
+            dict(nine, status=dict(type='finished'), homeScore=dict(current=1), awayScore=dict(current=0)),
+            dict(ten, startTimestamp=ten['startTimestamp'] + 3600), dict(far, startTimestamp=far['startTimestamp'] + 3600),
+            event(5, 11, NOW + 10 * 86400, home=90007, away=90008),  # new match in scope, round 11
+            dict(event(6, 9, NOW - 4 * 86400, 'finished', home=90009, away=90010, score=(0, 0)), roundInfo=None))}
+
+    def test_only_the_declared_rounds_are_consulted(self):
+        planned, deferred = g.plan_matches(self.w.baseline(), self.listed, NOW, detail_rounds=[9])
+        self.assertEqual([(p['id'], p['reason']) for p in planned], [(1, 'finished')])
+        # Detected elsewhere (calendar changes, a new match, a due refresh, a row without round): deferred, flagged.
+        self.assertEqual(deferred, {2: 'restricted', 3: 'restricted', 4: 'restricted', 5: 'restricted', 6: 'restricted'})
+
+    def test_restriction_before_budget_and_without_it_everything_is_planned(self):
+        planned, deferred = g.plan_matches(self.w.baseline(), self.listed, NOW, budget=2, detail_rounds=[9])
+        self.assertEqual((planned, deferred[1]), ([], 'budget'))
+        self.assertEqual({k: v for k, v in deferred.items() if k != 1}, {i: 'restricted' for i in (2, 3, 4, 5, 6)})
+        planned, deferred = g.plan_matches(self.w.baseline(), self.listed, NOW)
+        self.assertEqual(({p['id'] for p in planned}, deferred), ({1, 2, 3, 4, 5, 6}, {}))
+
+
+@unittest.skipUnless(importlib.util.find_spec('fcntl'), 'acquisition service (Linux image)')
+class Reductions(unittest.TestCase):
+    """The installation can only lower the production maxima."""
+    def test_lowering_is_accepted_and_raising_refused(self):
+        from acquisition.service import reductions
+        self.assertEqual(reductions({}), {})
+        self.assertEqual(reductions(dict(ACQ_MAX_ATTEMPTS='60', ACQ_MAX_SENDS='70', ACQ_DETAIL_ROUNDS='9')),
+                         dict(max_attempts=60, max_sends=70, detail_rounds=[9]))
+        for bad in (dict(ACQ_MAX_ATTEMPTS='117'), dict(ACQ_MAX_SENDS='121'), dict(ACQ_MAX_SENDS='0'),
+                    dict(ACQ_MAX_ATTEMPTS='-1'), dict(ACQ_MAX_ATTEMPTS='60.5'), dict(ACQ_MAX_ATTEMPTS='71', ACQ_MAX_SENDS='70'),
+                    dict(ACQ_DETAIL_ROUNDS='39'), dict(ACQ_DETAIL_ROUNDS='9,x'), dict(ACQ_DETAIL_ROUNDS=',')):
+            with self.subTest(bad=bad), self.assertRaises(SystemExit):
+                reductions(bad)
+
+    def test_both_providers_receive_them(self):
+        from acquisition.service import configuration
+        provider, extra = configuration(dict(ACQ_PROVIDER='sofascore', ACQ_ENABLE_REAL='1', ACQ_MAX_ATTEMPTS='60',
+                                             ACQ_MAX_SENDS='70', ACQ_DETAIL_ROUNDS='9'))
+        self.assertEqual((provider, extra), ('sofascore', dict(max_attempts=60, max_sends=70, detail_rounds=[9])))
+
+
 @unittest.skipUnless(importlib.util.find_spec('sofascore_scraper'), 'SDK required (acquisition test image)')
 class SdkParity(unittest.TestCase):
     """The same instants through the SDK's own refresh_due and through the plan's: identical decisions."""

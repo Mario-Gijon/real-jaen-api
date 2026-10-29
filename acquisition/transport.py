@@ -31,7 +31,7 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 class Transport:
     def __init__(self,root,*,job_id,request_id,inventory_sha256,loopback_url=None,enable_real=False,
                  max_attempts=16,seconds=300,clock=time.time,sleep=asyncio.sleep,cancelled=lambda:False,breaker=None,
-                 allowed=None,limits='pilot'):
+                 allowed=None,limits='pilot',send_reserve=0):
         """allowed: predicate of the paths this job may request (default: the pilot's fixed paths). limits: the
         recipe whose approved limits apply; 'group' also turns an exhausted budget or deadline into a failed
         outcome with reason 'budget' (pending coverage) instead of stopping the job. Refusals always stop it."""
@@ -51,6 +51,7 @@ class Transport:
         if type(max_attempts) is not int or not 1<=max_attempts<=top_attempts or type(seconds) is not int or not 1<=seconds<=top_seconds:raise ValueError('Unapproved limits')
         self.allowed=allowed or (lambda path:path in PATHS);self.deferrable=limits!='pilot'
         self.max_attempts=max_attempts;self.seconds=seconds;self.clock=clock;self.sleep=sleep;self.cancelled=cancelled
+        self.send_reserve=send_reserve
         self.state=parse(self.path.read_bytes()) if self.path.exists() else dict(context=self.context,started_at=iso(clock()),attempts=[])
         if self.state['context']!=self.context:raise Stopped('Job identity reused with another inventory')
         self.retry=parse(self.retry_path.read_bytes()) if self.retry_path.exists() else {}
@@ -142,6 +143,7 @@ class Transport:
                 attempts=[a for a in self.state['attempts'] if a['path']==path]
                 if attempts and attempts[-1]['status']==200 and path not in self.retry:raise Stopped('Resource already acquired: use its verified cache/bundle')
                 if len(attempts)>=2 or len(self.state['attempts'])>=self.max_attempts:raise Exhausted('Pilot attempt budget exhausted')
+                if self.remaining_sends()<self.send_reserve:raise Exhausted('Physical send budget nearly exhausted')
                 await self._wait_until(self.retry.get('_last_sent',{}).get('at',0)+1)
                 self._check()
                 a=dict(number=len(self.state['attempts'])+1,path=path,sent_at=iso(self.clock()),finished_at=None,status=None,payload_sha256=None)
@@ -193,6 +195,11 @@ class Transport:
                 # Retry only a transient network/5xx error, after its durable due time.
 
 
+    def remaining_sends(self):
+        """Physical sends left (urllib: one per attempt, already capped by max_attempts)."""
+        return self.max_attempts
+
+
 class SdkTransport(Transport):
     """Same budget, retries, stops, deadline and evidence; each request goes through the SDK's normal flow (curl_cffi
     and, on a challenge, its browser) instead of urllib."""
@@ -206,3 +213,6 @@ class SdkTransport(Transport):
 
     def _request(self, path):
         return self.adapter.request(path)
+
+    def remaining_sends(self):
+        return self.adapter.remaining_sends()

@@ -272,10 +272,35 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self): self.handle_request(True)
 
 
+def reductions(environ):
+    """Limits of this installation for the group recipe, which can only lower the production maxima:
+    ACQ_MAX_ATTEMPTS (logical attempts of the transport), ACQ_MAX_SENDS (physical sends of the adapter) and
+    ACQ_DETAIL_ROUNDS (comma-separated rounds whose matches may be consulted; listings are not restricted). Anything
+    else refuses to start."""
+    from acquisition import group_plan
+    out = {}
+    for name, key, ceiling in (('ACQ_MAX_ATTEMPTS', 'max_attempts', group_plan.MAX_ATTEMPTS),
+                               ('ACQ_MAX_SENDS', 'max_sends', group_plan.MAX_SENDS)):
+        raw = environ.get(name)
+        if raw:
+            if not raw.isdigit() or not 1 <= int(raw) <= ceiling:
+                raise SystemExit(f'{name} must be an integer from 1 to {ceiling}: it can only lower the production limit')
+            out[key] = int(raw)
+    if out.get('max_attempts', 0) > out.get('max_sends', group_plan.MAX_SENDS):
+        raise SystemExit('ACQ_MAX_ATTEMPTS cannot exceed the physical sends')
+    raw = environ.get('ACQ_DETAIL_ROUNDS')
+    if raw:
+        parts = raw.split(',')
+        if not all(p.strip().isdigit() and 1 <= int(p) <= 38 for p in parts):
+            raise SystemExit('ACQ_DETAIL_ROUNDS must list rounds from 1 to 38')
+        out['detail_rounds'] = sorted({int(p) for p in parts})
+    return out
+
+
 def configuration(environ):
     provider = environ.get('ACQ_PROVIDER')
     if provider == 'sofascore' and environ.get('ACQ_ENABLE_REAL') == '1' and environ.get('ACQ_TEST_MODE') != '1':
-        return provider, {}
+        return provider, reductions(environ)
     if provider == 'fixture-site' and environ.get('ACQ_TEST_MODE') == '1' and environ.get('ACQ_ENABLE_REAL') != '1':
         import importlib.util
         routes = environ.get('ACQ_FIXTURE_ROUTES')
@@ -287,7 +312,7 @@ def configuration(environ):
             extra['test_now'] = datetime.fromisoformat(environ['ACQ_TEST_NOW']).timestamp()
         if environ.get('ACQ_TEST_PLANNED_ATTEMPTS'):
             extra['test_planned_attempts'] = int(environ['ACQ_TEST_PLANNED_ATTEMPTS'])
-        return provider, extra
+        return provider, dict(extra, **reductions(environ))
     raise SystemExit('No acquisition provider enabled: set ACQ_PROVIDER=sofascore with ACQ_ENABLE_REAL=1, '
                      'or the isolated test provider')
 

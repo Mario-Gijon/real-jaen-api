@@ -25,6 +25,44 @@ class SolicitudDurable(unittest.TestCase):
             self.assertEqual(c.capturar().id,generation)
 
 
+class LimitesYRestriccion(unittest.TestCase):
+    """Lo que declara un bundle de grupo: límites nunca por encima de producción, lo hecho dentro de ellos, y la
+    restricción de la instalación exactamente."""
+    def plan(self, **cambios):
+        return dict(dict(now='x', rounds={}, planned=[], deferred={'5': 'restricted', '6': 'budget'}, new_matches=[],
+                         limits=dict(attempts=60, sends=70), detail_rounds=[9]), **cambios)
+
+    def test_limites_y_jornadas_declarados(self):
+        from persistencia.bundle import Rejected, check_plan
+        self.assertEqual(check_plan(self.plan(), [{}] * 60), (dict(attempts=60, sends=70), [9]))
+        for plan, intentos in ((self.plan(limits=dict(attempts=117, sends=120)), 1), (self.plan(limits=dict(attempts=60, sends=121)), 1),
+                               (self.plan(limits=dict(attempts=71, sends=70)), 1), (self.plan(), 61),
+                               (self.plan(detail_rounds=[]), 1), (self.plan(detail_rounds=[10, 9]), 1), (self.plan(detail_rounds=[39]), 1),
+                               (self.plan(detail_rounds=None), 1), (self.plan(deferred={'5': 'later'}), 1),
+                               ({k: v for k, v in self.plan().items() if k != 'limits'}, 1)):
+            with self.subTest(plan=plan, intentos=intentos), self.assertRaises(Rejected):
+                check_plan(plan, [{}] * intentos)
+
+    def test_la_restriccion_configurada_se_exige_exacta(self):
+        from persistencia.adquisicion import comprobar_restriccion
+        from persistencia.bundle import Rejected
+        exigida = dict(limits=dict(attempts=60, sends=70), detail_rounds=[9])
+        comprobar_restriccion(dict(plan=self.plan()), exigida)
+        comprobar_restriccion(dict(plan=self.plan(detail_rounds=None, limits=dict(attempts=116, sends=120))), None)
+        for plan in (self.plan(detail_rounds=None), self.plan(detail_rounds=[9, 10]), self.plan(limits=dict(attempts=61, sends=70))):
+            with self.subTest(plan=plan), self.assertRaises(Rejected):
+                comprobar_restriccion(dict(plan=plan), exigida)
+
+    def test_control_lee_las_tres_variables_o_ninguna(self):
+        import control
+        self.assertIsNone(control.restriccion({}))
+        self.assertEqual(control.restriccion(dict(RJ_ACQUISITION_MAX_ATTEMPTS='60', RJ_ACQUISITION_MAX_SENDS='70',
+                                                  RJ_ACQUISITION_DETAIL_ROUNDS='9')),
+                         dict(limits=dict(attempts=60, sends=70), detail_rounds=[9]))
+        with self.assertRaises(SystemExit):
+            control.restriccion(dict(RJ_ACQUISITION_DETAIL_ROUNDS='9'))
+
+
 class Productores(unittest.TestCase):
     """Only reviewed producer fingerprints pass the trust boundary; the current producer is one of them."""
     def test_productor_actual_y_del_bundle_real_aprobados(self):

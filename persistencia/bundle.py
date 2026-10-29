@@ -202,9 +202,11 @@ def _verify(body,descriptor,baseline,*,context,expected_rules,test_transport):
 GROUP_RECIPE='sofascore-group2-2627-v1'
 UNIQUE_TOURNAMENT,TOURNAMENT,SEASON=17073,94191,97382
 ROUND_NUMBERS=range(1,39)
-MAX_GROUP_ATTEMPTS=120
+MAX_GROUP_ATTEMPTS=120  # production maximum of physical sends; logical attempts stop four below it
+MAX_GROUP_LOGICAL=MAX_GROUP_ATTEMPTS-4
 MAX_PROVENANCE=24*1024*1024
-PENDING_REASONS=frozenset({'empty','not_found','parse','error','budget','not_requested'})
+PENDING_REASONS=frozenset({'empty','not_found','parse','error','budget','not_requested','restricted'})
+PLAN_FIELDS=frozenset({'now','rounds','planned','deferred','new_matches','limits','detail_rounds'})
 GROUP_FIELDS=frozenset({'schema','contract','job_id','request_id','recipe_id','provider_revision','transport','inventory_sha256',
                         'generation_id','rules_sha256','policy','started_at','finished_at','files','coverage','retained',
                         'attempts','errors','plan'})
@@ -229,6 +231,19 @@ def coverage_summary(manifest):
             pending.setdefault(c['event_id'],[]).append(dict(resource=c['resource'],reason=c['reason'],kept=c['origin']=='inventory'))
     return dict(new=new,kept=kept,pending=[dict(event_id=i,resources=r) for i,r in sorted(pending.items())])
 
+def check_plan(plan,attempts):
+    """The job's declared limits and restriction: never above the production maxima, and what it did fits them."""
+    if not isinstance(plan,dict) or set(plan)!=PLAN_FIELDS:raise Rejected('Invalid plan')
+    limits,rounds=plan['limits'],plan['detail_rounds']
+    if not isinstance(limits,dict) or set(limits)!={'attempts','sends'} or any(type(v) is not int for v in limits.values()):raise Rejected('Invalid limits')
+    if not 1<=limits['attempts']<=min(MAX_GROUP_LOGICAL,limits['sends']) or not limits['sends']<=MAX_GROUP_ATTEMPTS:raise Rejected('Limits above production')
+    if len(attempts)>limits['attempts']:raise Rejected('Attempt budget mismatch')
+    if rounds is not None and (not isinstance(rounds,list) or not rounds or rounds!=sorted(set(rounds))
+                               or any(type(r) is not int or r not in ROUND_NUMBERS for r in rounds)):raise Rejected('Invalid detail rounds')
+    if not isinstance(plan['deferred'],dict) or any(v not in ('budget','restricted') for v in plan['deferred'].values()):raise Rejected('Invalid deferral')
+    if rounds is None and 'restricted' in plan['deferred'].values():raise Rejected('Restriction without declared rounds')
+    return limits,rounds
+
 def _verify_group(body,descriptor,baseline,*,context,expected_rules,test_transport):
     """Like _verify, generalized from the pilot match to the set the job consulted. What was not consulted equals
     the inventory; what was, matches its attempt; a resource with a previous original is never dropped: it is new
@@ -252,6 +267,7 @@ def _verify_group(body,descriptor,baseline,*,context,expected_rules,test_transpo
     if m['retained']!=retained:raise Rejected('Local history changed')
     attempts=m['attempts'];latest={};counts={}
     if not 1<=len(attempts)<=MAX_GROUP_ATTEMPTS:raise Rejected('Attempt budget mismatch')
+    _,detail_rounds=check_plan(m['plan'],attempts)
     for n,a in enumerate(attempts,1):
         if set(a)!={'number','path','sent_at','finished_at','status','payload_sha256'} or a['number']!=n:raise Rejected('Unplanned attempt')
         counts[a['path']]=counts.get(a['path'],0)+1
@@ -303,6 +319,7 @@ def _verify_group(body,descriptor,baseline,*,context,expected_rules,test_transpo
         if path in ROUND_PATHS:continue
         parts=path.split('/')
         if len(parts) not in (3,4) or parts[1]!='event' or not parts[2].isdigit() or int(parts[2]) not in current or (len(parts)==4 and parts[3] not in SECTIONS):raise Rejected('Unplanned attempt')
+        if detail_rounds is not None and calendar[int(parts[2])][1]['round'] not in detail_rounds:raise Rejected('Detail outside the declared rounds')
     prior={(v['record']['event_id'],v['record']['key']):v['record'] for v in baseline['records']}
     raw_records={};owned={};refs={}
     for name,owner in wanted.items():
@@ -353,6 +370,7 @@ def _verify_group(body,descriptor,baseline,*,context,expected_rules,test_transpo
             else:raise Rejected('Invalid data origin')
         elif c['status']=='pending':
             if c['reason'] not in PENDING_REASONS:raise Rejected('Invalid pending reason')
+            if c['reason']=='restricted' and m['plan']['deferred'].get(str(ident))!='restricted':raise Rejected('Restriction not declared in the plan')
             if c['origin']=='inventory':
                 if old is None or row!=record(old) or c['evidence']!=refs[pair]:raise Rejected('Pending must keep the previous original')
             elif c['origin']=='none':

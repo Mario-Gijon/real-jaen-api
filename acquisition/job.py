@@ -137,8 +137,12 @@ def run(folder):
         started = clock()  # one "now" for the rounds of the allowlist and the plan
         listed_at = group_plan.round_listings(spec['transport_root'])
         scope = GroupScope(sorted(set().union(*group_plan.rounds_to_list(baseline, started, listed_at=listed_at))))
-        paths, sends, seconds = scope.permits, group_plan.MAX_SENDS, group_plan.SECONDS
-        limits = dict(allowed=scope.permits, limits='group', max_attempts=group_plan.MAX_SENDS - 4, seconds=seconds)
+        # Two counters, each capped by the production maximum and only lowered by the installation (service.py).
+        attempts_cap = min(group_plan.MAX_ATTEMPTS, spec.get('max_attempts') or group_plan.MAX_ATTEMPTS)
+        sends = min(group_plan.MAX_SENDS, spec.get('max_sends') or group_plan.MAX_SENDS)
+        paths, seconds = scope.permits, group_plan.SECONDS
+        limits = dict(allowed=scope.permits, limits='group', max_attempts=attempts_cap, seconds=seconds,
+                      send_reserve=group_plan.SEND_RESERVE)
     else:
         paths, sends, seconds = PATHS, MAX_SENDS, SECONDS
         limits = dict(max_attempts=len(PATHS), seconds=SECONDS, breaker=StrictBreaker())
@@ -168,7 +172,9 @@ def run(folder):
                     if group:
                         budget = spec.get('test_planned_attempts') if provider == 'fixture-site' else None
                         descriptor = collect_group(store, transport, scope, baseline, output, now=started,
-                                                   cancelled=cancel.exists, budget=budget, listed_at=listed_at)
+                                                   cancelled=cancel.exists, budget=budget, listed_at=listed_at,
+                                                   limits=dict(attempts=attempts_cap, sends=sends),
+                                                   detail_rounds=spec.get('detail_rounds'))
                         again = lambda: collect_group(store, transport, scope, baseline, output, now=clock())  # noqa: E731
                     else:
                         descriptor = collect(store, transport, baseline, output, cancelled=cancel.exists)
@@ -187,7 +193,9 @@ def run(folder):
     connections = monitor.stop()
     summary = dict(provider=provider, started_at=spec['started_at'], finished_at=now(), error=error,
                    cancelled=cancel.exists(), stopped=report['stopped'], descriptor=descriptor, attempts=attempts,
-                   recipe=spec['recipe_id'], limits=dict(sends=sends, job_s=seconds),
+                   recipe=spec['recipe_id'],
+                   limits=dict(sends=sends, job_s=seconds, attempts=limits['max_attempts'],
+                               detail_rounds=spec.get('detail_rounds') if group else None),
                    sends=report['sends'], requests=report['requests'], sandbox=report['sandbox'],
                    sessions=report['sessions'], launches=report['launches'], browser=report['browser'],
                    events=report['events'], connections=connections)

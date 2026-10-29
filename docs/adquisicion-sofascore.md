@@ -1,14 +1,14 @@
 # Adquisición desde SofaScore: estado vigente
 
-Actualizado el 28-10-2026. Punto de entrada; los informes de los pilotos están en [historico/](historico/README.md).
+Actualizado el 29-10-2026. Punto de entrada; los informes de los pilotos están en [historico/](historico/README.md).
 Despliegue: **Docker Compose**, con el overlay `rj-analyst/compose.acquisition.yaml` (procedimiento en
 `rj-analyst/docs/docker.md`, «Adquisición»). Contrato y garantías: [contrato-adquisicion-interno.md](contrato-adquisicion-interno.md).
 Desde la interfaz, el operador lanza por defecto la receta del Grupo 2, «Actualizar Grupo 2»
 (`rj-analyst/docs/contrato-actualizaciones.md`). Consulta los resultados que faltan, los aplazados, los cambios de
 calendario y las correcciones de las últimas 72 h, y publica con cobertura parcial
-([diseno-receta-grupo2.md](diseno-receta-grupo2.md)). Solo se ha validado con el sitio local: su primera
-ejecución real está pendiente de autorización. La receta del piloto (calendario de la jornada 1 y un partido)
-se conserva para las pruebas.
+([diseno-receta-grupo2.md](diseno-receta-grupo2.md)). Primera ejecución real el 29-10-2026, una sola vez,
+sobre una copia aislada y con los detalles restringidos a la jornada 9: [prueba-real-grupo2.md](prueba-real-grupo2.md).
+La receta del piloto (calendario de la jornada 1 y un partido) se conserva para las pruebas.
 Perfil del navegador: [perfil-adquisicion-diseno-final.md](perfil-adquisicion-diseno-final.md).
 
 ## Flujo que funciona

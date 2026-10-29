@@ -144,6 +144,28 @@ class TransportTests(unittest.TestCase):
                     with self.assertRaises(Stopped):self.get(t,PATHS[-1])
                     self.assertEqual(len(hits),1)
 
+class SendReserve(unittest.TestCase):
+    """Below the reserve of physical sends the transport schedules nothing more: in the group, an exhausted budget
+    (pending 'budget', partial publication), never a refusal; nothing is sent."""
+    def test_reserve_is_budget_not_refusal(self):
+        class Few(Transport):
+            left = 3
+            def remaining_sends(self):return self.left
+        clock=Clock()
+        with tempfile.TemporaryDirectory() as root,server({PATHS[1]:[(200,{}, {'event':{'id':16599363}})]}) as (url,hits):
+            context=dict(job_id=str(uuid.uuid4()),request_id=str(uuid.uuid4()),inventory_sha256='a'*64)
+            with Few(Path(root),loopback_url=url,clock=clock,sleep=clock.sleep,limits='group',max_attempts=60,send_reserve=4,
+                     allowed=lambda path:True,**context) as t:
+                async def work():
+                    async with t:return await t.get(PATHS[1])
+                result=asyncio.run(work())
+                self.assertEqual((result.status,result.reason,hits,t.state['attempts']),('failed','budget',[],[]))
+                self.assertNotIn('_blocked',t.retry)
+                Few.left=4
+                self.assertEqual(asyncio.run(work()).status,'ok')
+                self.assertEqual(hits,[PATHS[1]])
+
+
 class ArtifactFailures(unittest.TestCase):
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)

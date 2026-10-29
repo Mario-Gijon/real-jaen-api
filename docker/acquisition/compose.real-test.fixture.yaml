@@ -1,0 +1,19 @@
+# Rehearsal overlay of compose.real-test.yaml: the local provider inside the acquisition container (test image of
+# the same tree), simulated time, no egress. The backend accepts only the loopback test transport.
+services:
+  acquisition:
+    environment:
+      ACQ_TEST_MODE: "1"
+      ACQ_PROVIDER: fixture-site
+      ACQ_FIXTURE_ROUTES: /fixtures/routes.json
+      ACQ_FIXTURE_SCENARIO: challenge
+      ACQ_TEST_NOW: ${RJ_REAL_TEST_NOW:?Set the simulated instant of the rehearsal}
+    volumes:
+      - type: bind
+        source: ${RJ_REAL_ROUTES:?Set the recorded routes file}
+        target: /fixtures/routes.json
+        read_only: true
+        bind: {create_host_path: false}
+  backend-control:
+    environment:
+      RJ_ACQUISITION_TEST: "1"

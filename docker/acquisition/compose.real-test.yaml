@@ -1,0 +1,114 @@
+# Single real run of the Group 2 recipe on an isolated copy, and its rehearsals (driver: real_group.py).
+# Never merge with the habitual Compose. This base file has NO egress: the acquisition service is only on the
+# internal network. Overlays: compose.real-test.fixture.yaml (local provider, rehearsal), compose.real-test.sofascore
+# .yaml (real provider) and compose.real-test.egress.yaml (the only file that gives the service an egress network).
+# The installation can only lower the production limits; the backend requires bundles to declare exactly them.
+services:
+  profile-admin:
+    image: ${RJ_REAL_ACQUISITION_IMAGE:?Set the acquisition image by id}
+    pull_policy: never
+    entrypoint: [python, -B, -m, acquisition.admin]
+    init: true
+    network_mode: none
+    user: "10001:10001"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true", "seccomp=./seccomp-linux-amd64.json"]
+    shm_size: 512m
+    volumes: ["profiles:/profiles"]
+  acquisition:
+    image: ${RJ_REAL_ACQUISITION_IMAGE:?Set the acquisition image by id}
+    pull_policy: never
+    entrypoint: [python, -B, -m, acquisition.service]
+    init: true
+    user: "10001:10001"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true", "seccomp=./seccomp-linux-amd64.json"]
+    shm_size: 512m
+    mem_limit: 2g
+    pids_limit: 512
+    environment:
+      ACQ_SECRET_FILE: /run/secrets/acquisition-token
+      ACQ_MAX_ATTEMPTS: ${RJ_REAL_MAX_ATTEMPTS:?Set the reduced logical attempts}
+      ACQ_MAX_SENDS: ${RJ_REAL_MAX_SENDS:?Set the reduced physical sends}
+      ACQ_DETAIL_ROUNDS: ${RJ_REAL_DETAIL_ROUNDS:?Set the only rounds whose matches may be consulted}
+    volumes:
+      - profiles:/profiles
+      - jobs:/acquisition-jobs
+      - type: bind
+        source: ${RJ_REAL_SECRET_FILE:?Set the temporary acquisition secret file}
+        target: /run/secrets/acquisition-token
+        read_only: true
+        bind: {create_host_path: false}
+    networks: [control]
+  backend-client:
+    image: ${RJ_REAL_BACKEND_CLIENT_IMAGE:?Set the backend client image by id}
+    pull_policy: never
+    init: true
+    user: "10001:10001"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      RJ_REAL_PROVIDER: ${RJ_REAL_PROVIDER:?fixture-site or sofascore}
+      RJ_REAL_SNAPSHOT_SHA256: ${RJ_REAL_SNAPSHOT_SHA256:?Set the identified copy's sha256}
+      RJ_ACQUISITION_MAX_ATTEMPTS: ${RJ_REAL_MAX_ATTEMPTS:?}
+      RJ_ACQUISITION_MAX_SENDS: ${RJ_REAL_MAX_SENDS:?}
+      RJ_ACQUISITION_DETAIL_ROUNDS: ${RJ_REAL_DETAIL_ROUNDS:?}
+    volumes:
+      - state:/state
+      - type: bind
+        source: ${RJ_REAL_SECRET_FILE:?}
+        target: /run/secrets/acquisition-token
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${RJ_REAL_SNAPSHOT:?Set the identified inactive copy}
+        target: /imports/snapshot.sqlite
+        read_only: true
+        bind: {create_host_path: false}
+    networks: [control]
+  # The button's path: the backend in control mode over the isolated copy, on loopback only. It accepts only
+  # bundles that declare exactly this installation's restriction.
+  backend-control:
+    image: ${RJ_REAL_BACKEND_IMAGE:?Set the backend image by id}
+    pull_policy: never
+    entrypoint: [python, -B, /app/control.py]
+    command: [--base, /state/base.sqlite, --ambito, /app/ambito.json, --host, 0.0.0.0, --port, "8001"]
+    init: true
+    user: "10001:10001"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      RJ_UPDATE_RECIPE: sofascore-group2-2627-v1
+      RJ_ACQUISITION_URL: http://acquisition:8002
+      RJ_ACQUISITION_SECRET_FILE: /run/secrets/acquisition-token
+      RJ_CONTROL_SECRET_FILE: /run/secrets/control-token
+      RJ_ACQUISITION_MAX_ATTEMPTS: ${RJ_REAL_MAX_ATTEMPTS:?}
+      RJ_ACQUISITION_MAX_SENDS: ${RJ_REAL_MAX_SENDS:?}
+      RJ_ACQUISITION_DETAIL_ROUNDS: ${RJ_REAL_DETAIL_ROUNDS:?}
+    volumes:
+      - state:/state
+      - type: bind
+        source: ${RJ_REAL_SECRET_FILE:?}
+        target: /run/secrets/acquisition-token
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${RJ_REAL_CONTROL_SECRET_FILE:?Set the temporary control secret file}
+        target: /run/secrets/control-token
+        read_only: true
+        bind: {create_host_path: false}
+    ports: ["127.0.0.1:${RJ_REAL_CONTROL_PORT:-18003}:8001"]
+    networks: [control, published]
+networks:
+  control: {internal: true}
+  published: {}
+volumes:
+  profiles:
+    external: true
+    name: ${RJ_REAL_PROFILE_VOLUME:?New exclusive volume required}
+  jobs:
+    external: true
+    name: ${RJ_REAL_JOBS_VOLUME:?New exclusive volume required}
+  state:
+    external: true
+    name: ${RJ_REAL_STATE_VOLUME:?New exclusive volume required}

@@ -1,8 +1,9 @@
 # Receta del Grupo 2 (`sofascore-group2-2627-v1`) y publicación con cobertura parcial
 
 Implementada el 28-10-2026 sobre el único recorrido existente: botón, `control.py`, cliente, servicio de
-adquisición, coordinador. Validada con horas simuladas, sitio local y una copia aislada. **Todavía sin ninguna
-consulta real a SofaScore.** Contratos: [contrato-adquisicion-interno.md](contrato-adquisicion-interno.md) y
+adquisición, coordinador. Validada con horas simuladas, sitio local y una copia aislada, y ejecutada una vez contra
+SofaScore el 29-10-2026 sobre una copia aislada, con los detalles restringidos a la jornada 9
+([prueba-real-grupo2.md](prueba-real-grupo2.md)). Contratos: [contrato-adquisicion-interno.md](contrato-adquisicion-interno.md) y
 `../rj-analyst/docs/contrato-actualizaciones.md`.
 
 ## Decisiones aplicadas
@@ -201,10 +202,22 @@ backend y la copia aislada. Tres pulsaciones con horas simuladas:
 - cuatro manipulaciones rechazadas: un pendiente presentado como dato, un original anterior eliminado, un partido
   nuevo no listado y un original no consultado alterado.
 
+## Restricciones de una instalación
+
+- **Solo para pruebas.** Solo pueden reducir los máximos de producción:
+  - `ACQ_MAX_ATTEMPTS` y `ACQ_MAX_SENDS`;
+  - `ACQ_DETAIL_ROUNDS`, que limita los detalles a unas jornadas; lo demás queda como `restricted`.
+
+  El manifiesto las declara (`plan.limits`, `plan.detail_rounds`), el verificador las comprueba y el backend puede
+  exigirlas (`RJ_ACQUISITION_*`). Detalle en [prueba-real-grupo2.md](prueba-real-grupo2.md).
+
 ## Pendiente
 
-- **Una única prueba real autorizada,** primero con una jornada (≈ 50 envíos), para confirmar los listados reales
-  de jornada, que incluyen los dos grupos, y el comportamiento del challenge con más peticiones seguidas.
+- **Hecho el 29-10: una prueba real con una jornada.**
+  - 48 intentos y 49 envíos.
+  - Los listados reales traen los dos grupos y el filtro funciona.
+  - Hubo un challenge al principio y 48 peticiones seguidas por el navegador sin otro challenge.
+  - Pendiente: una actualización real sin restricción.
 - **El mantenimiento único de la base activa** antes de usarlo sobre ella.
 - **Las correcciones de jornadas completas con más de 72 h** no se detectan, salvo las que cambian el listado de una
   jornada que se vuelve a listar. Es el alcance de la regla 72 h / 6 h.

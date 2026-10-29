@@ -30,9 +30,13 @@ UPCOMING_S = 7 * 86400
 FAR_ROUNDS_PER_RUN = 6
 # Physical sends of one update and the logical attempts planned inside them (the rest absorbs retries and the
 # browser's own requests: the curl that meets the challenge and the bridge's check).
-MAX_SENDS = 120
-PLANNED_ATTEMPTS = 100
+MAX_SENDS = 120          # physical sends of the adapter (curl and the browser's fetch()), production maximum
+MAX_ATTEMPTS = MAX_SENDS - 4  # logical attempts of the transport (each GET of a route, retries included)
+PLANNED_ATTEMPTS = 100   # attempts the plan may schedule (listings included)
 SECONDS = 900
+# Worst case of physical sends of one logical attempt (curl, browser fetch, retry and the bridge's own check): below
+# this headroom the transport schedules no more attempts and the rest stays pending as "budget".
+SEND_RESERVE = 4
 FINISHED = 'finished'
 OPEN_LATER = ('postponed', 'suspended', 'interrupted', 'delayed')
 PRIORITY = ('pending', 'finished', 'changed', 'refresh')
@@ -139,10 +143,19 @@ def in_scope(row, teams):
             and (row.get('homeTeam') or {}).get('id') != (row.get('awayTeam') or {}).get('id'))
 
 
-def plan_matches(baseline, listed, now, *, budget=PLANNED_ATTEMPTS):
+def round_of(match_or_row):
+    """The round of an inventory match (`round`) or of a listed row (`roundInfo.round`); None if unknown."""
+    if 'round' in match_or_row:
+        return match_or_row['round']
+    return (match_or_row.get('roundInfo') or {}).get('round')
+
+
+def plan_matches(baseline, listed, now, *, budget=PLANNED_ATTEMPTS, detail_rounds=None):
     """Matches to consult. `listed`: {match id: row of a round page just listed}. Returns (planned, deferred):
     planned is a list of dict(id, reason, keys, cost) in consultation order; deferred the ones left for the next
-    update ({id: reason}). keys: the sections to ask besides the event (empty: event only)."""
+    update ({id: 'budget' | 'restricted'}). keys: the sections to ask besides the event (empty: event only).
+    detail_rounds: an explicit restriction of this installation; a candidate of another round (or of an unknown one)
+    is never consulted, only deferred as 'restricted', whatever the date."""
     known = matches(baseline)
     candidates = []
     for ident, m in known.items():
@@ -171,6 +184,11 @@ def plan_matches(baseline, listed, now, *, budget=PLANNED_ATTEMPTS):
     candidates.sort(key=lambda c: (PRIORITY.index(c[0]), c[1], c[2]))
     planned, deferred, used = [], {}, 0
     for reason, _start, ident, keys in candidates:
+        if detail_rounds is not None:
+            number = round_of(known[ident]) if ident in known else round_of(listed[ident])
+            if number not in detail_rounds:
+                deferred[ident] = 'restricted'
+                continue
         cost = 1 + len(keys)
         if used + cost > budget:
             deferred[ident] = 'budget'
