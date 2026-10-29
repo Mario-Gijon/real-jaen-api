@@ -702,7 +702,8 @@ def estadisticas_de_actuacion(registros, estado, conflictos, gol, conflicto_de_p
     `conflictos` los grupos que discrepan entre versiones; `gol` el estado_de_gol. source: `reported` (lo da la
     fuente, también un 0), `derived` (fijado por una relación con valores explícitos del mismo registro; `rule`),
     `calculated` (cociente; `rule`) o `unused` (0 de un no utilizado). Sin valor, `reason`: not_reported,
-    reported_null, invalid, duplicate_disagree, version_conflict, inconsistent, participation_unknown, not_applicable.
+    reported_null, invalid, duplicate_disagree, version_conflict, inconsistent, participation_unknown, not_applicable
+    (actuacion añade before_score_correction a la valoración de una alineación anterior a un marcador corregido).
     Nunca se usa una clave ausente como 0 ni el total del equipo."""
     if estado == 'unknown' or conflicto_de_partido:
         motivo = 'participation_unknown' if estado == 'unknown' else 'version_conflict'
@@ -878,6 +879,10 @@ def actuacion(filas, partido, contexto):
            estado_de_gol(registros, None if contexto['goles'] is None else contexto['goles'].get(jugador, 0), conflictos))
     estadisticas, problemas = estadisticas_de_actuacion(registros, estado, conflictos, gol,
                                                         conflicto_de_partido=partido.get('version_conflict') is True)
+    if previa:
+        # La valoración de la fuente incluye los goles: la de una alineación anterior al marcador corregido no es la
+        # del partido vigente. El original se conserva en la sección; vuelve a usarse al releerla.
+        estadisticas['rating'] = dato(None, reason='before_score_correction')
     for codigo, grupo, claves_grupo in problemas:
         if codigo not in incidencias:
             incidencias.append(codigo)

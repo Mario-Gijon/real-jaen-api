@@ -470,6 +470,25 @@ class CorreccionDelEvento(unittest.TestCase):
         self.assertNotIn('convocatorias_apartadas', datos)
         self.assertIn(crear.UNO, api.actuaciones_del_partido(datos, crear.FINALIZADO))
 
+    @staticmethod
+    def con_valoracion(datos, valor=7.4):
+        """La muestra no trae valoraciones: se da una a UNO en este partido (sus registros de convocatoria)."""
+        for r in datos['jugador_partido']:
+            if r['match_id'] == crear.FINALIZADO and r['player_id'] == crear.UNO:
+                r['statistics'] = dict(r['statistics'], rating=valor)
+        return datos
+
+    def test_la_valoracion_de_la_alineacion_anterior_no_es_vigente(self):
+        valoracion = lambda d: api.actuaciones_del_partido(d, crear.FINALIZADO)[crear.UNO]['stats']['rating']  # noqa: E731
+        self.assertEqual(valoracion(self.con_valoracion(copy.deepcopy(DATOS)))['value'], 7.4)
+        datos = self.con_valoracion(self.corregido())
+        self.assertEqual(valoracion(datos), {'value': None, 'source': None, 'rule': None, 'reason': 'before_score_correction'})
+        # El original sigue en su registro y en la sección; no cuenta en ninguna media.
+        [fila] = [f for f in api.consultar(datos, f'/api/v1/players/{crear.UNO}/matches')[1]['data'] if f['match_id'] == crear.FINALIZADO]
+        self.assertEqual((fila['statistics']['rating'], fila['normalized']['stats']['rating']['value']), (7.4, None))
+        # Tras una relectura válida vuelve a usarse.
+        self.assertEqual(valoracion(self.con_valoracion(self.corregido(secciones_leidas=SECCIONES)))['value'], 7.4)
+
     def test_las_metricas_que_dependen_del_gol_no_se_derivan(self):
         # Sin un gol fiable no se fija ningún tiro a puerta por la partición de tiros: queda lo que da la fuente.
         datos = self.corregido()

@@ -227,6 +227,8 @@ Actual (`actuacion()` en `api.py`; README, «Normalización de convocatorias»):
   - unas alineaciones así dejan sin dato los goles y asistencias de los que jugaron, con la incidencia
     `lineups_before_score_correction` y su evidencia (fechas de lectura, cuándo se observó el marcador y cuál es).
     El gol se trata como dudoso: no permite deducir tiros;
+  - la valoración (`rating`) de esas alineaciones tampoco es la del partido vigente, porque la fuente la calcula con
+    los goles: queda sin dato con el motivo `before_score_correction` y no entra en medias. El original se conserva;
   - la participación, los minutos, las demás estadísticas individuales y las del equipo no dependen del marcador:
     se siguen usando;
   - el resultado del partido cuenta con el marcador corregido.
