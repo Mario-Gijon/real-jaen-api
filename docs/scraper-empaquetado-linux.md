@@ -1,7 +1,7 @@
 # Empaquetado offline del scraper y Chromium
 
 > Estado 29-10-2026: integrado. La imagen de este empaquetado es la base (`RJ_SCRAPER_RUNTIME_IMAGE`) de la imagen de
-> adquisición (`docker/acquisition/Dockerfile`, overlay `rj-analyst/compose.acquisition.yaml`). El fallo de sandbox
+> adquisición (`docker/acquisition/Dockerfile`, overlay `app-real-jaen/compose.acquisition.yaml`). El fallo de sandbox
 > de los resultados del 26-10 se resolvió con el perfil seccomp `docker/acquisition/seccomp-linux-amd64.json`
 > ([diagnostico-sandbox-linux.md](diagnostico-sandbox-linux.md)). Estado vigente: [adquisicion-sofascore.md](adquisicion-sofascore.md).
 > Los apartados de resultados y decisión conservan lo medido el 26-10-2026.
@@ -65,7 +65,7 @@ con contextos adicionales, acceso a registros/PyPI/CDN de Chromium durante build
 el navegador y sus bibliotecas. No se arranca Docker Desktop ni se cambia el motor desde scripts.
 El host de ejecucion de una imagen ya construida solo necesita Docker y una shell POSIX.
 
-Desde la raiz api-real-jaen, con el checkout del scraper disponible solo para exportar:
+Desde la raíz de `api`, con el checkout del scraper disponible solo para exportar:
 
 ```sh
 set -eu

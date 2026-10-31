@@ -3,7 +3,7 @@
 > Estado 29-10-2026: implementado e integrado en el servicio de adquisición. Perfil seccomp aplicado:
 > `docker/acquisition/seccomp-linux-amd64.json`. Estado general: [adquisicion-sofascore.md](adquisicion-sofascore.md).
 
-> Implementación parcial aprobada: [gestión del perfil y CLI offline](gestion-perfil-adquisicion.md). Solo profile.py, browser.py, admin.py, imágenes/pruebas y Compose administrativo independiente. El servicio completo y sus comandos de arranque siguen siendo futuros; los diagnósticos anteriores no se reutilizan como runtime. En esta entrega browser.py usa Patchright directamente, sin integrar BrowserBridge ni su fallback; su conexión futura al scraper queda fuera del alcance.
+> Nota de vigencia: este documento conserva la especificación histórica del diseño del perfil. La integración operativa vigente está descrita en [adquisicion-sofascore.md](adquisicion-sofascore.md) y [dashboard/docs/docker.md](../../dashboard/docs/docker.md); el overlay actual reside en `app-real-jaen/compose.acquisition.yaml`. Los comandos y nombres de perfil de la propuesta de abajo no son un runbook para la instalación actual.
 
 Decisión aprobada el 26-10-2026. Especificación, NO implementación ni integración.
 Este documento es normativo para el servicio futuro y sustituye la propuesta de
@@ -99,19 +99,11 @@ perfil vacío por conveniencia. Salida distinta de cero significa no arrancar ac
 Tras éxito, verificar de nuevo el estado limpio bajo el mismo bloqueo antes de liberar.
 No borrar respaldos automáticamente; retención y eliminación son operaciones separadas.
 
-## Procedimiento Compose previsto
+## Procedimiento Compose especificado en el diseño histórico
 
-Estos comandos son la ESPECIFICACIÓN de la entrega futura: los servicios, overlay y
-CLI indicados TODAVÍA NO EXISTEN. No ejecutarlos con el Compose actual de dos servicios.
-Ejecutar desde el checkout/export `rj-analyst/`, junto a su hermano `api-real-jaen/`, o
-con imágenes versionadas. Variables sin secretos en `.env.docker`; paths del host no
-se incrustan en las imágenes. Los nombres/rutas de volúmenes son configurables.
+Los comandos que siguen describen la propuesta aprobada para el perfil, no la operación actual. No ejecutarlos como procedimiento vigente: el overlay actual y sus requisitos están documentados en los enlaces de la nota superior. En la propuesta histórica, la configuración del workspace estaba en `.env.docker`, sin secretos; las rutas del anfitrión no se incrustaban en las imágenes.
 
-La futura `compose.acquisition.yaml` definirá acquisition y un perfil administrativo
-`maintenance` con servicio `acquisition-admin`. Este último no es un daemon ni un cuarto
-servicio permanente: usa la misma imagen, usuario, volumen de perfil, ruta de bloqueo y
-restricciones, con `network_mode: none`, sin puertos ni dependencias. No monta SQLite
-sport ni journal. Los respaldos del perfil permanecen en su almacenamiento exclusivo.
+La propuesta definía un perfil administrativo `maintenance` con servicio `acquisition-admin`. Ese servicio no es un daemon ni un servicio permanente: usaría la misma imagen, usuario, volumen de perfil, ruta de bloqueo y restricciones, con `network_mode: none`, sin puertos ni dependencias. No montaría SQLite deportivo ni su journal. Los respaldos del perfil permanecerían en su almacenamiento exclusivo.
 No pasar al admin credenciales de API de adquisición o del backend; sí necesita el perfil completo, que contiene sus cookies y debe tratarse como material sensible. Nunca `down -v` o prune.
 
 Arranque habitual con perfil compatible disponible, sin recuperación ni consultas automáticas:
@@ -183,22 +175,22 @@ Rutas propuestas; no se crean módulos ni overlays en esta entrega:
 
 | Repositorio / archivo | Cambio previsto |
 |---|---|
-| api-real-jaen/acquisition/__init__.py | Paquete pequeño, sin framework genérico de trabajos |
-| api-real-jaen/acquisition/profile.py | flock permanente, rutas canónicas, estados/generaciones, copias verificadas, confirmación durable y errores de recuperación; sin lógica Docker o JSON de autorización |
-| api-real-jaen/acquisition/admin.py | CLI initialize-profile para destino nuevo, recover-profile y verify-profile; confirmaciones explícitas, red deshabilitada y códigos de salida; reutiliza profile.py |
-| api-real-jaen/acquisition/browser.py | Adaptador estricto del BrowserBridge fijado: sandbox explícito, una ruta bajo propietario, rechazo de _use_secondary_profile, cierre/hijos; no monkeypatch global en producción |
-| api-real-jaen/acquisition/service.py | Servicio interno mínimo, único trabajo activo, estado durable y readiness bloqueada por perfil; sin consultas automáticas en arranque ni comandos arbitrarios |
-| api-real-jaen/acquisition/export.py | Preparar/verificar/sellar bundles inmutables desde mecanismos del scraper; nunca importar datos deportivos |
-| api-real-jaen/acquisition/recipes.py | Recetas fijas aprobadas y configuración de ámbito; implementar SOLO tras concretar las políticas históricas/personales y cobertura |
-| api-real-jaen/docker/acquisition/Dockerfile y .dockerignore | Imagen reproducible con scraper exportado/revisión fija y navegador, UID no root; excluye frontend, datos, env y lock ajeno; sin dependencias SQL deportivas innecesarias |
-| api-real-jaen/docker/acquisition/requirements.lock | Versiones exactas de dependencias de servicio y navegador; manifiesto/digest reproducible; build separado del diagnóstico |
-| api-real-jaen/docker/acquisition/seccomp-linux-amd64.json | Copia revisada de baseline más cinco reglas aprobadas, sin ampliación; otras arquitecturas requieren perfil/revisión propios |
-| api-real-jaen/tests/acquisition/test_profile.py y test_admin.py | Contrato de propietario, confirmaciones, copias/candidata, fallos de publicación y ausencia de fallback |
-| api-real-jaen/docker/acquisition/test_offline.py | Integración Linux/Compose aislada con contenido local, sandbox, concurrencia, señales y recuperación administrativa real |
-| rj-analyst/compose.acquisition.yaml | Overlay optativo acquisition/acquisition-admin, redes separadas, admin sin red, volumen propio externo, sin montaje deportivo ni puertos públicos |
-| rj-analyst/.env.acquisition.example | Variables documentadas sin secretos ni rutas locales: imagen, volumen exclusivo y límites; ninguna variable de auto-recuperación |
-| rj-analyst/docs/docker.md y README.md | Instalación explícita del almacenamiento, arranque normal, mantenimiento/recuperación manual y límites del bloqueo |
-| api-real-jaen/README.txt y docs/ | Sustituir referencias de prototipo por comandos implementados, documentar revisiones, seguridad y resultados reales |
+| api/acquisition/__init__.py | Paquete pequeño, sin framework genérico de trabajos |
+| api/acquisition/profile.py | flock permanente, rutas canónicas, estados/generaciones, copias verificadas, confirmación durable y errores de recuperación; sin lógica Docker o JSON de autorización |
+| api/acquisition/admin.py | CLI initialize-profile para destino nuevo, recover-profile y verify-profile; confirmaciones explícitas, red deshabilitada y códigos de salida; reutiliza profile.py |
+| api/acquisition/browser.py | Adaptador estricto del BrowserBridge fijado: sandbox explícito, una ruta bajo propietario, rechazo de _use_secondary_profile, cierre/hijos; no monkeypatch global en producción |
+| api/acquisition/service.py | Servicio interno mínimo, único trabajo activo, estado durable y readiness bloqueada por perfil; sin consultas automáticas en arranque ni comandos arbitrarios |
+| api/acquisition/export.py | Preparar/verificar/sellar bundles inmutables desde mecanismos del scraper; nunca importar datos deportivos |
+| api/acquisition/recipes.py | Recetas fijas aprobadas y configuración de ámbito; implementar SOLO tras concretar las políticas históricas/personales y cobertura |
+| api/docker/acquisition/Dockerfile y .dockerignore | Imagen reproducible con scraper exportado/revisión fija y navegador, UID no root; excluye frontend, datos, env y lock ajeno; sin dependencias SQL deportivas innecesarias |
+| api/docker/acquisition/requirements.lock | Versiones exactas de dependencias de servicio y navegador; manifiesto/digest reproducible; build separado del diagnóstico |
+| api/docker/acquisition/seccomp-linux-amd64.json | Copia revisada de baseline más cinco reglas aprobadas, sin ampliación; otras arquitecturas requieren perfil/revisión propios |
+| api/tests/acquisition/test_profile.py y test_admin.py | Contrato de propietario, confirmaciones, copias/candidata, fallos de publicación y ausencia de fallback |
+| api/docker/acquisition/test_offline.py | Integración Linux/Compose aislada con contenido local, sandbox, concurrencia, señales y recuperación administrativa real |
+| app-real-jaen/compose.acquisition.yaml | Overlay optativo acquisition/acquisition-admin, redes separadas, admin sin red, volumen propio externo, sin montaje deportivo ni puertos públicos |
+| dashboard/.env.acquisition.example | Variables documentadas sin secretos ni rutas locales: imagen, volumen exclusivo y límites; ninguna variable de auto-recuperación |
+| dashboard/docs/docker.md y README.md | Instalación explícita del almacenamiento, arranque normal, mantenimiento/recuperación manual y límites del bloqueo |
+| api/README.txt y docs/ | Sustituir referencias de prototipo por comandos implementados, documentar revisiones, seguridad y resultados reales |
 
 Mantener docker/scraper/* y sus resultados como diagnósticos; no convertir
 profile_owner_probe.py/test_profile_recovery.py en código de producción ni aplicar su

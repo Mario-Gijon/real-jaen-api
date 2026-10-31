@@ -1,6 +1,6 @@
 # Gestión del perfil de adquisición: entrega interna offline
 
-> Estado 29-10-2026: el servicio de adquisición y su overlay (`rj-analyst/compose.acquisition.yaml`) existen y están
+> Estado 29-10-2026: el servicio de adquisición y su overlay (`app-real-jaen/compose.acquisition.yaml`) existen y están
 > en uso; este documento describe la gestión del perfil (`acquisition/profile.py`, `browser.py`, `admin.py`), que
 > sigue vigente. Estado general: [adquisicion-sofascore.md](adquisicion-sofascore.md).
 
@@ -72,7 +72,7 @@ necesitar el runtime intermedio, Python, Node ni PowerShell del host. Para recon
 transportar también el runtime auditado como artefacto; reconstruirlo desde fuentes
 es una preparación separada que requiere sus dependencias y acceso a registros. No depende de artifacts ni de rutas temporales para funcionar.
 
-Desde la raíz de api-real-jaen (comandos POSIX; variables elegidas por el operador):
+Desde la raíz de `api` (comandos POSIX; variables elegidas por el operador):
 
 ```sh
 export RJ_PROFILE_RUNTIME='etiqueta-local-del-runtime-auditado'

@@ -2,7 +2,7 @@
 
 Vigente desde el 28-10-2026. Sustituye a la integración simulada v1 y al protocolo v2 del piloto, ambos en
 [historico/](historico/README.md). Estado de la adquisición y ejecuciones reales: [adquisicion-sofascore.md](adquisicion-sofascore.md).
-Despliegue y operación: `rj-analyst/compose.acquisition.yaml` y `rj-analyst/docs/docker.md` («Adquisición»).
+Despliegue y operación: `app-real-jaen/compose.acquisition.yaml` y `dashboard/docs/docker.md` («Adquisición»).
 
 ## Fronteras
 
@@ -74,7 +74,7 @@ evidencia sellada siga siendo verificable.
 
 `Cliente.publicar(coordinador, request_id, receta)` (`persistencia/adquisicion.py`), llamado por el control de
 actualizaciones del backend en modo control (`control.py`, el botón «Actualizar» de la interfaz, contrato en
-`../rj-analyst/docs/contrato-actualizaciones.md`) o por la orden `python -m persistencia adquirir` con la API
+`../../dashboard/docs/contrato-actualizaciones.md`) o por la orden `python -m persistencia adquirir` con la API
 detenida. Ese control dispara la receta configurada (por defecto la del Grupo 2; `control.SCOPES`), con un único trabajo activo, claves de idempotencia y
 cancelación cooperativa mientras se adquiere; su registro de trabajos vive en `<base>.actualizaciones/control/`. Bajo `<base>.actualizaciones/adquisiciones/<request_id>/`
 anota cada paso antes de darlo: inventario, trabajo de adquisición, bundle descargado y cada intento de importación.

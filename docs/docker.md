@@ -1,8 +1,6 @@
 # Backend en Docker
 
-La composición se mantiene en el repositorio hermano **rj-analyst/compose.yaml**; procedimiento
-canónico, variables, instalación, arranque, parada, logs, copias y mantenimiento:
-`../rj-analyst/docs/docker.md`. Cada repositorio conserva su Dockerfile; no se mezclan arquitecturas.
+La composición compartida se mantiene en la raíz del workspace **app-real-jaen/compose.yaml**; procedimiento canónico, variables, instalación, arranque, parada, logs, copias y mantenimiento: `../../dashboard/docs/docker.md`. Los repositorios `dashboard/` y `api/` conservan sus propios Dockerfiles; no se mezclan arquitecturas. Los comandos Compose se ejecutan desde la raíz del workspace con `--env-file .env.docker -f compose.yaml`.
 
 Esta imagen usa Python 3.14.4 slim-bookworm fijado por digest y las versiones SQL exactas de
 requirements-sql.txt. Solo copia código, ámbito y configuración Alembic, nunca .env.local, SQLite,
@@ -62,8 +60,7 @@ no acredita importaciones posteriores. Base activa y servicios Windows intactos.
 Linux y symlinks validados en este volumen ext4; otros almacenamientos, NTFS compartido,
 coordinacion Windows/Linux sobre una misma base y caida completa de VM/host siguen sin validar.
 
-Entrega portable a Linux: colocar api-real-jaen y rj-analyst como carpetas hermanas, con
-Compose en rj-analyst y deployment/imports fuera de ambos contextos. La guia canonica incluye
+Entrega portable a Linux: colocar `dashboard/`, `api/` y `deployment/` bajo la raíz `app-real-jaen/`; Compose reside en esa raíz y `deployment/imports` queda fuera de los contextos de construcción. La guia canonica incluye
 comandos POSIX para primera instalacion, arranque con base existente, mantenimiento y recuperacion.
 No requiere PowerShell, Python, Node ni entornos del anfitrion para instalar u operar Docker.
 Tambien documenta entrega de imagenes versionadas sin fuentes en el servidor, configuracion

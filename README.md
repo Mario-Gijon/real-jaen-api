@@ -1,6 +1,6 @@
-# api-real-jaen
+# api
 
-Backend del dashboard [rj-analyst](../rj-analyst/README.md) para el analista del Real Jaén CF. Sirve, sin
+Backend del dashboard [rj-analyst](../dashboard/README.md) para el analista del Real Jaén CF. Sirve, sin
 autenticación propia y solo al servidor del dashboard, los datos reales importados de SofaScore:
 
 - **importador** (`importar.py`): exportaciones del scraper → selección de versiones, discrepancias y procedencia;
@@ -29,14 +29,11 @@ Instrucciones para agentes: [AGENTS.md](AGENTS.md).
 
 ## Instalación y operación
 
-Se hace con Docker Compose desde rj-analyst, clonado en una carpeta hermana de esta
-(`git clone -b feature/rj-analyst ssh://git@serezade.ujaen.es:8032/fjmimbre/app-real-jaen.git rj-analyst`); no hay
-otra instalación vigente. Puesta en marcha: [../rj-analyst/README.md](../rj-analyst/README.md), «Puesta en marcha con
-Docker». Además:
+Se hace con Docker Compose desde la raíz `app-real-jaen/`, que contiene los repositorios `dashboard/` y `api/`. La orquestación compartida está en `../compose.yaml`; cada servicio conserva su Dockerfile. Puesta en marcha: [../dashboard/README.md](../dashboard/README.md), «Puesta en marcha con Docker». Además:
 
-- instalación, arranque, mantenimiento, copias y adquisición: [../rj-analyst/docs/docker.md](../rj-analyst/docs/docker.md);
-- servidor del grupo: [../rj-analyst/docs/despliegue-servidor.md](../rj-analyst/docs/despliegue-servidor.md);
-- contrato del botón: [../rj-analyst/docs/contrato-actualizaciones.md](../rj-analyst/docs/contrato-actualizaciones.md).
+- instalación, arranque, mantenimiento, copias y adquisición: [../dashboard/docs/docker.md](../dashboard/docs/docker.md);
+- servidor del grupo: [../dashboard/docs/despliegue-servidor.md](../dashboard/docs/despliegue-servidor.md);
+- contrato del botón: [../dashboard/docs/contrato-actualizaciones.md](../dashboard/docs/contrato-actualizaciones.md).
 
 ## Desarrollo local
 
@@ -49,8 +46,8 @@ python3.14 -m venv .venv && .venv/bin/python -m pip install -r requirements-sql.
 ```
 
 - Nunca sobre la base activa de una instalación: usar una copia (`persistencia copiar`, o un respaldo).
-- El dashboard en desarrollo apunta a este puerto con `LOCAL_DATA_API_URL` (`../rj-analyst/.env.example`).
-  Para usar el backend Docker en su lugar, `../rj-analyst/compose.dev.yaml`.
+- El dashboard en desarrollo apunta a este puerto con `LOCAL_DATA_API_URL` (`../dashboard/.env.example`).
+  Para usar el backend Docker en su lugar, `../compose.dev.yaml`.
 - Comandos de la base (`cargar`, `importar`, `verificar`, `migrar`, `copiar`, `restaurar`…) y comportamiento del
   importador y de la API: [docs/importador-y-api.txt](docs/importador-y-api.txt).
 - `tests/test_exportacion.py` se omite sin la exportación real en `datos/` (fuera de Git).
@@ -64,6 +61,8 @@ python3.14 -m venv .venv && .venv/bin/python -m pip install -r requirements-sql.
 | `test_updates.py` | Recorrido completo desde el dashboard (`/api/v1/updates`) |
 | `test_group.py` | Receta del Grupo 2 con horas simuladas y un sitio local |
 
+Los Compose `docker/acquisition/compose.*.yaml` son pilas de prueba aisladas de adquisición; no son overlays de la instalación del dashboard. Sus scripts indican el comando y directorio de ejecución. La instalación normal usa únicamente `../compose.yaml` desde la raíz del workspace.
+
 `test_integration.py` y `test_updates.py` reproducen las respuestas de la ejecución real del 28-10-2026: el bundle
 sellado, su descriptor y su inventario, sin cookies ni secretos, en `docker/acquisition/fixtures/real-bundle-20261028.tar.xz`
 (sumas en `.sha256`).
@@ -72,7 +71,7 @@ sellado, su descriptor y su inventario, sin cookies ni secretos, en `docker/acqu
 una instalación. Las pruebas trabajan sobre su propia copia y no la modifican.
 
 - `test_integration.py` y `test_updates.py`: la base del respaldo de la instalación
-  (`../rj-analyst/scripts/respaldo-instalacion.sh`; comprobado con `respaldo-habitual-20261029`):
+  (`dashboard/scripts/respaldo-instalacion.sh` (invocado desde la raíz del workspace); comprobado con `respaldo-habitual-20261029`):
 
   ```sh
   (cd RESPALDO && sha256sum -c SHA256SUMS)
@@ -82,7 +81,7 @@ una instalación. Las pruebas trabajan sobre su propia copia y no la modifican.
 - `test_group.py` simula la jornada 9 y necesita una base en la que aún no se ha jugado: la copia del 27-10
   `real-jaen.20261027-083912-846469.piloto-16599363.sqlite` (SHA256
   `ebe99c6d305db4864b7a316244e60e87360e314e7f71dd1108563530a970e5ca`), que va con la entrega
-  (`../rj-analyst/docs/despliegue-servidor.md`, «Entrega»). Los respaldos posteriores al 29-10 no sirven.
+  (`../dashboard/docs/despliegue-servidor.md`, «Entrega»). Los respaldos posteriores al 29-10 no sirven.
 
 *Imagen base del scraper* (`rj-scraper-package-efcadb386d:candidate`, con Chromium): se carga de `imagenes.tar.gz`
 de la entrega. Construirla de nuevo desde la revisión fijada (`docs/scraper-empaquetado-linux.md`: clon del original,

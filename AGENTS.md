@@ -1,6 +1,6 @@
 # Instrucciones para agentes
 
-Valen para este repositorio. No se heredan de `../rj-analyst/AGENTS.md`: si un cambio afecta también al
+Valen para este repositorio. No se heredan de `../dashboard/AGENTS.md`: si un cambio afecta también al
 dashboard, leer y cumplir además las de allí.
 
 ## Propósito
@@ -11,7 +11,7 @@ adquisición: [docs/adquisicion-sofascore.md](docs/adquisicion-sofascore.md).
 
 ## Límites
 
-- La instalación se hace con Docker Compose desde `rj-analyst` (`compose.yaml`, `compose.acquisition.yaml`). No
+- La instalación se hace con Docker Compose desde la raíz del workspace `app-real-jaen/` (`../compose.yaml`, `../compose.acquisition.yaml`); este repositorio conserva el Dockerfile del backend. No
   introducir otra base, colas, workers, servicios ni proveedores salvo decisión explícita.
 - El scraper (`sofascore_scraper`) es externo y está fijado a `611e436` con dos commits propios
   (`docker/scraper/real-jaen-follow-next-pages.bundle`, `docs/scraper-empaquetado-linux.md`). No modificar el checkout
@@ -35,7 +35,7 @@ adquisición: [docs/adquisicion-sofascore.md](docs/adquisicion-sofascore.md).
 
 ## Contratos
 
-- Las rutas `/api/v1/*` de `api.py` las consume `rj-analyst/src/server/local-api`, que además comprueba algunos
+- Las rutas `/api/v1/*` de `api.py` las consume `dashboard/src/server/local-api`, que además comprueba algunos
   valores derivados (p. ej. los tres partidos más recientes y las medias de goles). Cambiar una respuesta exige el
   cambio coordinado en el dashboard: detenerse y explicar primero el impedimento y la propuesta mínima.
 - El control de actualizaciones (`control.py`) y el contrato con la adquisición
