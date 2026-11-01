@@ -80,6 +80,8 @@ La PK de `call_up` identifica una fila operativa de convocatoria; su clave lógi
 
 **Problema confirmado:** en 97 filas de 41 partidos, `call_up.external_team_id` (el `teamId` preservado del payload de alineación) no coincide con el ID externo del equipo que aparece en `match_state` para ese lado. En las 97, el FK `call_up.team_id` sí señala al equipo interno correcto para el lado. `api.actuacion` produce `source_team_mismatch` para el valor de origen y cuenta advertencias de equipo; la capa de persistencia conserva el dato original. Es, por tanto, una discrepancia fuente/resolución que debe revisarse contra las observaciones originales antes de decidir si hace falta una corrección de identidad. Esta auditoría no modifica ni descarta esos valores.
 
+La revisión de las observaciones y procedencias no encontró cambios de valor entre versiones ni un error de asignación interna. El significado de `teamId` sigue sin poder determinarse con la evidencia local, por lo que no se ha justificado ninguna corrección de identidad. Véase el [análisis detallado de las discrepancias `teamId`](auditoria-discrepancias-teamid.md), con distribución por partido, equipo, tipo de conflicto y archivo de origen.
+
 ### Alineaciones, incidencias y observaciones
 
 **Correcto y verificado:** las alineaciones se conservan como observaciones `lineups`; las convocatorias y sus estadísticas se derivan de la observación seleccionada con FK a la observación correspondiente. Las secciones originales, incluidas estadísticas e incidencias, se guardan en `content` y siguen disponibles como payload. La base contiene 5.308 observaciones, 1.817 contenidos y 477 observaciones `incidents`.
@@ -158,7 +160,7 @@ No se encontró corrupción de relaciones. La discrepancia de `external_team_id`
 3. Documentar por endpoint si cada entero de la API es ID externo de SofaScore; nombrar por separado `competition` y `stage/tournament` para que el scope no mezcle sus IDs.
 4. Reemplazar gradualmente la tabla fija de IDs de equipos del dashboard por una correspondencia/declaración servida por el API, preservando la regla de que “aparece como rival” no implica “equipo analizable”.
 5. Implementar y probar una herramienta auditada de decisiones antes de admitir otra fuente: asociaciones verificadas/rechazadas, merge/split/reasignación/reversión, resolución de cadenas, validación de ciclos y exportación/reaplicación desde respaldo.
-6. Revisar las 97 discrepancias `source_team_mismatch` en las observaciones y registrar únicamente conclusiones respaldadas por la fuente. No sobrescribir la evidencia original.
+6. Conservar las 97 discrepancias como advertencias; la [auditoría detallada](auditoria-discrepancias-teamid.md) no encontró motivo respaldado para reasignar identidades. Si aparece documentación semántica adicional, registrar la conclusión y su procedencia sin sobrescribir la evidencia original.
 7. Añadir pruebas con IDs nuevos de proveedor, colisiones de namespace, cambio de ID externo y migración de una asociación entre entidades, además de verificar que el UID publicado permanece estable.
 
 ## 8. Recomendaciones para el servicio de vídeo
@@ -172,7 +174,7 @@ No se encontró corrupción de relaciones. La discrepancia de `external_team_id`
 
 ## 9. Prioridades
 
-1. Revisar la evidencia de las 97 discrepancias de equipo y decidir si solo son valores fuente inconsistentes o si alguna requiere una decisión auditada.
+1. Preservar los valores y la advertencia de las 97 discrepancias hasta contar con evidencia que permita establecer qué expresa `teamId` en el payload.
 2. Acordar y exponer un UID canónico por API sin cambiar todavía los IDs internos ni romper las URLs existentes.
 3. Implementar el flujo operativo de correspondencias de identidad antes de integrar datos de un segundo proveedor.
 4. Formalizar IDs de acciones únicamente si vídeo necesita vínculos estables a goles, tarjetas, sustituciones u otros incidentes.
