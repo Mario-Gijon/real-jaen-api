@@ -78,9 +78,12 @@ services:
         target: /evidence
         read_only: true
         bind: {create_host_path: false}
+    # copia_consistente locks /imports/snapshot.sqlite beside the read-only file mount.
+    tmpfs:
+      - /imports:rw,nosuid,nodev,mode=1777,uid=10001,gid=10001
     networks: [control]
-  # Update validation (test_updates.py): the backend in control mode over the same isolated copy, the only service
-  # published, on loopback, for a Next production server on the host. Test installation only (modo prueba).
+  # Update validation (test_updates.py): control and acquisition share the private network. The driver obtains the
+  # control service's private IP; no backend endpoint is published to the host. Test installation only.
   backend-control:
     profiles: [updates]
     image: ${RJ_TEST_FASTAPI_IMAGE:?Set the local FastAPI runtime image}
@@ -115,7 +118,6 @@ services:
         target: /run/secrets/control-token
         read_only: true
         bind: {create_host_path: false}
-    ports: ["127.0.0.1:${RJ_TEST_CONTROL_PORT:-18001}:8002"]
     networks: [control]
 networks:
   control: {internal: true}

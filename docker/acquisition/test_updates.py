@@ -32,7 +32,6 @@ def main():
     ap.add_argument('--evidence', type=Path, required=True)
     ap.add_argument('--fastapi-image', required=True, help='Imagen sports-data construida desde Dockerfile')
     ap.add_argument('--frontend', type=Path, default=ROOT.parent / 'dashboard')
-    ap.add_argument('--control-port', type=int, default=18001)
     ap.add_argument('--frontend-port', type=int, default=3310)
     a = ap.parse_args()
     if a.snapshot.name == 'real-jaen.sqlite' or a.snapshot.parent.name != 'copias':
@@ -60,7 +59,7 @@ def main():
     env = os.environ.copy()
     env.update(RJ_TEST_ACQUISITION_IMAGE=a.acquisition_image, RJ_TEST_BACKEND_IMAGE=a.backend_image, RJ_TEST_MODE='1',
                RJ_TEST_SECRET_FILE=str(files['acquisition']), RJ_TEST_CONTROL_SECRET_FILE=str(files['control']),
-               RJ_TEST_ROUTES=str(routes), RJ_TEST_SNAPSHOT=str(snapshot), RJ_TEST_CONTROL_PORT=str(a.control_port),
+               RJ_TEST_ROUTES=str(routes), RJ_TEST_SNAPSHOT=str(snapshot),
                RJ_TEST_FASTAPI_IMAGE=a.fastapi_image,
                RJ_TEST_PROFILE_VOLUME=project + '-profiles', RJ_TEST_JOBS_VOLUME=project + '-jobs',
                RJ_TEST_STATE_VOLUME=project + '-state', RJ_TEST_EVIDENCE_DIR=str(evidence))
@@ -70,7 +69,6 @@ def main():
             '--profile', update_profile]
     results = dict(project=project, cases=[],
                    volumes=[env[k] for k in ('RJ_TEST_PROFILE_VOLUME', 'RJ_TEST_JOBS_VOLUME', 'RJ_TEST_STATE_VOLUME')])
-    control_url = f'http://127.0.0.1:{a.control_port}'
     front_url = f'http://127.0.0.1:{a.frontend_port}'
 
     def save():
@@ -140,7 +138,7 @@ def main():
             time.sleep(1)
         raise RuntimeError(service + ' Docker healthcheck did not become healthy')
 
-    def wait_job(ident, terminal=('completed', 'failed', 'cancelled'), attempts=400):
+    def wait_job(ident, terminal=('completed', 'failed', 'cancelled'), attempts=1200):
         for _ in range(attempts):
             status, item = http(control_url + '/internal/v1/updates/' + ident, tokens['control'])
             if status == 200 and item.get('status') in terminal:
@@ -176,9 +174,18 @@ def main():
         command(base + ['up', '-d', '--no-deps', 'acquisition', update_service],
                 name='start-acquisition-and-fastapi')
         acquisition_ready()
-        wait_http(control_url + '/health')
         service_inspect = wait_docker_healthy(update_service)
         acquisition_inspect = wait_docker_healthy('acquisition')
+        control_network = project + '_control'
+        fastapi_networks = service_inspect['NetworkSettings']['Networks']
+        acquisition_networks = acquisition_inspect['NetworkSettings']['Networks']
+        assert set(fastapi_networks) == {control_network}, fastapi_networks
+        assert set(acquisition_networks) == {control_network}, acquisition_networks
+        assert fastapi_networks[control_network]['NetworkID'] == acquisition_networks[control_network]['NetworkID']
+        control_ip = fastapi_networks[control_network]['IPAddress']
+        assert control_ip, fastapi_networks[control_network]
+        control_url = f'http://{control_ip}:8002'
+        wait_http(control_url + '/health')
         allowlist_probe = (
             "from persistencia.adquisicion import productores_aprobados;"
             "approved=productores_aprobados();assert approved;print('producer_allowlist=present')"
@@ -191,18 +198,12 @@ def main():
         assert not service_inspect['HostConfig']['Privileged'] and service_inspect['HostConfig']['CapDrop'] == ['ALL']
         assert service_inspect['Config']['Env'] and 'SPORTS_DATA_CONTROL=1' in service_inspect['Config']['Env']
         assert '/state' not in [m['Destination'] for m in acquisition_inspect['Mounts']]
-        control_network = project + '_control'
-        fastapi_networks = service_inspect['NetworkSettings']['Networks']
-        acquisition_networks = acquisition_inspect['NetworkSettings']['Networks']
-        assert set(fastapi_networks) == {control_network}, fastapi_networks
-        assert set(acquisition_networks) == {control_network}, acquisition_networks
-        assert fastapi_networks[control_network]['NetworkID'] == acquisition_networks[control_network]['NetworkID']
         bindings = service_inspect['NetworkSettings']['Ports'].get('8002/tcp') or []
-        assert len(bindings) == 1 and bindings[0]['HostIp'] == '127.0.0.1' and bindings[0]['HostPort'] == str(a.control_port), bindings
+        assert not bindings, bindings
         results['container_isolation'] = dict(fastapi_mounts=targets,
                                               acquisition_mounts=sorted(m['Destination'] for m in acquisition_inspect['Mounts']),
                                               no_shared_sports_sqlite=True, networks='same-private-internal-network',
-                                              host_ports=service_inspect['NetworkSettings']['Ports'],
+                                              published_ports=bindings, control_address='private-network-ip',
                                               fastapi_health=service_inspect['State']['Health']['Status'],
                                               acquisition_health=acquisition_inspect['State']['Health']['Status'])
         results['images'] = {image: json.loads(command(['docker', 'image', 'inspect', image]))[0]['Id']

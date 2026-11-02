@@ -126,8 +126,8 @@ python -X utf8 docker/acquisition/test_integration.py --acquisition-image rj-acq
 ```
 
 La prueba de actualización usa la imagen canónica `Dockerfile` y una pila fixture aislada. FastAPI y adquisición
-comparten solo la red privada `control`, sin salida externa. El endpoint de control se publica únicamente en
-loopback para el dashboard local. La SQLite de prueba solo se monta en `sports-data`, nunca en `acquisition`:
+comparten solo la red privada `control`, sin salida externa. El driver usa la IP privada de sports-data; el endpoint
+de control no se publica al host. La SQLite de prueba solo se monta en `sports-data`, nunca en `acquisition`:
 
 ```sh
 docker build -t rj-sports-data:test .
