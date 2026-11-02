@@ -15,7 +15,8 @@ Instrucciones para agentes: [AGENTS.md](AGENTS.md).
 
 | Ruta | Responsabilidad |
 |---|---|
-| `api.py` | Entrada, carga de datos, CLI y servidor HTTP para las rutas `/api/v1/*` |
+| `api.py` | Entrada, carga de datos, CLI y servidor HTTP anterior para las rutas `/api/v1/*` |
+| `app.py` | Entrada ASGI paralela con FastAPI; reutiliza `queries.consultar` y el cargador existente |
 | `queries.py` | Reglas deportivas y respuestas de consulta para equipos, jugadores y partidos |
 | `control.py` | Modo de la instalación: sirve la API desde la base y recibe las órdenes de actualización del servidor Next |
 | `importar.py` | Importador: política de versiones, datos maestros, fichas, calendario sin payload |
@@ -45,6 +46,20 @@ python3.14 -m venv .venv && .venv/bin/python -m pip install -r requirements-sql.
 .venv/bin/python -m unittest discover -s tests -v
 .venv/bin/python api.py --almacen sql --base RUTA/real-jaen.sqlite --ambito ambito.json --port 8001
 ```
+
+El servidor ASGI se instala aparte y no sustituye el arranque anterior:
+
+```sh
+.venv/bin/python -m pip install -r requirements-fastapi.txt
+.venv/bin/python -m uvicorn app:app --host 127.0.0.1 --port 8002
+```
+
+Por defecto lee la carpeta `datos/`, igual que `api.py`. Para SQLite, configura
+`SPORTS_DATA_STORAGE=sql`, `SPORTS_DATA_DB` y opcionalmente `SPORTS_DATA_SCOPE` antes de arrancar; la base se carga
+una vez y mantiene el bloqueo cooperativo durante la vida del proceso. En modo JSON, `SPORTS_DATA_DIR`,
+`SPORTS_DATA_SCOPE` y `SPORTS_DATA_REPLACEMENTS` permiten seleccionar la carpeta, ámbito y archivo de sustituciones.
+La prueba de paridad HTTP se ejecuta con `python -m unittest tests.test_fastapi_equivalence -v` después de instalar
+`requirements-fastapi.txt`.
 
 - Nunca sobre la base activa de una instalación: usar una copia (`persistencia copiar`, o un respaldo).
 - El dashboard en desarrollo apunta a este puerto con `LOCAL_DATA_API_URL` (`../dashboard/.env.example`).
