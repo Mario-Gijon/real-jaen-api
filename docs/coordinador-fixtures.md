@@ -77,7 +77,7 @@ No borrar evidencia para desbloquear. Corresponde resolver almacenamiento y reab
 ## Reglas y disco
 
 Ademas de versiones y sincronizacion en seco, persistir sha256_agregada de
-carga.referencia_del_codigo: api.py, importar.py, configuracion de carga y todos sus archivos
+carga.referencia_del_codigo: api.py, queries.py, importar.py, configuracion de carga y todos sus archivos
 de persistencia. Persistir tambien SHA256 del ambito. Comparar al abrir, preparar y justo antes
 de confirmar; no depender solo de Git o rule_set.version. Esto detecta cambios de normalizacion
 y agregados y tambien rechaza conservadoramente cambios sin efecto deportivo.

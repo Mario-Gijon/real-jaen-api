@@ -1,4 +1,4 @@
-IMPORTADOR Y API DE DATOS — referencia de comportamiento (api.py, importar.py, persistencia)
+IMPORTADOR Y API DE DATOS — referencia de comportamiento (api.py, queries.py, importar.py, persistencia)
 Entrada al repositorio, instalacion y estado vigente: ../README.md. En la instalacion habitual
 (Docker) la API sirve la base SQLite desde control.py; las secciones sobre la carpeta de
 importacion JSON describen el modo --almacen json y el importador, que sigue alimentando la base.
@@ -19,6 +19,11 @@ IMPORTADOR (importar.py, en esta carpeta)
 Es la unica implementacion: sustituye a sofascore_scraper/importador-real-jaen/importar.py,
 que queda como copia historica sin mantener (no se ha modificado). api.py usa sus funciones
 de fechas y de datos maestros, asi que importador y API aplican las mismas reglas.
+
+CONSULTAS DEPORTIVAS (queries.py)
+Contiene rendimiento, detalle y normalizacion de partidos y jugadores, ademas de la
+construccion de respuestas para /api/v1/*. api.py conserva reexportaciones para
+compatibilidad con consumidores internos y mantiene el servidor HTTP.
   python importar.py --exportacion 2841=real-jaen-raw_AAAA-MM-DD.jsonl \
                      --exportacion 24368=ud-ibiza-raw_AAAA-MM-DD.jsonl --salida datos_AAAA-MM-DD
   python importar.py exportacion.jsonl --salida otra   (sin equipo seguido declarado)

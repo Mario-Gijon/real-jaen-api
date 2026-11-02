@@ -164,7 +164,7 @@ La sincronización usa este mismo manifiesto para `ensamblar`.
 - Aparecen solo en `persistencia/carga.py` (escritura), `modelos.py`, la migración `0001` y las pruebas de esquema y
   carga.
 - `reconstruccion.py`, `lectura.py`, `decisiones.py` y `api.py` no las nombran.
-- La API lee esas secciones del payload original (`content`) con sus propias funciones (`estadisticas_all`,
+- La capa de consultas deportivas (`queries.py`, expuesta por `api.py`) lee esas secciones del payload original (`content`) con sus propias funciones (`estadisticas_all`,
   `contexto_partido`).
 - Prueba adicional: las 3217 rutas, idénticas antes y después de aplicar la migración a una copia de la base real.
 
@@ -301,7 +301,7 @@ base activa no se toca y su sha256 se comprueba antes y después).
 
 **Selección centralizada de convocatorias activas.** La única lectura de convocatorias para la API es
 `reconstruccion.jugador_partido`, que lee la vista `call_up_vigente` (y sus estadísticas, por unión con ella).
-Partidos, fichas, listas de jugadores, acumulados y estadísticas de equipo salen de ahí. Una prueba busca en `api.py`,
+Partidos, fichas, listas de jugadores, acumulados y estadísticas de equipo salen de ahí. Una prueba busca en `api.py`, `queries.py`,
 `reconstruccion.py`, `lectura.py` y `decisiones.py` cualquier `FROM call_up`/`JOIN call_up` que no sea la vista.
 
 **Verificación obligatoria antes de confirmar** (`sincronizacion.exigir_coherencia`), dentro de la transacción de la

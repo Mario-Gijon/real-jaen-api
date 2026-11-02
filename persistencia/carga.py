@@ -61,7 +61,7 @@ def literal(valor):
 
 def archivos_de_codigo():
     """Los archivos que implementan reglas, esquema y carga (rutas relativas, en orden)."""
-    propios = {'api.py', 'importar.py', 'alembic.ini', 'requirements-sql.txt'}
+    propios = {'api.py', 'queries.py', 'importar.py', 'alembic.ini', 'requirements-sql.txt'}
     propios |= {p.relative_to(RAIZ).as_posix() for p in (RAIZ / 'persistencia').rglob('*') if p.is_file()
                 and '__pycache__' not in p.parts}
     return sorted(propios)

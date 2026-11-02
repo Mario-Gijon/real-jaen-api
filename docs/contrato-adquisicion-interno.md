@@ -133,7 +133,7 @@ sobre una copia de `copias/real-jaen.20261027-083912-846469.piloto-16599363.sqli
 
 ## Activación y compatibilidad
 
-El coordinador exige que la huella de reglas de la base (`carga.referencia_del_codigo`: `api.py`, `importar.py`,
+El coordinador exige que la huella de reglas de la base (`carga.referencia_del_codigo`: `api.py`, `queries.py`, `importar.py`,
 `alembic.ini`, `requirements-sql.txt` y todo `persistencia/`) coincida con la del código; si no, pide mantenimiento
 explícito (`reconstruir --confirmar` con la API detenida, que hace copia antes). Sobre la base activa hará falta **una
 vez**, en la primera adopción, por dos motivos comprobados el 28-10:
@@ -146,7 +146,7 @@ vez**, en la primera adopción, por dos motivos comprobados el 28-10:
 
 Las actualizaciones posteriores no lo necesitan: importar evidencia no cambia el código, y el coordinador guarda en
 su journal la huella y la generación confirmadas (en la pila de prueba hubo varias publicaciones y reinicios del
-coordinador sin mantenimiento). Solo vuelve a hacer falta al desplegar código nuevo de `persistencia/`, `api.py` o
+coordinador sin mantenimiento). Solo vuelve a hacer falta al desplegar código nuevo de `persistencia/`, `api.py`, `queries.py` o
 `importar.py`. La lista de productores aprobados está fuera de `persistencia/` (`productores-adquisicion.json`)
 para que aprobar una receta nueva no lo exija; una prueba de la suite lo comprueba. No se ha hecho sobre la base
 activa.

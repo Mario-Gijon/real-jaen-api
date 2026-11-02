@@ -1,6 +1,6 @@
 # Normalización de estadísticas individuales por partido
 
-**Estado: fase 1 implementada (24-10-2026)** en `api.py` (`estadisticas_de_actuacion`,
+**Estado: fase 1 implementada (24-10-2026)** en `queries.py` (`estadisticas_de_actuacion`,
 `conflictos_de_estadisticas`) y consumida por `rj-analyst`; pruebas en `tests/test_estadisticas.py`.
 Lo que figura como «posterior» o «futuro» sigue sin implementar.
 
@@ -210,7 +210,7 @@ observación de calidad en la sección 9.
 
 ## 6. Goles y asistencias: regla actual `omitted_zero`
 
-Actual (`actuacion()` en `api.py`; docs/importador-y-api.txt, «NORMALIZACION DE CONVOCATORIAS»):
+Actual (`actuacion()` en `queries.py`, reexportada por `api.py`; docs/importador-y-api.txt, «NORMALIZACION DE CONVOCATORIAS»):
 
 - `unused` → 0 (`unused`); `unknown` → sin dato.
 - Clave presente y entera ≥ 0 → `reported`.
@@ -404,7 +404,7 @@ Métricas: `shots`, `shots_on_target`, `xg`, `passes`, `passes_accurate`, `pass_
 
 ## 11. Fase 1 (implementada)
 
-Alcance: `api.py` (`actuacion()`), su README y sus pruebas, y el consumo en `rj-analyst`
+Alcance: `queries.py` (`actuacion()`), `api.py` como fachada compatible, y sus pruebas y consumo en `rj-analyst`
 (contrato, adaptador, ficha de jugador). Sin cambios en importador, datos ni servicios.
 
 Efecto medido sobre la importación activa (2519 actuaciones jugadas): tiros a puerta pasa de

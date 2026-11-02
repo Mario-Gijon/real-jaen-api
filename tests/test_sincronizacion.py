@@ -586,7 +586,7 @@ class Sustituciones(Base):
 
 class SinLecturasRetiradas(unittest.TestCase):
     def test_ninguna_lectura_de_tablas_retiradas_ni_de_convocatorias_sin_la_vista(self):
-        lectores = [RAIZ / 'api.py', RAIZ / 'persistencia' / 'reconstruccion.py', RAIZ / 'persistencia' / 'lectura.py',
+        lectores = [RAIZ / 'api.py', RAIZ / 'queries.py', RAIZ / 'persistencia' / 'reconstruccion.py', RAIZ / 'persistencia' / 'lectura.py',
                     RAIZ / 'persistencia' / 'decisiones.py']
         for ruta in [*lectores, RAIZ / 'persistencia' / 'carga.py', RAIZ / 'persistencia' / 'sincronizacion.py']:
             texto = ruta.read_text(encoding='utf-8')

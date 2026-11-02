@@ -763,7 +763,7 @@ avisos)`:
 - `statistics`, dorsal, posición y suplente se copian tal cual;
 - `teamId` original en `source_team_id`, con aviso si difiere del lado;
 - **no** rechaza repetidos: el rechazo sigue en `transformar` (regla de importación), y la unión de
-  duplicados legados sigue en `api.py`, que no cambia.
+  duplicados legados sigue en `queries.py` (reexportada por `api.py`).
 
 Equivalencia antes/después, **byte a byte** (capturas fuera del repositorio):
 - salida completa del importador sobre las 24 entradas reales de la importación activa (las mismas
@@ -914,7 +914,7 @@ Limitaciones pendientes:
   con `valid_from_run` = su `run_id` y su misma regla.
 
 **Referencia del código** (`rule_set.code_ref`, `import_run.tool_version`):
-- `git:<commit completo>` si los archivos de código (`api.py`, `importar.py`, `alembic.ini`,
+- `git:<commit completo>` si los archivos de código (`api.py`, `queries.py`, `importar.py`, `alembic.ini`,
   `requirements-sql.txt`, `persistencia/`) no tienen cambios sin confirmar.
 - Si los tienen, `git:<commit>+sha256:<agregada>`. `import_run.summary.codigo` guarda la huella de
   cada archivo, y la agregada es el sha256 del listado `huella  ruta` (formato de `sha256sum`), que se

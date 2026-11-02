@@ -5,7 +5,7 @@ autenticación propia y solo al servidor del dashboard, los datos reales importa
 
 - **importador** (`importar.py`): exportaciones del scraper → selección de versiones, discrepancias y procedencia;
 - **base SQLite** (`persistencia/`): carga, importación incremental, verificación, copias y restauración;
-- **API de lectura** (`api.py`) y **modo control** (`control.py`): la misma API más las actualizaciones del botón
+- **API de lectura** (`api.py`, con reglas deportivas en `queries.py`) y **modo control** (`control.py`): la misma API más las actualizaciones del botón
   «Actualizar» del dashboard;
 - **adquisición** (`acquisition/`): servicio aislado que descarga de SofaScore con el scraper y un navegador.
 
@@ -15,7 +15,8 @@ Instrucciones para agentes: [AGENTS.md](AGENTS.md).
 
 | Ruta | Responsabilidad |
 |---|---|
-| `api.py` | Rutas `/api/v1/*` del backend y reglas de presentación (rendimiento, acumulados, normalización de convocatorias, detalle de partido) |
+| `api.py` | Entrada, carga de datos, CLI y servidor HTTP para las rutas `/api/v1/*` |
+| `queries.py` | Reglas deportivas y respuestas de consulta para equipos, jugadores y partidos |
 | `control.py` | Modo de la instalación: sirve la API desde la base y recibe las órdenes de actualización del servidor Next |
 | `importar.py` | Importador: política de versiones, datos maestros, fichas, calendario sin payload |
 | `persistencia/` | Base SQLite: modelos y migraciones (`migraciones/`), carga, sincronización incremental, bloqueo, coordinador de actualizaciones (`actualizacion.py`), recepción y verificación de bundles (`adquisicion.py`, `bundle.py`). CLI: `python -m persistencia` |

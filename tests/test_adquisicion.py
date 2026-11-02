@@ -95,5 +95,6 @@ class Productores(unittest.TestCase):
     def test_aprobar_productores_no_cambia_la_huella_de_reglas(self):
         from persistencia import carga
         archivos = carga.archivos_de_codigo()
+        self.assertIn('queries.py', archivos)
         self.assertNotIn('productores-adquisicion.json', archivos)
         self.assertFalse(any('productores' in a for a in archivos))
