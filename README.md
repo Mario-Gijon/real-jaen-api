@@ -61,6 +61,21 @@ una vez y mantiene el bloqueo cooperativo durante la vida del proceso. En modo J
 La prueba de paridad HTTP se ejecuta con `python -m unittest tests.test_fastapi_equivalence -v` después de instalar
 `requirements-fastapi.txt`.
 
+FastAPI también admite el control de actualizaciones de `control.py`, pero solo si se activa expresamente con
+`SPORTS_DATA_CONTROL=1`, junto con `SPORTS_DATA_STORAGE=sql`, `SPORTS_DATA_DB` y `RJ_CONTROL_SECRET_FILE`. Conserva
+la configuración interna ya usada por `control.py`: `RJ_ACQUISITION_URL`, `RJ_ACQUISITION_SECRET_FILE`,
+`RJ_UPDATE_RECIPE` y, si corresponde, las tres restricciones `RJ_ACQUISITION_MAX_ATTEMPTS`,
+`RJ_ACQUISITION_MAX_SENDS` y `RJ_ACQUISITION_DETAIL_ROUNDS`. Los ficheros de secretos deben montarse como secretos
+del servicio y no dentro del repositorio. Sin `SPORTS_DATA_CONTROL=1`, las rutas de actualización no se habilitan.
+El servicio de control utiliza `Coordinador` y `Actualizaciones` existentes; las consultas deportivas capturan una
+sola generación por petición y ven publicaciones nuevas sin reiniciar FastAPI. Debe ejecutarse con un único worker
+Uvicorn: la imagen fija `--workers 1`, y el bloqueo exclusivo de `Coordinador` impide que otro proceso abra la misma
+base a la vez. No se debe ejecutar `control.py` y FastAPI contra la misma base simultáneamente.
+
+El Compose estable no activa esta modalidad. Para probarla, usar una copia aislada de una base compatible, secretos
+de prueba y un servicio de adquisición con proveedor fixture y red externa deshabilitada; nunca la base activa ni el
+proveedor real. `RJ_ACQUISITION_TEST=1` solo es válido para una instalación marcada por el fixture de adquisición.
+
 - Nunca sobre la base activa de una instalación: usar una copia (`persistencia copiar`, o un respaldo).
 - El dashboard en desarrollo apunta a este puerto con `LOCAL_DATA_API_URL` (`../dashboard/.env.example`).
   Para usar el backend Docker en su lugar, `../compose.dev.yaml`.

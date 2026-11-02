@@ -299,7 +299,48 @@ class Actualizaciones:
             thread.join(timeout)
 
 
+def dispatch_control(method, path, headers, control, token):
+    """Return the legacy control HTTP result, or None when this is not a control request."""
+    route = urlsplit(path).path
+    if method == 'POST' and not route.startswith(PREFIX):
+        return 404, {'error': 'Ruta inexistente'}
+    if method == 'GET' and not route.startswith('/internal/'):
+        return None
+    if method not in ('GET', 'POST'):
+        return None
+
+    provided = headers.get('Authorization', '').encode('utf-8')
+    if not hmac.compare_digest(provided, b'Bearer ' + token):
+        return 401, {'error': 'unauthorized'}
+    try:
+        if route == PREFIX and method == 'POST':
+            item, reused = control.solicitar(headers.get('Idempotency-Key', ''))
+            return (200 if reused else 202), {'job': control.public(item), 'reused': reused}
+        if route == PREFIX + '/current' and method == 'GET':
+            return 200, control.actual()
+        match = re.fullmatch(PREFIX + r'/([0-9a-f-]{36})(/cancel)?', route)
+        if not match or str(uuid.UUID(match[1])) != match[1]:
+            return 404, {'error': 'not_found'}
+        if method == 'POST' and match[2]:
+            return 202, control.public(control.cancelar(match[1]))
+        if method == 'GET' and not match[2]:
+            return 200, control.public(control.get(match[1]))
+        return 404, {'error': 'not_found'}
+    except KeyError:
+        return 404, {'error': 'not_found'}
+    except (ValueError, TypeError):
+        return 400, {'error': 'invalid_request'}
+    except NotCancellable:
+        return 409, {'error': 'not_cancellable'}
+    except Unavailable:
+        return 409, {'error': 'update_unavailable'}
+    except Exception as e:
+        print(f'[control] {type(e).__name__}: {e}', file=sys.stderr, flush=True)
+        return 503, {'error': 'unavailable'}
+
+
 def handler_for(coordinador, control, token):
+
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):
             pass
@@ -313,46 +354,15 @@ def handler_for(coordinador, control, token):
             self.end_headers()
             self.wfile.write(body)
 
-        def control(self, post):
-            provided = self.headers.get('Authorization', '').encode('utf-8')
-            if not hmac.compare_digest(provided, b'Bearer ' + token):
-                return self.reply(401, {'error': 'unauthorized'})
-            path = urlsplit(self.path).path
-            try:
-                if path == PREFIX and post:
-                    item, reused = control.solicitar(self.headers.get('Idempotency-Key', ''))
-                    return self.reply(200 if reused else 202, {'job': control.public(item), 'reused': reused})
-                if path == PREFIX + '/current' and not post:
-                    return self.reply(200, control.actual())
-                match = re.fullmatch(PREFIX + r'/([0-9a-f-]{36})(/cancel)?', path)
-                if not match or str(uuid.UUID(match[1])) != match[1]:
-                    return self.reply(404, {'error': 'not_found'})
-                if post and match[2]:
-                    return self.reply(202, control.public(control.cancelar(match[1])))
-                if not post and not match[2]:
-                    return self.reply(200, control.public(control.get(match[1])))
-                return self.reply(404, {'error': 'not_found'})
-            except KeyError:
-                return self.reply(404, {'error': 'not_found'})
-            except (ValueError, TypeError):
-                return self.reply(400, {'error': 'invalid_request'})
-            except NotCancellable:
-                return self.reply(409, {'error': 'not_cancellable'})
-            except Unavailable:
-                return self.reply(409, {'error': 'update_unavailable'})
-            except Exception as e:
-                print(f'[control] {type(e).__name__}: {e}', file=sys.stderr, flush=True)
-                return self.reply(503, {'error': 'unavailable'})
-
         def do_POST(self):
-            if urlsplit(self.path).path.startswith(PREFIX):
-                return self.control(True)
-            return self.reply(404, {'error': 'Ruta inexistente'})
+            result = dispatch_control('POST', self.path, self.headers, control, token)
+            return self.reply(*result)
 
         def do_GET(self):
             url = urlsplit(self.path)
             if url.path.startswith('/internal/'):
-                return self.control(False)
+                result = dispatch_control('GET', self.path, self.headers, control, token)
+                return self.reply(*result)
             if url.query:
                 return self.reply(400, {'error': 'Esta versión no admite filtros de consulta.'})
             try:
