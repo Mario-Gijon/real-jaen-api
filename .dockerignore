@@ -11,6 +11,7 @@
 !alembic.ini
 !requirements-sql.txt
 !requirements-fastapi.txt
+!requirements-acquisition.txt
 !requirements-dev.txt
 !persistencia/
 !persistencia/**

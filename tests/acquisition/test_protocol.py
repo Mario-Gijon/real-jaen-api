@@ -1,10 +1,11 @@
-"""Contract of the acquisition service and its backend client: local HTTP, a fake job runner, no SDK or network.
+"""Contract of the acquisition FastAPI and its backend client: loopback HTTP, fake runner, no SDK or network.
 
 Runs in the acquisition test image (the service needs fcntl and persistencia.bundle)."""
 import hashlib
 import json
 from pathlib import Path
 import shutil
+import socket
 import tempfile
 import threading
 import time
@@ -13,7 +14,13 @@ import urllib.error
 import urllib.request
 import uuid
 
-from acquisition.service import Jobs, Server, PREFIX, configuration
+try:
+    import uvicorn
+except ImportError as exc:
+    raise unittest.SkipTest('instala requirements-fastapi.txt para las pruebas de acquisition FastAPI') from exc
+
+from acquisition.app import create_app
+from acquisition.service import Jobs, PREFIX, configuration
 from persistencia.adquisicion import AdquisicionRechazada, Cliente
 from persistencia.bundle import fingerprint
 
@@ -69,15 +76,28 @@ class Protocol(unittest.TestCase):
 
     def start(self, name):
         self.jobs = Jobs(self.root / name, provider='fixture-site', runner=self.runner)
-        self.server = Server(('127.0.0.1', 0), self.jobs, self.token)
-        threading.Thread(target=self.server.serve_forever, daemon=True).start()
-        self.servers.append((self.server, self.jobs, self.runner))
-        self.url = 'http://127.0.0.1:' + str(self.server.server_port)
+        sock = socket.socket()
+        sock.bind(('127.0.0.1', 0))
+        sock.listen(128)
+        port = sock.getsockname()[1]
+        self.server = uvicorn.Server(uvicorn.Config(create_app(jobs=self.jobs, token=self.token),
+                                                    host='127.0.0.1', port=port,
+                                                    log_level='critical', access_log=False))
+        thread = threading.Thread(target=self.server.run, kwargs={'sockets': [sock]}, daemon=True)
+        self.servers.append((self.server, thread, self.runner))
+        thread.start()
+        deadline = time.monotonic() + 5
+        while not self.server.started and thread.is_alive() and time.monotonic() < deadline:
+            time.sleep(.01)
+        self.assertTrue(self.server.started, 'Uvicorn did not start')
+        self.url = f'http://127.0.0.1:{port}'
         self.client = Cliente(self.url, self.file, modo='prueba')
 
     def stop_all(self):
-        for server, jobs, runner in self.servers:
-            server.shutdown(); server.server_close(); runner.release.set(); jobs.close()
+        for server, thread, runner in self.servers:
+            runner.release.set()
+            server.should_exit = True
+            thread.join(timeout=10)
 
     def post(self, body, auth=None, raw=None):
         req = urllib.request.Request(self.url + PREFIX, data=raw if raw is not None else json.dumps(body).encode(),
@@ -95,6 +115,16 @@ class Protocol(unittest.TestCase):
                 self.post({}, auth)
             self.assertEqual(error.exception.code, 401)
             self.assertNotIn(self.token, error.exception.read())
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            urllib.request.urlopen(self.url + '/health?probe=1', timeout=5)
+        self.assertEqual(error.exception.code, 401)
+
+    def test_health_is_public_and_internal_routes_are_not(self):
+        with urllib.request.urlopen(self.url + '/health', timeout=5) as response:
+            self.assertEqual((response.status, response.read()), (200, b'{"status":"ok"}'))
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            urllib.request.urlopen(self.url + PREFIX, timeout=5)
+        self.assertEqual(error.exception.code, 401)
 
     def test_arbitrary_parameters_and_invalid_inventory_rejected(self):
         good = dict(request_id=str(uuid.uuid4()), recipe_id=RECIPE, inventory=baseline())
@@ -114,6 +144,15 @@ class Protocol(unittest.TestCase):
     def test_completed_bundle_served_sealed_with_etag(self):
         request, state = self.completed()
         self.assertEqual(state['state'], 'completed')
+        req = urllib.request.Request(self.url + PREFIX + '/' + state['id'] + '/bundle',
+                                     headers={'Authorization': 'Bearer ' + self.token.decode()})
+        with urllib.request.urlopen(req, timeout=5) as response:
+            raw_bundle = response.read()
+            self.assertEqual(response.status, 200)
+            self.assertEqual(response.headers['Content-Type'], 'application/json')
+            self.assertEqual(response.headers['ETag'], '"' + state['bundle']['sha256'] + '"')
+            self.assertEqual(int(response.headers['Content-Length']), state['bundle']['bytes'])
+        self.assertEqual(raw_bundle, (self.jobs.root / 'work' / state['id'] / 'bundle.json').read_bytes())
         body = self.client.descargar(state['id'], state['bundle'])
         self.assertEqual(json.loads(body)['request'], request)
         with self.assertRaises(AdquisicionRechazada):

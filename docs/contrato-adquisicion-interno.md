@@ -9,7 +9,7 @@ Despliegue y operación: `app-real-jaen/compose.acquisition.yaml` y `dashboard/d
 - **Backend**: único dueño de la base deportiva, su journal, copias, candidatas, importación y publicación (el
   coordinador de `persistencia/actualizacion.py`). Calcula el inventario de su generación vigente y lo envía con la
   solicitud. No tiene scraper, navegador ni código de adquisición.
-- **Servicio `acquisition`** (`acquisition/service.py`, `http://acquisition:8002`, sin puerto al anfitrión): solo
+- **Servicio `acquisition`** (`acquisition/app.py`, `http://acquisition:8002`, Uvicorn con un worker y sin puerto al anfitrión): solo
   monta su perfil gestionado, su almacén de trabajos y el secreto. Nunca monta el volumen deportivo ni el journal.
   Posee el perfil (flock) toda su vida y abre una sesión exclusiva por trabajo.
 - **Red**: backend y acquisition se hablan solo por `acquisition-control` (interna, sin salida). Solo acquisition
@@ -43,6 +43,11 @@ Cada trabajo corre en un proceso propio (`acquisition/job.py`, el SDK guarda est
 la sesión exclusiva del perfil. Cancelar crea un aviso cooperativo; a los 30 s, o a los 480 s de trabajo, se mata
 todo su grupo de procesos. Si el navegador no se cerró limpiamente, la sesión queda abierta y el servicio deja de
 aceptar trabajos: el perfil exige la recuperación administrativa manual (`acquisition.admin recover-profile`).
+
+La aplicación ASGI adapta HTTP a `Jobs`, `configuration()` y `Profile` de `acquisition/service.py`; el ciclo de vida
+cierra los trabajos antes de liberar el bloqueo exclusivo del perfil. Las versiones directas de FastAPI y Uvicorn se
+declaran en `requirements-acquisition.txt` y se verifican contra la imagen de navegador auditada; no se instalan
+dependencias ni se accede a la red durante build.
 
 Proveedores: `ACQ_PROVIDER=sofascore` con `ACQ_ENABLE_REAL=1` (Compose real) o `fixture-site` con
 `ACQ_TEST_MODE=1`, solo en la imagen `test` (sitio local que sirve respuestas grabadas al mismo flujo del SDK y su

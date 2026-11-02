@@ -102,7 +102,8 @@ def main():
                          for i in (args.acquisition_image, args.backend_image)}
     results['snapshot_check'] = comprobar_copia(snapshot)
     command(['docker', 'run', '--rm', '--pull', 'never', '--network', 'none', '--cap-drop', 'ALL', '--security-opt',
-             'no-new-privileges:true', '--entrypoint', 'python', args.acquisition_image, '-B', '-m', 'acquisition.service'],
+             'no-new-privileges:true', '--entrypoint', 'python', args.acquisition_image, '-B', '-c',
+             'from acquisition.service import configuration; configuration({})'],
             expect=1, name='service-disabled-without-provider')
     # Original responses of the real bundle (provenance.jsonl), byte for byte, as the routes of the local site.
     raw = command(['docker', 'run', '--rm', '--pull', 'never', '--network', 'none', '--cap-drop', 'ALL', '--mount',

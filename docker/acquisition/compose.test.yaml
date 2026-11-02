@@ -16,7 +16,8 @@ services:
   acquisition:
     image: ${RJ_TEST_ACQUISITION_IMAGE:?Set a local test acquisition image}
     pull_policy: never
-    entrypoint: [python, -B, -m, acquisition.service]
+    entrypoint: [python, -B, -m, uvicorn]
+    command: [acquisition.app:app, --host, 0.0.0.0, --port, "8002", --workers, "1", --no-access-log]
     init: true
     user: "10001:10001"
     cap_drop: [ALL]

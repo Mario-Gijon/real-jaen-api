@@ -1,4 +1,4 @@
-"""Internal acquisition service: Compose service `acquisition`, http://acquisition:8002, no host port.
+"""Internal acquisition service logic: Compose service `acquisition`, http://acquisition:8002, no host port.
 
 The backend sends the inventory of its current generation with each request; this service never mounts the sporting
 volume, its journal or its copies. One active job, durable request keys, cooperative cancellation, interruption on
@@ -11,20 +11,16 @@ instruments of the test image and ACQ_FIXTURE_ROUTES. Without one of them the se
 from contextlib import closing, nullcontext
 from datetime import datetime, timezone
 import hashlib
-import hmac
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
-import re
-import signal
 import sqlite3
 import subprocess
 import sys
 import threading
 import time
 import uuid
-from .profile import Profile, ProfileError, atomic_json, sync_dir
+from .profile import ProfileError, atomic_json, sync_dir
 
 PREFIX = '/internal/v1/acquisitions'
 RECIPES = {'sofascore-pilot-16599363-v1', 'sofascore-group2-2627-v1'}
@@ -217,61 +213,6 @@ class Jobs:
         self.lockfile.close()
 
 
-class Server(ThreadingHTTPServer):
-    daemon_threads = True
-
-    def __init__(self, address, jobs, token):
-        self.jobs, self.token = jobs, token
-        super().__init__(address, Handler)
-
-
-class Handler(BaseHTTPRequestHandler):
-    def log_message(self, *args): pass
-
-    def reply(self, status, value, raw=None, etag=None):
-        data = raw if raw is not None else encoded(value)
-        self.send_response(status)
-        self.send_header('Content-Type', 'application/json')
-        if etag: self.send_header('ETag', '"' + etag + '"')
-        self.send_header('Content-Length', str(len(data)))
-        self.end_headers()
-        self.wfile.write(data)
-
-    def handle_request(self, post):
-        try:
-            if not post and self.path == '/health': return self.reply(200, {'status': 'ok'})
-            provided = self.headers.get('Authorization', '').encode('utf-8')
-            if not hmac.compare_digest(provided, b'Bearer ' + self.server.token): return self.reply(401, {'error': 'unauthorized'})
-            if self.path == PREFIX and post:
-                from persistencia.bundle import parse
-                length = int(self.headers.get('Content-Length', '0'))
-                if not 0 < length <= MAX_REQUEST: raise ValueError()
-                data = parse(self.rfile.read(length))
-                if (not isinstance(data, dict) or set(data) != {'request_id', 'recipe_id', 'inventory'}
-                        or not all(isinstance(data[k], str) for k in ('request_id', 'recipe_id'))
-                        or not isinstance(data['inventory'], dict) or data['recipe_id'] not in RECIPES
-                        or str(uuid.UUID(data['request_id'])) != data['request_id']): raise ValueError()
-                item, new = self.server.jobs.submit(data['request_id'], data['recipe_id'], data['inventory'])
-                return self.reply(202 if new else 200, item)
-            match = re.fullmatch(PREFIX + r'/([0-9a-f-]{36})(/cancel|/bundle|/report)?', self.path)
-            if not match or str(uuid.UUID(match[1])) != match[1]: return self.reply(404, {'error': 'not_found'})
-            ident, action = match.groups()
-            if post and action == '/cancel': return self.reply(200, self.server.jobs.cancel(ident))
-            if not post and action == '/bundle':
-                body, digest = self.server.jobs.bundle(ident)
-                return self.reply(200, None, raw=body, etag=digest)
-            if not post and action == '/report': return self.reply(200, self.server.jobs.report(ident))
-            if not post and action is None: return self.reply(200, self.server.jobs.get(ident))
-            return self.reply(404, {'error': 'not_found'})
-        except Conflict: return self.reply(409, {'error': 'conflict'})
-        except KeyError: return self.reply(404, {'error': 'not_found'})
-        except (ValueError, TypeError): return self.reply(400, {'error': 'invalid_request'})
-        except Exception: return self.reply(503, {'error': 'unavailable'})
-
-    def do_GET(self): self.handle_request(False)
-    def do_POST(self): self.handle_request(True)
-
-
 def reductions(environ):
     """Limits of this installation for the group recipe, which can only lower the production maxima:
     ACQ_MAX_ATTEMPTS (logical attempts of the transport), ACQ_MAX_SENDS (physical sends of the adapter) and
@@ -315,19 +256,3 @@ def configuration(environ):
         return provider, dict(extra, **reductions(environ))
     raise SystemExit('No acquisition provider enabled: set ACQ_PROVIDER=sofascore with ACQ_ENABLE_REAL=1, '
                      'or the isolated test provider')
-
-
-def main():
-    provider, extra = configuration(os.environ)
-    token = secret(os.environ['ACQ_SECRET_FILE'])
-    with Profile(os.environ.get('ACQ_PROFILE_ROOT', '/profiles')) as owner:
-        owner.verify()
-        jobs = Jobs(os.environ.get('ACQ_JOBS_ROOT', '/acquisition-jobs'), provider=provider, owner=owner, extra=extra)
-        server = Server(('0.0.0.0', 8002), jobs, token)
-        def shutdown(*args): threading.Thread(target=server.shutdown, daemon=True).start()
-        signal.signal(signal.SIGTERM, shutdown)
-        try: server.serve_forever(poll_interval=.1)
-        finally: server.server_close(); jobs.close()
-
-
-if __name__ == '__main__': main()

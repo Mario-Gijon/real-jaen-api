@@ -8,12 +8,15 @@ RUN rm -rf /opt/probe && mkdir -p /profiles /acquisition-jobs && chown 10001:100
 COPY --from=implementation / /opt/app/acquisition/
 COPY --from=backend api.py queries.py importar.py /opt/app/
 COPY --from=backend persistencia/bundle.py /opt/app/persistencia/bundle.py
+COPY --from=backend requirements-acquisition.txt /opt/requirements-acquisition.txt
 WORKDIR /opt/app
 ENV PYTHONPATH=/opt/app:/opt/scraper PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
+RUN python -m pip check \
+    && python -c "from importlib.metadata import version; required = dict(line.strip().split('==', 1) for line in open('/opt/requirements-acquisition.txt') if line.strip() and not line.lstrip().startswith('#')); assert all(version(package) == expected for package, expected in required.items())"
 USER 10001:10001
-# Administrative profile commands by default; Compose runs the service with `python -B -m acquisition.service`.
-ENTRYPOINT ["python", "-B", "-m", "acquisition.admin"]
-CMD ["--help"]
+# The service uses one worker because it owns the exclusive browser profile and jobs journal.
+ENTRYPOINT ["python", "-B", "-m", "uvicorn"]
+CMD ["acquisition.app:app", "--host", "0.0.0.0", "--port", "8002", "--workers", "1", "--no-access-log"]
 
 # Test-only instruments (contract tests, local fixture site) never belong to the runtime target above.
 FROM runtime AS test
