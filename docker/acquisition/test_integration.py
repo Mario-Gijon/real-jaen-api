@@ -52,9 +52,13 @@ def main():
     project = 'rj-acq-test-' + uuid.uuid4().hex[:10]
     env = os.environ.copy()
     token = secrets.token_hex(32)
-    secret = out / 'internal-secret'
+    secret_dir = out / '.secrets'
+    secret_dir.mkdir(mode=0o700)
+    secret = secret_dir / 'internal-secret'
     secret.write_text(token, encoding='ascii')
-    secret.chmod(0o600)
+    # The container runs as UID 10001, so the random token file must be readable through its read-only bind mount.
+    # A private parent directory keeps it hidden from other host users until the runner removes it.
+    secret.chmod(0o644)
     tmp = tempfile.TemporaryDirectory(prefix=project + '-')
     sys.path.insert(0, str(ROOT))
     from persistencia.sqlite import comprobar_copia, copia_consistente
@@ -126,7 +130,11 @@ def main():
                 name='initialize-profile')
         command(base + ['run', '--rm', '--no-deps', 'backend-client', 'prepare'], name='prepare-isolated-copy')
         command(base + ['up', '-d', '--no-deps', 'acquisition'], name='start-acquisition')
-        ready()
+        try:
+            ready()
+        except Exception:
+            command(base + ['logs', '--no-color'], name='acquisition-startup-logs')
+            raise
         inspect = json.loads(command(['docker', 'inspect', command(base + ['ps', '-q', 'acquisition']).decode().strip()]))[0]
         targets = sorted(m['Destination'] for m in inspect['Mounts'])
         assert targets == ['/acquisition-jobs', '/fixtures/routes.json', '/profiles', '/run/secrets/acquisition-token'], targets
@@ -167,6 +175,7 @@ def main():
         assert token.encode() not in cleanup.stdout + cleanup.stderr
         (out / 'cleanup.log').write_bytes(cleanup.stdout + cleanup.stderr)
         secret.unlink(missing_ok=True)
+        secret_dir.rmdir()
         tmp.cleanup()
         results['secret_removed'] = True
         save()

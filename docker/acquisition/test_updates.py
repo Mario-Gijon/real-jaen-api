@@ -3,8 +3,8 @@ service with its local provider, over a copy of an identified inactive snapshot.
 acquisition; nothing reaches SofaScore.
 
 python -X utf8 docker/acquisition/test_updates.py --acquisition-image IMG --backend-image IMG \
-    --snapshot <copias/...sqlite> --evidence <new folder> \
-    [--frontend ../rj-analyst]
+    --snapshot <copias/...sqlite> --evidence <new folder> [--backend-mode control|fastapi] \
+    [--fastapi-image IMG] [--frontend ../dashboard]
 
 The frontend needs a production build (npm run build). Screenshots (1440 and 390 px) and reports go to --evidence.
 """
@@ -18,12 +18,39 @@ import sys
 import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 
 from test_integration import extract_real_bundle
 
 ROOT = Path(__file__).resolve().parents[2]
+
+# Invoked with `docker compose exec` so test requests stay on the private network and the
+# control secret is read from the container's read-only secret mount, never sent in argv/env.
+INTERNAL_HTTP = r'''
+import json, sys, urllib.error, urllib.request
+from pathlib import Path
+config = json.load(sys.stdin)
+headers = dict(config.get("headers", {}))
+if config.get("control_auth"):
+    headers["Authorization"] = "Bearer " + Path("/run/secrets/control-token").read_text(encoding="ascii").strip()
+method = config["method"]
+body = config.get("body")
+data = (body.encode("utf-8") if body is not None else (b"" if method == "POST" else None))
+request = urllib.request.Request("http://127.0.0.1:8002" + config["path"], data=data, method=method, headers=headers)
+try:
+    response = urllib.request.urlopen(request, timeout=8)
+except urllib.error.HTTPError as error:
+    response = error
+with response:
+    raw = response.read()
+    try:
+        payload = json.loads(raw) if raw else None
+    except (ValueError, UnicodeDecodeError):
+        payload = raw.decode("utf-8", errors="replace")
+    print(json.dumps({"status": response.status, "body": payload}))
+'''
 
 
 def main():
@@ -32,10 +59,21 @@ def main():
     ap.add_argument('--backend-image', required=True)
     ap.add_argument('--snapshot', type=Path, required=True)
     ap.add_argument('--evidence', type=Path, required=True)
-    ap.add_argument('--frontend', type=Path, default=ROOT.parent / 'rj-analyst')
+    ap.add_argument('--backend-mode', choices=('control', 'fastapi'), default='control',
+                    help='Control legado (por defecto) o FastAPI con SPORTS_DATA_CONTROL=1')
+    ap.add_argument('--fastapi-image', help='Imagen runtime Dockerfile.fastapi; obligatoria con --backend-mode fastapi')
+    ap.add_argument('--frontend', type=Path, default=ROOT.parent / 'dashboard')
+    ap.add_argument('--skip-frontend', action='store_true',
+                    help='Solo API; requerido para FastAPI, que permanece en la red Docker privada')
     ap.add_argument('--control-port', type=int, default=18001)
     ap.add_argument('--frontend-port', type=int, default=3310)
     a = ap.parse_args()
+    if a.backend_mode == 'fastapi' and not a.fastapi_image:
+        ap.error('--fastapi-image es obligatorio con --backend-mode fastapi')
+    if a.backend_mode == 'fastapi' and not a.skip_frontend:
+        ap.error('--skip-frontend es obligatorio con --backend-mode fastapi: la API no publica puertos al host')
+    if a.skip_frontend and a.backend_mode != 'fastapi':
+        ap.error('--skip-frontend solo está disponible con --backend-mode fastapi')
     if a.snapshot.name == 'real-jaen.sqlite' or a.snapshot.parent.name != 'copias':
         raise SystemExit('Only an identified inactive copy from copias/, never the active base')
     out = a.evidence.resolve()
@@ -44,9 +82,13 @@ def main():
     project = 'rj-upd-test-' + uuid.uuid4().hex[:10]
     tokens = {name: secrets.token_hex(32) for name in ('acquisition', 'control', 'access', 'session')}
     files = {}
+    secret_dir = out / '.secrets'
+    secret_dir.mkdir(mode=0o700)
     for name, value in tokens.items():
-        files[name] = out / f'{name}-secret'
+        files[name] = secret_dir / f'{name}-secret'
         files[name].write_text(value, encoding='ascii')
+        # Docker's non-root UID 10001 needs read access through the read-only bind mount.
+        files[name].chmod(0o644)
     tmp = tempfile.TemporaryDirectory(prefix=project + '-')
     sys.path.insert(0, str(ROOT))
     from persistencia.sqlite import copia_consistente
@@ -58,10 +100,15 @@ def main():
     env.update(RJ_TEST_ACQUISITION_IMAGE=a.acquisition_image, RJ_TEST_BACKEND_IMAGE=a.backend_image, RJ_TEST_MODE='1',
                RJ_TEST_SECRET_FILE=str(files['acquisition']), RJ_TEST_CONTROL_SECRET_FILE=str(files['control']),
                RJ_TEST_ROUTES=str(routes), RJ_TEST_SNAPSHOT=str(snapshot), RJ_TEST_CONTROL_PORT=str(a.control_port),
+               RJ_TEST_FASTAPI_IMAGE=a.fastapi_image or 'local/sports-data-fastapi-test:inactive',
                RJ_TEST_PROFILE_VOLUME=project + '-profiles', RJ_TEST_JOBS_VOLUME=project + '-jobs',
                RJ_TEST_STATE_VOLUME=project + '-state', RJ_TEST_EVIDENCE_DIR=str(evidence))
-    base = ['docker', 'compose', '-p', project, '-f', str(ROOT / 'docker/acquisition/compose.test.yaml'), '--profile', 'updates']
-    results = dict(project=project, cases=[], volumes=[env[k] for k in ('RJ_TEST_PROFILE_VOLUME', 'RJ_TEST_JOBS_VOLUME', 'RJ_TEST_STATE_VOLUME')])
+    update_service = 'backend-fastapi' if a.backend_mode == 'fastapi' else 'backend-control'
+    update_profile = 'fastapi-updates' if a.backend_mode == 'fastapi' else 'updates'
+    base = ['docker', 'compose', '-p', project, '-f', str(ROOT / 'docker/acquisition/compose.test.yaml'),
+            '--profile', update_profile]
+    results = dict(project=project, backend_mode=a.backend_mode, cases=[],
+                   volumes=[env[k] for k in ('RJ_TEST_PROFILE_VOLUME', 'RJ_TEST_JOBS_VOLUME', 'RJ_TEST_STATE_VOLUME')])
     control_url = f'http://127.0.0.1:{a.control_port}'
     front_url = f'http://127.0.0.1:{a.frontend_port}'
 
@@ -82,8 +129,27 @@ def main():
         assert result.returncode == expect, (name, combined.decode(errors='replace')[-3000:])
         return result.stdout
 
-    def http(url, token=None):
-        request = urllib.request.Request(url, headers={'Authorization': 'Bearer ' + token} if token else {})
+    def http(url, token=None, *, method='GET', headers=None, body=None):
+        request_headers = dict(headers or {})
+        if token:
+            request_headers['Authorization'] = 'Bearer ' + token
+        if a.backend_mode == 'fastapi':
+            parsed = urllib.parse.urlsplit(url)
+            payload = dict(path=parsed.path + (('?' + parsed.query) if parsed.query else ''), method=method,
+                           headers={key: value for key, value in request_headers.items()
+                                    if key.lower() != 'authorization'},
+                           control_auth=bool(token), body=body)
+            result = subprocess.run(base + ['exec', '-T', update_service, 'python', '-c', INTERNAL_HTTP],
+                                    cwd=ROOT, env=env, input=json.dumps(payload), text=True,
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15)
+            combined = result.stdout.encode() + result.stderr.encode()
+            assert not leaked(combined), ('secret in internal API probe output', leaked(combined))
+            if result.returncode:
+                return 599, {'error': result.stderr[-500:]}
+            decoded = json.loads(result.stdout)
+            return decoded['status'], decoded['body']
+        data = body.encode('utf-8') if body is not None else (b'' if method == 'POST' else None)
+        request = urllib.request.Request(url, data=data, method=method, headers=request_headers)
         try:
             with urllib.request.urlopen(request, timeout=10) as response:
                 return response.status, json.loads(response.read())
@@ -95,13 +161,46 @@ def main():
     def wait_http(url, attempts=150):
         for _ in range(attempts):
             try:
-                with urllib.request.urlopen(url, timeout=2) as response:
-                    if response.status == 200:
-                        return
-            except (OSError, urllib.error.URLError):
+                status, _ = http(url)
+                if status == 200:
+                    return
+            except (OSError, urllib.error.URLError, subprocess.SubprocessError):
                 pass
             time.sleep(.4)
         raise RuntimeError('Not ready: ' + url)
+
+    def container_config(service):
+        ident = command(base + ['ps', '-q', service]).decode().strip()
+        assert ident, ('missing container', service)
+        return json.loads(command(['docker', 'inspect', ident]))[0]
+
+    def coordinator_generation():
+        probe = (
+            "import json,sqlite3;c=sqlite3.connect('file:/state/base.sqlite.actualizaciones/jobs.sqlite?mode=ro',uri=True);"
+            "r=c.execute('SELECT detalle FROM confirmado WHERE id=1').fetchone();"
+            "assert r;print(json.loads(r[0])['generacion']);c.close()"
+        )
+        ident = container_config(update_service)['Id']
+        return command(['docker', 'exec', ident, 'python', '-B', '-c', probe]).decode().strip()
+
+    def wait_docker_healthy(service, attempts=90):
+        for _ in range(attempts):
+            inspected = container_config(service)
+            health = inspected['State'].get('Health')
+            if health and health['Status'] == 'healthy':
+                return inspected
+            if health and health['Status'] == 'unhealthy':
+                raise RuntimeError(service + ' Docker healthcheck failed: ' + json.dumps(health.get('Log', [])[-3:]))
+            time.sleep(1)
+        raise RuntimeError(service + ' Docker healthcheck did not become healthy')
+
+    def wait_job(ident, terminal=('completed', 'failed', 'cancelled'), attempts=400):
+        for _ in range(attempts):
+            status, item = http(control_url + '/internal/v1/updates/' + ident, tokens['control'])
+            if status == 200 and item.get('status') in terminal:
+                return item
+            time.sleep(.25)
+        raise RuntimeError('Update job did not finish: ' + ident)
 
     def acquisition_ready():
         probe = "import urllib.request; assert urllib.request.urlopen('http://127.0.0.1:8002/health',timeout=1).status==200"
@@ -126,55 +225,151 @@ def main():
     try:
         command(base + ['run', '--rm', '--no-deps', 'profile-admin', 'initialize-profile', '--confirm-new-profile'], name='initialize-profile')
         command(base + ['run', '--rm', '--no-deps', 'backend-client', 'prepare'], name='prepare-isolated-copy')
-        command(base + ['up', '-d', '--no-deps', 'acquisition', 'backend-control'], name='start-acquisition-and-control')
+        config = json.loads(command(base + ['config', '--format', 'json']))
+        assert config['networks']['control']['internal'] is True
+        command(base + ['up', '-d', '--no-deps', 'acquisition', update_service],
+                name='start-acquisition-and-' + a.backend_mode)
         acquisition_ready()
         wait_http(control_url + '/health')
+        if a.backend_mode == 'fastapi':
+            service_inspect = wait_docker_healthy(update_service)
+            acquisition_inspect = wait_docker_healthy('acquisition')
+            allowlist_probe = (
+                "from persistencia.adquisicion import productores_aprobados;"
+                "approved=productores_aprobados();assert approved;print('producer_allowlist=present')"
+            )
+            allowlist_output = command(['docker', 'exec', service_inspect['Id'], 'python', '-B', '-c', allowlist_probe],
+                                       name='verify-fastapi-producer-allowlist')
+            assert b'producer_allowlist=present' in allowlist_output
+            targets = sorted(m['Destination'] for m in service_inspect['Mounts'])
+            assert targets == ['/run/secrets/acquisition-token', '/run/secrets/control-token', '/state'], targets
+            assert not service_inspect['HostConfig']['Privileged'] and service_inspect['HostConfig']['CapDrop'] == ['ALL']
+            assert service_inspect['Config']['Env'] and 'SPORTS_DATA_CONTROL=1' in service_inspect['Config']['Env']
+            assert '/state' not in [m['Destination'] for m in acquisition_inspect['Mounts']]
+            control_network = project + '_control'
+            fastapi_networks = service_inspect['NetworkSettings']['Networks']
+            acquisition_networks = acquisition_inspect['NetworkSettings']['Networks']
+            assert set(fastapi_networks) == {control_network}, fastapi_networks
+            assert set(acquisition_networks) == {control_network}, acquisition_networks
+            assert fastapi_networks[control_network]['NetworkID'] == acquisition_networks[control_network]['NetworkID']
+            assert all(not bindings for bindings in service_inspect['NetworkSettings']['Ports'].values()), \
+                service_inspect['NetworkSettings']['Ports']
+            results['container_isolation'] = dict(fastapi_mounts=targets,
+                                                  acquisition_mounts=sorted(m['Destination'] for m in acquisition_inspect['Mounts']),
+                                                  no_shared_sports_sqlite=True, networks='same-private-internal-network',
+                                                  host_ports=service_inspect['NetworkSettings']['Ports'],
+                                                  fastapi_health=service_inspect['State']['Health']['Status'],
+                                                  acquisition_health=acquisition_inspect['State']['Health']['Status'])
+            results['images'] = {image: json.loads(command(['docker', 'image', 'inspect', image]))[0]['Id']
+                                 for image in (a.fastapi_image, a.acquisition_image, a.backend_image)}
+        initial_status, scope = http(control_url + '/api/v1/scope')
+        assert initial_status == 200 and isinstance(scope, dict), (initial_status, scope)
+        initial_status, initial_match = http(control_url + '/api/v1/matches/16599363')
+        assert initial_status == 200 and isinstance(initial_match, dict), (initial_status, initial_match)
         status, body = http(control_url + '/internal/v1/updates/current')
         assert status == 401, (status, body)
         status, body = http(control_url + '/internal/v1/updates/current', tokens['control'])
         assert status == 200 and body['scope']['kind'] == 'pilot' and body['last_published'] is None, body
         results['initial'] = body
-        node_env = dict(env, DATA_MODE='real', LOCAL_DATA_API_URL=control_url, RJ_ACCESS_PASSWORD_FILE=str(files['access']),
-                        RJ_SESSION_SECRET_FILE=str(files['session']),
-                        RJ_CONTROL_SECRET_FILE=str(files['control']), NODE_ENV='production')
-        log = (out / 'next-server.log').open('wb')
-        next_process = subprocess.Popen(['node', 'node_modules/next/dist/bin/next', 'start', '-H', '127.0.0.1', '-p', str(a.frontend_port)],
-                                        cwd=a.frontend, env=node_env, stdout=log, stderr=subprocess.STDOUT)
-        wait_http(front_url + '/api/v1/session')
+        if a.backend_mode == 'fastapi':
+            # Exercise actual HTTP between both containers. The request executor runs inside sports-data and reads
+            # its mounted control token, while acquisition serves only the local recorded fixture.
+            container_before = service_inspect['Id']
+            initial_generation = coordinator_generation()
+            _, match_before = http(control_url + '/api/v1/matches/16599363')
 
-        def browser(phase):
-            raw = command(['node', 'scripts/validate-updates-stack.mjs', phase, front_url, str(files['access']), str(out / 'capturas'),
-                           str(files['control']), str(files['acquisition'])], name='browser-' + phase, cwd=a.frontend, timeout=900)
-            report = json.loads(raw.decode().strip().splitlines()[-1])
-            results['browser-' + phase] = report
-            save()
-            assert report['ok'], report
-            return report
+            cancel_key = str(uuid.uuid4())
+            cancel_status, cancel_started = http(control_url + '/internal/v1/updates', tokens['control'], method='POST',
+                                                 headers={'Idempotency-Key': cancel_key})
+            assert cancel_status == 202 and cancel_started['job']['id'], cancel_started
+            cancel_id = cancel_started['job']['id']
+            for _ in range(120):
+                _, active = http(control_url + '/internal/v1/updates/' + cancel_id, tokens['control'])
+                if active['phase'] == 'acquiring':
+                    break
+                time.sleep(.15)
+            else:
+                raise RuntimeError('FastAPI job did not reach acquisition phase for cancellation')
+            cancel_status, cancel_body = http(control_url + '/internal/v1/updates/' + cancel_id + '/cancel',
+                                              tokens['control'], method='POST')
+            assert cancel_status == 202, (cancel_status, cancel_body)
+            cancelled = wait_job(cancel_id)
+            assert (cancelled['status'], cancelled['error']['code'], cancelled['published']) == \
+                ('cancelled', 'CANCELLED', False), cancelled
+            assert http(control_url + '/api/v1/matches/16599363')[1] == match_before
+            results['cancelled'] = dict(status=cancelled['status'], old_query_unchanged=True)
 
-        publish = browser('publish')
-        assert next(s for s in publish['steps'] if s['name'] == 'cancelled')['unchanged'] is True
-        assert next(s for s in publish['steps'] if s['name'] == 'published')['postsForThisStart'] == 1
-        status, after_publish = http(control_url + '/internal/v1/updates/current', tokens['control'])
-        assert after_publish['last_job']['status'] == 'completed' and after_publish['last_published'], after_publish
-        results['after_publish'] = after_publish
+            idempotency_key = str(uuid.uuid4())
+            headers = {'Idempotency-Key': idempotency_key}
+            first_status, first = http(control_url + '/internal/v1/updates', tokens['control'], method='POST', headers=headers)
+            second_status, second = http(control_url + '/internal/v1/updates', tokens['control'], method='POST', headers=headers)
+            assert first_status in (200, 202) and second_status in (200, 202), (first_status, second_status)
+            assert first['job']['id'] == second['job']['id'] and second['reused'] is True, (first, second)
+            published_job = wait_job(first['job']['id'])
+            if published_job['status'] != 'completed':
+                results['publication_failure'] = published_job
+                save()
+                diagnostic = command(base + ['logs', '--no-color'], name='publication-failure-logs')
+                raise AssertionError('FastAPI publication failed: ' + json.dumps(published_job) + '\n' +
+                                     diagnostic.decode(errors='replace')[-5000:])
+            assert (published_job['status'], published_job['published']) == ('completed', True), published_job
+            status, after_publish = http(control_url + '/internal/v1/updates/current', tokens['control'])
+            assert status == 200 and after_publish['last_job']['id'] == published_job['id']
+            published_generation = coordinator_generation()
+            assert published_generation != initial_generation
+            assert after_publish['last_published'], after_publish
+            query_status, match_after = http(control_url + '/api/v1/matches/16599363')
+            assert query_status == 200 and isinstance(match_after, dict), (query_status, match_after)
+            service_after_publish = container_config(update_service)
+            assert service_after_publish['Id'] == container_before, 'FastAPI container restarted during publication'
+            assert service_after_publish['State']['Status'] == 'running'
+            results['after_publish'] = dict(state=after_publish, generation_changed=True, query_status=query_status,
+                                            container_unchanged=True, idem_reused=second['reused'])
+        else:
+            node_env = dict(env, DATA_MODE='real', LOCAL_DATA_API_URL=control_url, RJ_ACCESS_PASSWORD_FILE=str(files['access']),
+                            RJ_SESSION_SECRET_FILE=str(files['session']),
+                            RJ_CONTROL_SECRET_FILE=str(files['control']), NODE_ENV='production')
+            log = (out / 'next-server.log').open('wb')
+            next_process = subprocess.Popen(['node', 'node_modules/next/dist/bin/next', 'start', '-H', '127.0.0.1', '-p', str(a.frontend_port)],
+                                            cwd=a.frontend, env=node_env, stdout=log, stderr=subprocess.STDOUT)
+            wait_http(front_url + '/api/v1/session')
+
+            def browser(phase):
+                raw = command(['node', 'scripts/validate-updates-stack.mjs', phase, front_url, str(files['access']), str(out / 'capturas'),
+                               str(files['control']), str(files['acquisition'])], name='browser-' + phase, cwd=a.frontend, timeout=900)
+                report = json.loads(raw.decode().strip().splitlines()[-1])
+                results['browser-' + phase] = report
+                save()
+                assert report['ok'], report
+                return report
+
+            publish = browser('publish')
+            assert next(s for s in publish['steps'] if s['name'] == 'cancelled')['unchanged'] is True
+            assert next(s for s in publish['steps'] if s['name'] == 'published')['postsForThisStart'] == 1
+            status, after_publish = http(control_url + '/internal/v1/updates/current', tokens['control'])
+            assert after_publish['last_job']['status'] == 'completed' and after_publish['last_published'], after_publish
+            results['after_publish'] = after_publish
+        published_value = after_publish['last_published']
         # SIGKILL of the backend while a job acquires: after the restart the job is interrupted, never resumed, and
         # the published generation is the same one.
         _, match_before = http(control_url + '/api/v1/matches/16599363')
-        request = urllib.request.Request(control_url + '/internal/v1/updates', data=b'', method='POST',
-                                         headers={'Authorization': 'Bearer ' + tokens['control'], 'Idempotency-Key': str(uuid.uuid4())})
-        with urllib.request.urlopen(request, timeout=10) as response:
-            crashed = json.loads(response.read())['job']
+        crash_status, crash_response = http(control_url + '/internal/v1/updates', tokens['control'], method='POST',
+                                            headers={'Idempotency-Key': str(uuid.uuid4())})
+        assert crash_status == 202, (crash_status, crash_response)
+        crashed = crash_response['job']
         for _ in range(150):
             if http(control_url + f"/internal/v1/updates/{crashed['id']}", tokens['control'])[1]['phase'] == 'acquiring':
                 break
             time.sleep(.2)
-        command(base + ['kill', '-s', 'SIGKILL', 'backend-control'], name='kill-control-during-job')
-        command(base + ['up', '-d', '--no-deps', 'backend-control'], name='restart-control-after-kill')
+        else:
+            raise RuntimeError('Update job did not reach acquisition phase before process kill')
+        command(base + ['kill', '-s', 'SIGKILL', update_service], name='kill-backend-during-job')
+        command(base + ['up', '-d', '--no-deps', update_service], name='restart-backend-after-kill')
         wait_http(control_url + '/health')
         status, after_kill = http(control_url + '/internal/v1/updates/current', tokens['control'])
         assert after_kill['active_job'] is None and after_kill['last_job']['id'] == crashed['id'], after_kill
         assert after_kill['last_job']['error']['code'] == 'INTERRUPTED', after_kill
-        assert after_kill['last_published'] == after_publish['last_published'], after_kill
+        assert after_kill['last_published'] == published_value, after_kill
         assert http(control_url + '/api/v1/matches/16599363')[1] == match_before
         results['after_kill'] = after_kill
         # The acquisition job of the killed request finishes on its own (its bundle is never imported); wait for it so
@@ -187,59 +382,114 @@ def main():
             time.sleep(1)
         else:
             raise RuntimeError('Acquisition job did not finish')
+
+        if a.backend_mode == 'fastapi':
+            # Simulate acquisition being unavailable without changing its API or touching the sports-data volume.
+            command(base + ['stop', 'acquisition'], name='stop-acquisition-for-unavailable-case')
+            unavailable_status, unavailable_start = http(control_url + '/internal/v1/updates', tokens['control'],
+                                                         method='POST', headers={'Idempotency-Key': str(uuid.uuid4())})
+            assert unavailable_status == 202, (unavailable_status, unavailable_start)
+            unavailable = wait_job(unavailable_start['job']['id'])
+            assert unavailable['error']['code'] == 'ACQUISITION_UNAVAILABLE', unavailable
+            status, after_unavailable = http(control_url + '/internal/v1/updates/current', tokens['control'])
+            assert status == 200 and after_unavailable['last_published'] == published_value, \
+                after_unavailable
+            results['acquisition_unavailable'] = dict(status=unavailable['status'],
+                                                      error=unavailable['error']['code'],
+                                                      generation_preserved=True)
+            command(base + ['start', 'acquisition'], name='restart-acquisition-after-unavailable-case')
+            acquisition_ready()
+            wait_docker_healthy('acquisition')
+
         env['RJ_TEST_SCENARIO'] = 'prohibido'
         command(base + ['up', '-d', '--no-deps', '--force-recreate', 'acquisition'], name='acquisition-refusing-site')
         acquisition_ready()
-        refusal = browser('refusal')
-        assert next(s for s in refusal['steps'] if s['name'] == 'refused')['unchanged'] is True
+        if a.backend_mode == 'fastapi':
+            refusal_status, refusal_start = http(control_url + '/internal/v1/updates', tokens['control'], method='POST',
+                                                 headers={'Idempotency-Key': str(uuid.uuid4())})
+            assert refusal_status == 202, (refusal_status, refusal_start)
+            refusal = wait_job(refusal_start['job']['id'])
+            assert refusal['error']['code'] == 'ACQUISITION_FAILED', refusal
+        else:
+            refusal = browser('refusal')
+            assert next(s for s in refusal['steps'] if s['name'] == 'refused')['unchanged'] is True
         status, after_refusal = http(control_url + '/internal/v1/updates/current', tokens['control'])
         assert after_refusal['last_job']['error']['code'] == 'ACQUISITION_FAILED', after_refusal
-        assert after_refusal['last_published'] == after_publish['last_published'], after_refusal
+        assert after_refusal['last_published'] == published_value, after_refusal
         results['after_refusal'] = after_refusal
         # Restart of the backend: jobs and the published generation persist, nothing is resumed.
-        command(base + ['restart', 'backend-control'], name='restart-control')
+        command(base + ['restart', update_service], name='restart-backend')
         wait_http(control_url + '/health')
         status, restarted = http(control_url + '/internal/v1/updates/current', tokens['control'])
-        assert restarted['last_published'] == after_publish['last_published'] and restarted['active_job'] is None, restarted
+        assert restarted['last_published'] == published_value and restarted['active_job'] is None, restarted
         results['after_restart'] = restarted
-        # The access session: it survives restarting the frontend (its key comes from the secret files), and rotating
-        # the session secret in place revokes the cookie issued before.
-        def front(path, method='GET', cookie=None, body=None):
-            headers = {'Origin': front_url, **({'Cookie': cookie} if cookie else {}),
-                       **({'Content-Type': 'application/json'} if body is not None else {})}
-            req = urllib.request.Request(front_url + path, method=method, headers=headers,
-                                         data=json.dumps(body).encode() if body is not None else None)
-            try:
-                with urllib.request.urlopen(req, timeout=15) as response:
-                    return response.status, response.headers, response.read()
-            except urllib.error.HTTPError as error:
-                payload = error.read()
-                error.close()
-                return error.code, error.headers, payload
+        if not a.skip_frontend:
+            # The access session survives a frontend restart, while rotating its secret revokes the old cookie.
+            def front(path, method='GET', cookie=None, body=None):
+                headers = {'Origin': front_url, **({'Cookie': cookie} if cookie else {}),
+                           **({'Content-Type': 'application/json'} if body is not None else {})}
+                req = urllib.request.Request(front_url + path, method=method, headers=headers,
+                                             data=json.dumps(body).encode() if body is not None else None)
+                try:
+                    with urllib.request.urlopen(req, timeout=15) as response:
+                        return response.status, response.headers, response.read()
+                except urllib.error.HTTPError as error:
+                    payload = error.read()
+                    error.close()
+                    return error.code, error.headers, payload
 
-        status, headers, _ = front('/api/v1/session', 'POST', body={'password': tokens['access']})
-        assert status == 204, status
-        session_cookie = headers['Set-Cookie'].split(';')[0]
-        assert 'Max-Age=7776000' in headers['Set-Cookie'] and 'HttpOnly' in headers['Set-Cookie'], headers['Set-Cookie']
-        assert front('/api/v1/source')[0] == 401
-        assert front('/api/v1/source', cookie=session_cookie)[0] == 200
-        next_process.terminate()
-        next_process.wait(30)
-        log = (out / 'next-server.log').open('ab')
-        next_process = subprocess.Popen(['node', 'node_modules/next/dist/bin/next', 'start', '-H', '127.0.0.1', '-p', str(a.frontend_port)],
-                                        cwd=a.frontend, env=node_env, stdout=log, stderr=subprocess.STDOUT)
-        wait_http(front_url + '/api/v1/session')
-        survived = front('/api/v1/source', cookie=session_cookie)[0]
-        signed_in = json.loads(front('/api/v1/session', cookie=session_cookie)[2])['signedIn']
-        assert (survived, signed_in) == (200, True), (survived, signed_in)
-        tokens['session'] = secrets.token_hex(32)
-        files['session'].write_text(tokens['session'], encoding='ascii')  # in place: same file, new content
-        revoked = front('/api/v1/source', cookie=session_cookie)[0]
-        assert revoked == 401, revoked
-        status, headers, _ = front('/api/v1/session', 'POST', body={'password': tokens['access']})
-        assert status == 204 and front('/api/v1/source', cookie=headers['Set-Cookie'].split(';')[0])[0] == 200
-        results['access-session'] = dict(survives_frontend_restart=True, revoked_by_rotation=True, new_session_after_rotation=True)
-        save()
+            status, headers, _ = front('/api/v1/session', 'POST', body={'password': tokens['access']})
+            assert status == 204, status
+            session_cookie = headers['Set-Cookie'].split(';')[0]
+            assert 'Max-Age=7776000' in headers['Set-Cookie'] and 'HttpOnly' in headers['Set-Cookie'], headers['Set-Cookie']
+            assert front('/api/v1/source')[0] == 401
+            assert front('/api/v1/source', cookie=session_cookie)[0] == 200
+            next_process.terminate()
+            next_process.wait(30)
+            log = (out / 'next-server.log').open('ab')
+            next_process = subprocess.Popen(['node', 'node_modules/next/dist/bin/next', 'start', '-H', '127.0.0.1', '-p', str(a.frontend_port)],
+                                            cwd=a.frontend, env=node_env, stdout=log, stderr=subprocess.STDOUT)
+            wait_http(front_url + '/api/v1/session')
+            survived = front('/api/v1/source', cookie=session_cookie)[0]
+            signed_in = json.loads(front('/api/v1/session', cookie=session_cookie)[2])['signedIn']
+            assert (survived, signed_in) == (200, True), (survived, signed_in)
+            tokens['session'] = secrets.token_hex(32)
+            files['session'].write_text(tokens['session'], encoding='ascii')
+            revoked = front('/api/v1/source', cookie=session_cookie)[0]
+            assert revoked == 401, revoked
+            status, headers, _ = front('/api/v1/session', 'POST', body={'password': tokens['access']})
+            assert status == 204 and front('/api/v1/source', cookie=headers['Set-Cookie'].split(';')[0])[0] == 200
+            results['access-session'] = dict(survives_frontend_restart=True, revoked_by_rotation=True,
+                                             new_session_after_rotation=True)
+            save()
+
+        if a.backend_mode == 'fastapi':
+            # Stopping the process must release its SQLite coordinator lock and leave both databases readable.
+            command(base + ['stop', update_service], name='stop-fastapi-and-release-sqlite-lock')
+            lock_probe = '''
+import json
+import sqlite3
+from pathlib import Path
+from persistencia.bloqueo import bloquear
+
+base = Path('/state/base.sqlite')
+c = sqlite3.connect('file:/state/base.sqlite?mode=ro', uri=True)
+integrity = c.execute('PRAGMA integrity_check').fetchone()[0]
+fk = c.execute('PRAGMA foreign_key_check').fetchall()
+c.close()
+j = sqlite3.connect('file:/state/base.sqlite.actualizaciones/jobs.sqlite?mode=ro', uri=True)
+journal = j.execute('PRAGMA integrity_check').fetchone()[0]
+j.close()
+assert integrity == 'ok' and not fk and journal == 'ok', (integrity, fk, journal)
+with bloquear(base):
+    print(json.dumps({'integrity': integrity, 'foreign_key_errors': fk, 'journal': journal,
+                      'lock_released': True}))
+'''
+            check = command(['docker', 'run', '--rm', '--pull', 'never', '--network', 'none', '--cap-drop', 'ALL',
+                             '--mount', f'type=volume,source={env["RJ_TEST_STATE_VOLUME"]},target=/state',
+                             '--entrypoint', 'python', a.fastapi_image, '-B', '-c', lock_probe],
+                            name='verify-sqlite-integrity-and-released-lock')
+            results['shutdown'] = json.loads(check.decode().strip().splitlines()[-1])
         logs = command(base + ['logs', '--no-color'], name='service-logs-secret-audit')
         assert not leaked(logs)
         results['ok'] = True
@@ -254,6 +504,7 @@ def main():
         (out / 'cleanup.log').write_bytes(cleanup.stdout + cleanup.stderr)
         for file in files.values():
             file.unlink(missing_ok=True)
+        secret_dir.rmdir()
         tmp.cleanup()
         results['secrets_removed'] = True
         save()

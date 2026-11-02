@@ -89,7 +89,7 @@ proveedor real. `RJ_ACQUISITION_TEST=1` solo es válido para una instalación ma
 |---|---|
 | `test_offline.py` | Imagen de adquisición, perfil y sandbox de Chromium sin red |
 | `test_integration.py` | Backend ↔ adquisición con respuestas reales grabadas |
-| `test_updates.py` | Recorrido completo desde el dashboard (`/api/v1/updates`) |
+| `test_updates.py` | Recorrido completo desde el dashboard (`/api/v1/updates`), con `control.py` o FastAPI en modo control |
 | `test_group.py` | Receta del Grupo 2 con horas simuladas y un sitio local |
 
 Los Compose `docker/acquisition/compose.*.yaml` son pilas de prueba aisladas de adquisición; no son overlays de la instalación del dashboard. Sus scripts indican el comando y directorio de ejecución. La instalación normal usa únicamente `../compose.yaml` desde la raíz del workspace.
@@ -134,6 +134,29 @@ python -X utf8 docker/acquisition/test_integration.py --acquisition-image rj-acq
   --backend-image rj-backend-portable:test --snapshot ../pruebas/copias/real-jaen.respaldo-AAAAMMDD.sqlite \
   --evidence CARPETA-NUEVA
 ```
+
+La misma prueba de actualización puede ejecutar el servidor FastAPI real, sin cambiar la pila habitual. Construye
+su imagen con el `Dockerfile.fastapi` de este repositorio y usa `--backend-mode fastapi --skip-frontend`; el servicio
+queda en el perfil aislado `fastapi-updates`. FastAPI y adquisición comparten solo la red privada `control`, que no
+tiene salida ni puertos publicados. El driver llama a la API desde dentro del contenedor FastAPI y lee el secreto
+interno desde su montaje de solo lectura. La SQLite de prueba solo se monta en `sports-data`, nunca en `acquisition`:
+
+```sh
+docker build -f Dockerfile.fastapi -t rj-sports-data-fastapi:test .
+python -X utf8 docker/acquisition/test_updates.py --backend-mode fastapi \
+  --skip-frontend \
+  --fastapi-image rj-sports-data-fastapi:test --acquisition-image rj-acq-portable:test \
+  --backend-image rj-backend-portable:test --snapshot ../pruebas/copias/real-jaen.respaldo-AAAAMMDD.sqlite \
+  --evidence CARPETA-NUEVA
+```
+
+`--backend-image` sigue siendo la imagen del controlador de pruebas que prepara una copia inactiva y prepara los
+fixtures locales. `--fastapi-image` es solo el runtime que atiende la API y controla la actualización. El driver
+verifica autenticación, consultas deportivas, aislamiento de montajes y redes, healthchecks, idempotencia HTTP,
+publicación, cancelación, reinicios, adquisición no disponible, rechazo del proveedor fixture, integridad SQLite y
+liberación del bloqueo. `tests/test_fastapi_control.py` y `test_integration.py` cubren además bundles manipulados,
+consultas durante la publicación y recuperación ante fallos de publicación. No hay acceso de red externa en el flujo
+de adquisición.
 
 Cada prueba conserva sus volúmenes (`rj-acq-test-*`, `rj-upd-test-*`, `rj-grp-test-*`) para inspección; se retiran a
 mano, por nombre exacto.
