@@ -153,6 +153,27 @@ class Rendimiento(unittest.TestCase):
                      crear.PENDIENTE_CON_MARCADOR, crear.APLAZADO, crear.PENDIENTE}
         self.assertFalse(excluidos & {r['match']['match_id'] for r in resultados})
 
+    def test_xg_por_partido_reutiliza_la_orientacion_y_la_cobertura_del_calculo(self):
+        resultados = self.competicion()['results']
+        por_id = {resultado['match']['match_id']: resultado for resultado in resultados}
+        # FINALIZADO es visitante: los valores de xG locales/visitantes se expresan desde el lado del Real Jaén.
+        self.assertEqual((por_id[crear.FINALIZADO]['xg_for'], por_id[crear.FINALIZADO]['xg_against']), (1.5, 0.8))
+        # EMPATE_CASA es local y conserva el cero real, distinto de una ausencia.
+        self.assertEqual((por_id[crear.EMPATE_CASA]['xg_for'], por_id[crear.EMPATE_CASA]['xg_against']), (0.0, 0.9))
+        # Un partido sin estadísticas queda ausente en ambos sentidos, nunca como cero.
+        self.assertEqual((por_id[crear.DERROTA_CASA]['xg_for'], por_id[crear.DERROTA_CASA]['xg_against']), (None, None))
+
+    def test_xg_contradictorio_entre_grupos_se_sigue_excluyendo(self):
+        originales = copy.deepcopy(DATOS['originales'])
+        payload = originales[(crear.FINALIZADO, 'statistics')]['registro']['payload']
+        duplicate = payload['statistics'][0]['groups'][1]['statisticsItems'][0]
+        self.assertEqual(duplicate['key'], 'expectedGoals')
+        duplicate['awayValue'] = 1.6
+        valores = api.valores_por_partido(originales, {
+            'match': {'match_id': crear.FINALIZADO}, 'side': 'away', 'goals_for': 2, 'goals_against': 0,
+        })
+        self.assertEqual((valores['xg'], valores['xgAgainst']), (None, None))
+
     def media(self, valor, partidos, de):
         return {'value': valor, 'matches': partidos, 'of': de}
 

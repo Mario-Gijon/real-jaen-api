@@ -459,8 +459,13 @@ def rendimiento(datos, ident):
         balance['goal_difference'] = balance['goals_for'] - balance['goals_against']
         # Producción y concesión: los mismos partidos que el balance. «Últimos 3» son los tres contados más recientes
         # con fecha; la cobertura de cada media se calcula después, sin buscar partidos anteriores que la completen.
-        elegibles = [{'match_id': r['match']['match_id'], 'valores': valores_por_partido(datos['originales'], r)}
-                     for r in resultados]
+        elegibles = []
+        for r in resultados:
+            valores = valores_por_partido(datos['originales'], r)
+            # El detalle por partido se comparte con «Inicio»: la misma lectura de ALL que forma las medias.
+            r['xg_for'] = valores['xg']
+            r['xg_against'] = valores['xgAgainst']
+            elegibles.append({'match_id': r['match']['match_id'], 'valores': valores})
         con_fecha = [e for e, r in zip(elegibles, resultados) if inicio(r['match']) is not None]
         ultimos = con_fecha[-3:]
         produccion = {'season': medias(elegibles),
