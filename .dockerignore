@@ -1,6 +1,7 @@
 # Explicit source-only context: no .git, .venv, .env, SQLite, backups, originals or fixtures.
 **
 !api.py
+!app.py
 !queries.py
 !control.py
 !importar.py
@@ -9,6 +10,7 @@
 !productores-adquisicion.json
 !alembic.ini
 !requirements-sql.txt
+!requirements-fastapi.txt
 !requirements-dev.txt
 !persistencia/
 !persistencia/**
