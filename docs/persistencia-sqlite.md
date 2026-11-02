@@ -1,5 +1,9 @@
 # Persistencia de api-real-jaen: diseño (SQLite, SQLAlchemy, Alembic)
 
+> Nota 02-11-2026: este documento conserva el diseño y las validaciones históricas. Sus ejemplos de ejecución
+> `api.py` y puerto 8001 describen fases anteriores; el servicio actual es FastAPI/Uvicorn (`app.py`, puerto 8002).
+> Comandos vigentes: [README.md](../README.md) y [docker.md](docker.md).
+
 > Estado 29-10-2026: fases 0 a 4 implementadas y en uso; la base de la instalación habitual está en la revisión
 > `0004` ([fase4-sincronizacion.md](fase4-sincronizacion.md)).
 

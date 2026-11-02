@@ -69,15 +69,21 @@ services:
   # The button's path: the backend in control mode over the isolated copy, on loopback only. It accepts only
   # bundles that declare exactly this installation's restriction.
   backend-control:
-    image: ${RJ_REAL_BACKEND_IMAGE:?Set the backend image by id}
+    image: ${RJ_REAL_BACKEND_IMAGE:?Set the FastAPI sports-data image by id}
     pull_policy: never
-    entrypoint: [python, -B, /app/control.py]
-    command: [--base, /state/base.sqlite, --ambito, /app/ambito.json, --host, 0.0.0.0, --port, "8001"]
+    entrypoint: [python, -B, -m, uvicorn]
+    command: [app:app, --host, 0.0.0.0, --port, "8002", --workers, "1"]
     init: true
     user: "10001:10001"
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     environment:
+      SPORTS_DATA_CONTROL: "1"
+      SPORTS_DATA_WORKERS: "1"
+      WEB_CONCURRENCY: "1"
+      SPORTS_DATA_STORAGE: sql
+      SPORTS_DATA_DB: /state/base.sqlite
+      SPORTS_DATA_SCOPE: /app/ambito.json
       RJ_UPDATE_RECIPE: sofascore-group2-2627-v1
       RJ_ACQUISITION_URL: http://acquisition:8002
       RJ_ACQUISITION_SECRET_FILE: /run/secrets/acquisition-token
@@ -97,11 +103,10 @@ services:
         target: /run/secrets/control-token
         read_only: true
         bind: {create_host_path: false}
-    ports: ["127.0.0.1:${RJ_REAL_CONTROL_PORT:-18003}:8001"]
-    networks: [control, published]
+    ports: ["127.0.0.1:${RJ_REAL_CONTROL_PORT:-18003}:8002"]
+    networks: [control]
 networks:
   control: {internal: true}
-  published: {}
 volumes:
   profiles:
     external: true

@@ -180,10 +180,14 @@ class CargaValida(Base):
                                        'JOIN rule_set r ON r.id = s.rule_set_id'), [(1, 'importar.seleccionar')])
         self.assertEqual(self.consulta('SELECT count(*) FROM section_selection_history'), [(0,)])
         # Discrepancias con sus motivos en orden; versiones contradictorias conservadas como evidencia.
-        motivos = self.consulta("SELECT x.external_id, d.key, group_concat(r.reason, ',' ORDER BY r.ordinal) FROM discrepancy d "
-                                "JOIN match_external_id x ON x.entity_id = d.match_id "
-                                "JOIN discrepancy_reason r ON r.discrepancy_id = d.id "
-                                "WHERE d.kind <> 'player_attribute' GROUP BY d.id ORDER BY x.external_id, d.key")
+        filas_motivos = self.consulta("SELECT x.external_id, d.key, r.reason FROM discrepancy d "
+                                      "JOIN match_external_id x ON x.entity_id = d.match_id "
+                                      "JOIN discrepancy_reason r ON r.discrepancy_id = d.id "
+                                      "WHERE d.kind <> 'player_attribute' ORDER BY x.external_id, d.key, r.ordinal")
+        agrupados = {}
+        for ident, clave, motivo in filas_motivos:
+            agrupados.setdefault((ident, clave), []).append(motivo)
+        motivos = [(ident, clave, ','.join(lista)) for (ident, clave), lista in agrupados.items()]
         self.assertIn(('100', 'event', 'identity_changed,non_final_after_final,final_score_corrected'), motivos)
         self.assertIn(('101', 'event', 'preliminary_superseded'), motivos)
         self.assertIn(('200', 'listing', 'listing_differs_from_event'), motivos)

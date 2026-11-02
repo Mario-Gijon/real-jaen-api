@@ -1,4 +1,4 @@
-"""Reglas deportivas y respuestas de consulta, separadas del servidor HTTP de api.py."""
+"""Reglas deportivas y respuestas REST, separadas de la aplicación HTTP en app.py."""
 import json
 import math
 from datetime import datetime

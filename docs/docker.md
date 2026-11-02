@@ -2,14 +2,15 @@
 
 La composición compartida se mantiene en la raíz del workspace **app-real-jaen/compose.yaml**; procedimiento canónico, variables, instalación, arranque, parada, logs, copias y mantenimiento: `../../dashboard/docs/docker.md`. Los repositorios `dashboard/` y `api/` conservan sus propios Dockerfiles; no se mezclan arquitecturas. Los comandos Compose se ejecutan desde la raíz del workspace con `--env-file .env.docker -f compose.yaml`.
 
-Esta imagen usa Python 3.14.4 slim-bookworm fijado por digest y las versiones SQL exactas de
-requirements-sql.txt. Solo copia código, ámbito y configuración Alembic, nunca .env.local, SQLite,
-exportaciones, Git ni entornos del host. Ejecuta como 10001:10001. No se añade otro servidor HTTP.
+Esta imagen única de `sports-data` usa Python 3.14.4 slim-bookworm fijado por digest, instala
+`requirements-fastapi.txt` (incluye las dependencias SQL y FastAPI/Uvicorn) y ejecuta Uvicorn como
+10001:10001. Solo copia código, ámbito y configuración Alembic; nunca .env.local, SQLite, exportaciones, Git
+ni entornos del host.
 
-El CMD explícito sirve SQL desde `/state/real-jaen.sqlite`, con `/app/ambito.json` y escucha
-`0.0.0.0:8001` dentro de Compose. **El valor predeterminado de api.py en Windows sigue siendo
-127.0.0.1**; `--host` solo configura la interfaz de red, sin cambiar rutas ni contratos.
-El backend no se publica al host y el healthcheck usa el /health existente. No hay migraciones al
+El CMD ejecuta `uvicorn app:app --host 0.0.0.0 --port 8002 --workers 1`; Compose configura la lectura
+SQL desde `/state/real-jaen.sqlite` y el ámbito `/app/ambito.json`. `SPORTS_DATA_CONTROL` permanece apagado
+por defecto. El modo control optativo usa el mismo proceso FastAPI y solo se activa con el overlay de adquisición.
+El backend no se publica al host y el healthcheck consulta `/health`. No hay migraciones al
 arrancar ni recarga en caliente. El código sin .git conserva su huella de archivos como procedencia
 (`git:desconocido+sha256:…`); no se presenta como un checkout limpio de un commit Git.
 

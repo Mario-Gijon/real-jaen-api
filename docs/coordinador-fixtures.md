@@ -1,6 +1,6 @@
 # Coordinador interno de actualizacion: fixtures locales
 
-> Estado 29-10-2026: el coordinador (`persistencia/actualizacion.py`) está integrado. Lo usan `control.py` y el botón
+> Estado 29-10-2026: el coordinador (`persistencia/actualizacion.py`) está integrado. Lo usan el modo control de FastAPI (`app.py`) y el botón
 > «Actualizar» del dashboard con el servicio de adquisición (`rj-analyst/docs/contrato-actualizaciones.md`,
 > [adquisicion-sofascore.md](adquisicion-sofascore.md)). Las restricciones de abajo («sin endpoints, red ni botón»)
 > describen la primera entrega del 26-10; sus reglas de generación, captura y publicación siguen vigentes.

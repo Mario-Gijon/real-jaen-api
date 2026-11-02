@@ -141,81 +141,60 @@ class FastAPIControl(fixtures.Base):
             with self.assertRaisesRegex(ValueError, 'procesos worker'):
                 fastapi_entry._load_control(ExitStack())
 
-    def test_http_paridad_actualizacion_cancelacion_generaciones_y_liberacion(self):
-        from control import PREFIX, handler_for
-        from http.server import ThreadingHTTPServer
+    def test_http_actualizaciones_autenticacion_idempotencia_cancelacion_y_generaciones(self):
+        from app import UPDATE_PREFIX as PREFIX
 
         auth = {'Authorization': 'Bearer ' + self.token}
         with self.running() as (base, application):
-            server = ThreadingHTTPServer(('127.0.0.1', 0), handler_for(
-                application.state.coordinator, application.state.updates, application.state.control_token))
-            server.daemon_threads = True
-            thread = threading.Thread(target=server.serve_forever, daemon=True)
-            thread.start()
-            old = f'http://127.0.0.1:{server.server_port}'
+            for headers in ({}, {'Authorization': 'Bearer invalid'}):
+                response = self.request(base, PREFIX + '/current', headers=headers)
+                self.assertEqual((response[0], response[1]), (401, {'error': 'unauthorized'}))
+            self.assertEqual(self.request(base, PREFIX, 'POST', auth)[0], 400)
+            invalid = dict(auth, **{'Idempotency-Key': 'not-a-uuid'})
+            self.assertEqual(self.request(base, PREFIX, 'POST', invalid)[:2],
+                             (400, {'error': 'invalid_request'}))
 
-            def assert_same(path, method='GET', headers=None):
-                newer = self.request(base, path, method, headers)
-                previous = self.request(old, path, method, headers)
-                self.assertEqual(newer[:2], previous[:2])
-                self.assertEqual((newer[2].get('Content-Type'), newer[2].get('Cache-Control')),
-                                 (previous[2].get('Content-Type'), previous[2].get('Cache-Control')))
-                return newer
+            self.client_impl.gate.clear()
+            key = str(uuid.uuid4())
+            headers = dict(auth, **{'Idempotency-Key': key})
+            started = self.request(base, PREFIX, 'POST', headers)
+            self.assertEqual(started[0], 202)
+            ident = started[1]['job']['id']
+            phase(application.state.updates, ident, 'acquiring')
+            self.assertEqual(self.request(base, PREFIX + '/' + ident, headers=auth)[1]['status'], 'running')
+            repeated = self.request(base, PREFIX, 'POST', headers)
+            self.assertEqual((repeated[0], repeated[1]['job']['id'], repeated[1]['reused']), (200, ident, True))
+            self.assertEqual(self.request(base, PREFIX, 'POST',
+                                          dict(auth, **{'Idempotency-Key': str(uuid.uuid4())}))[:2],
+                             (200, repeated[1]))
+            self.client_impl.gate.set()
+            finished = wait(application.state.updates, ident)
+            self.assertEqual((finished['status'], finished['published']), ('completed', True))
+            current = self.request(base, PREFIX + '/current', headers=auth)
+            self.assertEqual((current[0], current[1]['last_job']['status']), (200, 'completed'))
+            self.assertEqual(self.request(base, PREFIX + '/' + ident + '/cancel', 'POST', auth)[0], 409)
+            self.assertEqual(self.request(base, PREFIX + '/' + str(uuid.uuid4()), headers=auth)[0], 404)
+            self.assertEqual(self.request(base, '/internal/v1/updates/invalid', headers=auth)[0], 404)
+            self.assertEqual(self.request(base, '/outside', 'POST', auth)[:2],
+                             (404, {'error': 'Ruta inexistente'}))
 
-            try:
-                for headers in ({}, {'Authorization': 'Bearer invalid'}):
-                    assert_same(PREFIX + '/current', headers=headers)
-                    self.assertEqual(self.request(base, PREFIX + '/current', headers=headers)[0], 401)
-                assert_same(PREFIX, 'POST', auth)
-                invalid = dict(auth, **{'Idempotency-Key': 'not-a-uuid'})
-                assert_same(PREFIX, 'POST', invalid)
-                self.assertEqual(self.request(base, PREFIX, 'POST', invalid)[0], 400)
-
-                key = str(uuid.uuid4())
-                headers = dict(auth, **{'Idempotency-Key': key})
-                self.assertEqual(self.request(base, '/api/v1/matches/999')[0], 404)
-                self.client_impl.gate.clear()
-                first = self.request(base, PREFIX, 'POST', headers)
-                self.assertEqual(first[0], 202)
-                phase(application.state.updates, first[1]['job']['id'], 'acquiring')
-                repeated = self.request(base, PREFIX, 'POST', headers)
-                assert_same(PREFIX, 'POST', headers)
-                self.assertEqual(repeated[0], 200)
-                self.client_impl.gate.set()
-                finished = wait(application.state.updates, first[1]['job']['id'])
-                self.assertEqual((finished['status'], finished['published']), ('completed', True))
-                job_path = PREFIX + '/' + finished['id']
-                assert_same(job_path, headers=auth)
-                assert_same(PREFIX + '/current', headers=auth)
-                self.assertEqual(self.request(base, '/api/v1/matches/999')[0], 200)
-                assert_same('/health')
-                self.assertEqual(self.request(base, job_path + '/cancel', 'POST', auth)[0], 409)
-                self.assertEqual(self.request(base, PREFIX + '/' + str(uuid.uuid4()), headers=auth)[0], 404)
-                self.assertEqual(self.request(base, '/internal/v1/updates/invalid', headers=auth)[0], 404)
-
-                self.client_impl.gate.clear()
-                cancel_headers = dict(auth, **{'Idempotency-Key': str(uuid.uuid4())})
-                queued = self.request(base, PREFIX, 'POST', cancel_headers)
-                self.assertEqual(queued[0], 202)
-                ident = queued[1]['job']['id']
-                phase(application.state.updates, ident, 'acquiring')
-                cancel_path = PREFIX + '/' + ident + '/cancel'
-                self.assertEqual(self.request(base, cancel_path, 'POST', auth)[0], 202)
-                done = wait(application.state.updates, ident)
-                self.assertEqual((done['status'], done['error']['code'], done['published']),
-                                 ('cancelled', 'CANCELLED', False))
-                self.assertEqual(self.request(base, cancel_path, 'POST', auth)[:2],
-                                 self.request(old, cancel_path, 'POST', auth)[:2])
-            finally:
-                server.shutdown()
-                server.server_close()
-                thread.join(5)
+            self.client_impl.gate.clear()
+            cancel_headers = dict(auth, **{'Idempotency-Key': str(uuid.uuid4())})
+            queued = self.request(base, PREFIX, 'POST', cancel_headers)
+            self.assertEqual(queued[0], 202)
+            cancel_id = queued[1]['job']['id']
+            phase(application.state.updates, cancel_id, 'acquiring')
+            cancel_path = PREFIX + '/' + cancel_id + '/cancel'
+            self.assertEqual(self.request(base, cancel_path, 'POST', auth)[0], 202)
+            cancelled = wait(application.state.updates, cancel_id)
+            self.assertEqual((cancelled['status'], cancelled['error']['code'], cancelled['published']),
+                             ('cancelled', 'CANCELLED', False))
 
         with bloquear(self.fixture.base):
             self.assertTrue(self.fixture.base.is_file())
 
     def test_fallos_y_consultas_durante_publicacion_conservan_una_generacion(self):
-        from control import PREFIX
+        from app import UPDATE_PREFIX as PREFIX
 
         paused, resume = threading.Event(), threading.Event()
 
@@ -253,7 +232,7 @@ class FastAPIControl(fixtures.Base):
             self.assertEqual(self.request(base, '/api/v1/matches/999')[0], 200)
 
     def test_reintenta_un_bundle_verificado_tras_fallo_de_publicacion(self):
-        from control import PREFIX
+        from app import UPDATE_PREFIX as PREFIX
 
         injected = []
 
@@ -278,7 +257,7 @@ class FastAPIControl(fixtures.Base):
             self.assertEqual(self.request(base, '/api/v1/matches/999')[0], 200)
 
     def test_lifespan_reconcilia_publicacion_confirmada_tras_reinicio(self):
-        from control import PREFIX
+        from app import UPDATE_PREFIX as PREFIX
 
         auth = {'Authorization': 'Bearer ' + self.token}
         with self.running() as (base, application):

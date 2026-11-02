@@ -1,2 +1,0 @@
--r requirements-sql.txt
-watchfiles==1.3.0

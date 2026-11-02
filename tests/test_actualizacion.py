@@ -5,6 +5,7 @@ import errno
 import json
 from pathlib import Path
 import subprocess
+import sqlite3
 import sys
 import threading
 import time
@@ -197,6 +198,33 @@ class Actualizacion(Base):
             with self.assertRaises(CoordinacionRechazada):
                 Coordinador(self.base, AMBITO)
         self.assertEqual(sqlite.describir(self.base), self.antes)
+
+    def test_acepta_la_huella_anterior_a_la_eliminacion_del_servidor_http(self):
+        anterior = 'bd9446235f4e6a1ec8618fc0f35124a7b31f94a0dad55c4539c4892c875ebb6a'
+        with sqlite3.connect(self.base) as connection:
+            summary = json.loads(connection.execute('SELECT summary FROM import_run WHERE id=1').fetchone()[0])
+            summary['codigo']['sha256_agregada'] = anterior
+            connection.execute('UPDATE import_run SET summary=? WHERE id=1', (json.dumps(summary),))
+
+        with Coordinador(self.base, AMBITO, reserva=0) as coordinator:
+            self.assertEqual(coordinator._meta()['codigo'], actualizacion.codigo())
+
+        journal_path = self.base.with_name(self.base.name + '.actualizaciones') / 'jobs.sqlite'
+        with sqlite3.connect(self.base) as connection:
+            stored = json.loads(connection.execute('SELECT summary FROM import_run WHERE id=1').fetchone()[0])
+        with sqlite3.connect(journal_path) as connection:
+            journal = json.loads(connection.execute('SELECT detalle FROM confirmado WHERE id=1').fetchone()[0])
+            journal['codigo'] = anterior
+            connection.execute('UPDATE confirmado SET detalle=? WHERE id=1', (json.dumps(journal),))
+        with Coordinador(self.base, AMBITO, reserva=0) as coordinator:
+            self.assertEqual(coordinator._meta()['codigo'], actualizacion.codigo())
+
+        with sqlite3.connect(journal_path) as connection:
+            journal = json.loads(connection.execute('SELECT detalle FROM confirmado WHERE id=1').fetchone()[0])
+        self.assertEqual(stored['codigo']['sha256_agregada'], anterior)
+        self.assertEqual(journal['codigo'], actualizacion.codigo())
+        self.assertTrue(actualizacion.codigo_compatible(anterior))
+        self.assertFalse(actualizacion.codigo_compatible('0' * 64))
 
     def test_enospc_copia_y_journal_antes_de_confirmar(self):
         original = sqlite.copia_consistente

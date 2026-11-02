@@ -1,4 +1,4 @@
-"""Coordinador interno para fixtures locales. Sin conexión con api.main ni red.
+"""Coordinador interno para fixtures locales. No gestiona HTTP ni accede a la red por sí mismo.
 
 Un hilo propietario mantiene el bloqueo durante apertura, trabajo y recuperación.
 El journal operativo es independiente de la base deportiva. Ver docs/coordinador-fixtures.md.
@@ -26,6 +26,18 @@ class CoordinacionRechazada(RuntimeError):
 
 def codigo():
     return carga.referencia_del_codigo()['sha256_agregada']
+
+
+# The 0d12fffc release fingerprint is accepted as the same sporting rules: this cleanup only removes the
+# sports-data HTTP/CLI implementations. Historical import metadata stays intact; an old coordinator journal is
+# upgraded once to the current fingerprint. Acquisition producer approvals are separate and remain unchanged.
+REFERENCIAS_CODIGO_COMPATIBLES = frozenset({'bd9446235f4e6a1ec8618fc0f35124a7b31f94a0dad55c4539c4892c875ebb6a'})
+
+
+def codigo_compatible(referencia):
+    return isinstance(referencia, str) and (
+        referencia == codigo() or referencia in REFERENCIAS_CODIGO_COMPATIBLES
+    )
 
 
 def comprobar(base):
@@ -156,6 +168,7 @@ class Coordinador:
             trabajo.update(estado='interrupted', fase='finished', error='Proceso interrumpido; no se reanuda automaticamente')
             self._guardar(trabajo)
         descripcion = comprobar(self.base)
+        actuales = self._reglas()
         meta = self._meta()
         if meta is None:
             # No aceptar silenciosamente reglas distintas a las archivadas en la evidencia.
@@ -163,11 +176,17 @@ class Coordinador:
                 filas = c.execute("SELECT summary FROM import_run WHERE status IN ('committed','no_changes') ORDER BY id DESC").fetchall()
             referencia = next((json.loads(f[0]).get('codigo') for f in filas
                                if f[0] and json.loads(f[0]).get('codigo')), None)
-            if not referencia or referencia['sha256_agregada'] != codigo():
+            if not referencia or not codigo_compatible(referencia.get('sha256_agregada')):
                 raise CoordinacionRechazada('No se acredita la huella de reglas de la base inicial')
-            meta = dict(self._reglas(), generacion=str(uuid.uuid4()), descripcion=descripcion)
+            meta = dict(actuales, generacion=str(uuid.uuid4()), descripcion=descripcion)
             with closing(self._db()) as c, c:
                 c.execute('INSERT INTO confirmado VALUES(1,?)', (json.dumps(meta),))
+        elif meta.get('codigo') != actuales['codigo']:
+            if not codigo_compatible(meta.get('codigo')):
+                raise CoordinacionRechazada('Cambios de codigo o ambito: mantenimiento explicito requerido')
+            meta = dict(meta, codigo=actuales['codigo'])
+            with closing(self._db()) as c, c:
+                c.execute('UPDATE confirmado SET detalle=? WHERE id=1', (json.dumps(meta),))
         self._exigir_reglas(meta)
         if descripcion != meta['descripcion']:
             raise CoordinacionRechazada('El principal no coincide con la generacion confirmada')

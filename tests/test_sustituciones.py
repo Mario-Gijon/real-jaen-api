@@ -1,10 +1,9 @@
-"""Sustituciones locales de eventos (api.py --sustituciones), con la muestra de tests/fixtures/datos.
+"""Sustituciones locales de eventos, con la muestra de tests/fixtures/datos.
 
 En la muestra, 1012 (aplazado, Real Jaén - 9001, J13) y 1006 / 1014 (finalizados, mismo local y visitante) hacen de
 evento antiguo y de evento vigente; 1001 tiene los equipos al revés y 1004 está fuera del ámbito.
 """
 import json
-import subprocess
 import sys
 import tempfile
 import unittest
@@ -117,12 +116,9 @@ class Rechazada(Base):
         self.rechaza(decision(vigente=1002), texto='no coincide equipo visitante')
         self.rechaza(decision(sustituido=1014, vigente=1006), texto='está finalizado')
 
-    def test_un_archivo_invalido_impide_arrancar_la_api(self):
-        ruta = self.archivo(decision(vigente=1012))
-        proceso = subprocess.run([sys.executable, '-B', str(RAIZ / 'api.py'), '--datos', str(MUESTRA), '--sustituciones', str(ruta),
-                                  '--port', '0'], capture_output=True, text=True, timeout=60)
-        self.assertNotEqual(proceso.returncode, 0)
-        self.assertIn('a sí mismo', proceso.stderr)
+    def test_un_archivo_invalido_se_rechaza_al_componer_datos(self):
+        with self.assertRaisesRegex(ValueError, 'a sí mismo'):
+            api.cargar(MUESTRA, sustituciones=self.archivo(decision(vigente=1012)))
 
 
 if __name__ == '__main__':

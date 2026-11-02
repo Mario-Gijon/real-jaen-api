@@ -1,28 +1,31 @@
-"""FastAPI ASGI entry point for the sports-data read API.
+"""FastAPI application for sports-data queries and optional update control.
 
-The legacy HTTP server remains available through ``api.py``. Both transports use
-the same startup loader and ``queries.consultar`` response contract.
-
-Run with ``uvicorn app:app``. By default this reads ``datos/`` as the legacy
-server does. Set ``SPORTS_DATA_STORAGE=sql`` and ``SPORTS_DATA_DB`` to read one
-SQLite generation; the cooperative lock is kept until the ASGI app shuts down.
+Run with ``uvicorn app:app``. By default this reads ``datos/``. Set
+``SPORTS_DATA_STORAGE=sql`` and ``SPORTS_DATA_DB`` to read one SQLite generation;
+the cooperative lock is kept until the ASGI app shuts down.
 """
 from contextlib import ExitStack, asynccontextmanager
+import hmac
 import os
 from pathlib import Path
+import re
+import sys
+import uuid
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, FastAPI, Request
 from fastapi.responses import JSONResponse
 
-import api as legacy_api
+import api as data_loader
 from queries import consultar
 
 
 ROOT = Path(__file__).resolve().parent
+UPDATE_PREFIX = '/internal/v1/updates'
 
 
-class LegacyJSONResponse(JSONResponse):
-    """Keep the content type used by ``api.py`` for existing GET routes."""
+class APIJSONResponse(JSONResponse):
+    """JSON response format used by the sports-data REST contract."""
 
     media_type = 'application/json; charset=utf-8'
 
@@ -34,7 +37,7 @@ def _load_data(resources):
     if storage == 'json':
         folder = Path(os.environ.get('SPORTS_DATA_DIR', str(ROOT / 'datos')))
         replacements = os.environ.get('SPORTS_DATA_REPLACEMENTS')
-        return legacy_api.cargar(folder, scope, Path(replacements) if replacements else None)
+        return data_loader.cargar(folder, scope, Path(replacements) if replacements else None)
 
     if storage == 'sql':
         database = os.environ.get('SPORTS_DATA_DB')
@@ -99,9 +102,8 @@ def _load_control(resources):
     return coordinator, updates, token
 
 
-def _legacy_response(request: Request):
+def _data_response(request: Request):
     query = request.scope.get('query_string', b'')
-    # BaseHTTPRequestHandler receives the undecoded request target. ASGI's
     # raw_path preserves percent escapes, which matters for invalid IDs.
     raw_path = request.scope.get('raw_path')
     path = raw_path.decode('latin-1') if raw_path is not None else request.url.path
@@ -120,7 +122,7 @@ def _legacy_response(request: Request):
     else:
         status, body = consultar(request.app.state.data, path)
 
-    return LegacyJSONResponse(
+    return APIJSONResponse(
         content=body,
         status_code=status,
         headers={'Cache-Control': 'no-store'},
@@ -131,21 +133,50 @@ updates_router = APIRouter()
 
 
 def _updates_response(request: Request):
-    from control import dispatch_control
+    from control import NotCancellable, Unavailable
 
     path = request.scope.get('raw_path')
     path = path.decode('latin-1') if path is not None else request.url.path
-    result = dispatch_control(
-        request.method,
-        path,
-        request.headers,
-        request.app.state.updates,
-        request.app.state.control_token,
-    )
-    if result is None:
-        result = 404, {'error': 'Ruta inexistente'}
-    status, body = result
-    return LegacyJSONResponse(content=body, status_code=status, headers={'Cache-Control': 'no-store'})
+    route = urlsplit(path).path
+    method = request.method
+    prefix = UPDATE_PREFIX
+    if method == 'POST' and not route.startswith(prefix):
+        return APIJSONResponse(content={'error': 'Ruta inexistente'}, status_code=404,
+                               headers={'Cache-Control': 'no-store'})
+
+    provided = request.headers.get('Authorization', '').encode('utf-8')
+    if not hmac.compare_digest(provided, b'Bearer ' + request.app.state.control_token):
+        status, body = 401, {'error': 'unauthorized'}
+    else:
+        updates = request.app.state.updates
+        try:
+            if route == prefix and method == 'POST':
+                item, reused = updates.solicitar(request.headers.get('Idempotency-Key', ''))
+                status, body = (200 if reused else 202), {'job': updates.public(item), 'reused': reused}
+            elif route == prefix + '/current' and method == 'GET':
+                status, body = 200, updates.actual()
+            else:
+                match = re.fullmatch(prefix + r'/([0-9a-f-]{36})(/cancel)?', route)
+                if not match or str(uuid.UUID(match[1])) != match[1]:
+                    status, body = 404, {'error': 'not_found'}
+                elif method == 'POST' and match[2]:
+                    status, body = 202, updates.public(updates.cancelar(match[1]))
+                elif method == 'GET' and not match[2]:
+                    status, body = 200, updates.public(updates.get(match[1]))
+                else:
+                    status, body = 404, {'error': 'not_found'}
+        except KeyError:
+            status, body = 404, {'error': 'not_found'}
+        except (ValueError, TypeError):
+            status, body = 400, {'error': 'invalid_request'}
+        except NotCancellable:
+            status, body = 409, {'error': 'not_cancellable'}
+        except Unavailable:
+            status, body = 409, {'error': 'update_unavailable'}
+        except Exception as e:
+            print(f'[control] {type(e).__name__}: {e}', file=sys.stderr, flush=True)
+            status, body = 503, {'error': 'unavailable'}
+    return APIJSONResponse(content=body, status_code=status, headers={'Cache-Control': 'no-store'})
 
 
 @updates_router.api_route('/internal/{path:path}', methods=['GET', 'POST'], include_in_schema=False)
@@ -164,69 +195,68 @@ router = APIRouter()
 
 @router.get('/', include_in_schema=False)
 def root(request: Request):
-    return _legacy_response(request)
+    return _data_response(request)
 
 
 @router.get('/health')
 def health(request: Request):
-    return _legacy_response(request)
+    return _data_response(request)
 
 
 @router.get('/api/v1/scope')
 def scope(request: Request):
-    return _legacy_response(request)
+    return _data_response(request)
 
 
 @router.get('/api/v1/teams/{ident}')
 def team(request: Request, ident: str):
-    return _legacy_response(request)
+    return _data_response(request)
 
 
 @router.get('/api/v1/teams/{ident}/matches')
 def team_matches(request: Request, ident: str):
-    return _legacy_response(request)
+    return _data_response(request)
 
 
 @router.get('/api/v1/teams/{ident}/players')
 def team_players(request: Request, ident: str):
-    return _legacy_response(request)
+    return _data_response(request)
 
 
 @router.get('/api/v1/teams/{ident}/performance')
 def team_performance(request: Request, ident: str):
-    return _legacy_response(request)
+    return _data_response(request)
 
 
 @router.get('/api/v1/teams/{ident}/player-stats')
 def team_player_stats(request: Request, ident: str):
-    return _legacy_response(request)
+    return _data_response(request)
 
 
 @router.get('/api/v1/players/{ident}')
 def player(request: Request, ident: str):
-    return _legacy_response(request)
+    return _data_response(request)
 
 
 @router.get('/api/v1/players/{ident}/matches')
 def player_matches(request: Request, ident: str):
-    return _legacy_response(request)
+    return _data_response(request)
 
 
 @router.get('/api/v1/matches/{ident}')
 def match(request: Request, ident: str):
-    return _legacy_response(request)
+    return _data_response(request)
 
 
 @router.get('/api/v1/matches/{ident}/{section}')
 def match_section(request: Request, ident: str, section: str):
-    return _legacy_response(request)
+    return _data_response(request)
 
 
 @router.get('/{path:path}', include_in_schema=False)
 def fallback(request: Request, path: str):
-    # Unknown paths and trailing slashes are passed through so their legacy
-    # status and JSON error bodies remain unchanged.
-    return _legacy_response(request)
+    # Unknown paths and trailing slashes retain the REST error contract.
+    return _data_response(request)
 
 
 def create_app(data=None, *, control_mode=None) -> FastAPI:

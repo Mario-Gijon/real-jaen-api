@@ -131,45 +131,53 @@ class BloqueoEntreProcesos(Procesos, unittest.TestCase):
         self.soltar(self.poseedor(self.base))
 
 
-@unittest.skipUnless(CON_SQL, 'requiere requirements-sql.txt (.venv)')
+CON_FASTAPI = importlib.util.find_spec('uvicorn') is not None
+
+@unittest.skipUnless(CON_SQL and CON_FASTAPI, 'requiere requirements-sql.txt y requirements-fastapi.txt')
 class ApiYMantenimiento(Procesos, BaseCarga):
     def setUp(self):
         super().setUp()
         self.carpeta = self.importacion()
         cargar(self.carpeta, self.base)
 
-    def api(self, normal=False):
-        with socket.socket() as s:
-            s.bind(('127.0.0.1', 0))
-            puerto = s.getsockname()[1]
-        # Solo en el arnés: stdin pide server.shutdown; el main real sale por su finally/ExitStack.
-        codigo = "import api; api.main()"
-        if normal:
-            codigo = """import api, threading, sys
-class Servidor(api.ThreadingHTTPServer):
-    def serve_forever(self):
-        def cerrar():
-            sys.stdin.readline()
-            self.shutdown()
-        threading.Thread(target=cerrar, daemon=True).start()
-        super().serve_forever()
-api.ThreadingHTTPServer = Servidor
-api.main()
-"""
-        p = self.proceso(codigo, '--almacen', 'sql', '--base', self.base, '--ambito', AMBITO, '--port', puerto)
-        limite = time.monotonic() + 20
+    def api_environment(self, scope=AMBITO):
+        env = dict(ENV)
+        env.update({
+            'SPORTS_DATA_CONTROL': '0',
+            'SPORTS_DATA_STORAGE': 'sql',
+            'SPORTS_DATA_DB': str(self.base),
+            'SPORTS_DATA_SCOPE': str(scope),
+        })
+        return env
+
+    def api(self, scope=AMBITO):
+        with socket.socket() as sock:
+            sock.bind(('127.0.0.1', 0))
+            port = sock.getsockname()[1]
+        p = subprocess.Popen([sys.executable, '-B', '-m', 'uvicorn', 'app:app', '--host', '127.0.0.1',
+                              '--port', str(port), '--log-level', 'warning'], cwd=RAIZ,
+                             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             text=True, encoding='utf-8', env=self.api_environment(scope))
+        self.addCleanup(self.cerrar, p)
+        deadline = time.monotonic() + 20
         while True:
             try:
-                with urllib.request.urlopen(f'http://127.0.0.1:{puerto}/health', timeout=0.5) as r:
-                    self.assertEqual(r.status, 200)
+                with urllib.request.urlopen(f'http://127.0.0.1:{port}/health', timeout=0.5) as response:
+                    self.assertEqual(response.status, 200)
                 return p
             except OSError:
-                if p.poll() is not None or time.monotonic() > limite:
-                    self.fail(f'API no disponible, código {p.poll()}')
+                if p.poll() is not None or time.monotonic() > deadline:
+                    self.fail(f'FastAPI no disponible, código {p.poll()}: {p.stderr.read()}')
                 time.sleep(0.05)
 
+    def cerrar_api(self, process):
+        if process.poll() is None:
+            process.terminate()
+            process.wait(timeout=10)
+        self.cerrar(process)
+
     def test_api_rechaza_todas_las_operaciones_sin_cambios_y_despues_funcionan(self):
-        p = self.api(normal=True)
+        p = self.api()
         antes = sqlite.describir(self.base)['huella']
         copias = list(self.base.parent.glob('copias/*'))
         archivo = self.sustituciones((300, 301))
@@ -189,13 +197,14 @@ api.main()
                 self.assertIn('Base en uso', r.stderr)
                 self.assertNotIn('Traceback', r.stderr)
         # Una segunda API tampoco puede servir una instantánea distinta de esta misma base.
-        r = subprocess.run([sys.executable, '-B', 'api.py', '--almacen', 'sql', '--base', str(self.base), '--port', '1'],
-                           cwd=RAIZ, capture_output=True, text=True, encoding='utf-8', env=ENV, timeout=15)
-        self.assertEqual(r.returncode, 1)
+        r = subprocess.run([sys.executable, '-B', '-m', 'uvicorn', 'app:app', '--host', '127.0.0.1', '--port', '0'],
+                           cwd=RAIZ, capture_output=True, text=True, encoding='utf-8',
+                           env=self.api_environment(), timeout=15)
+        self.assertNotEqual(r.returncode, 0)
         self.assertIn('Base en uso', r.stderr)
         self.assertEqual(sqlite.describir(self.base)['huella'], antes)
         self.assertEqual(list(self.base.parent.glob('copias/*')), copias)
-        self.soltar(p)
+        self.cerrar_api(p)
         copia = sincronizacion.copiar(self.base)
         self.assertTrue(sincronizacion.verificar(self.base)['ok'])
         self.assertFalse(sincronizacion.migrar(self.base)['migrada'])
@@ -210,12 +219,12 @@ api.main()
         self.matar(p)
         self.assertTrue(sincronizacion.verificar(self.base)['ok'])
         self.assertTrue(archivo_de_bloqueo(self.base).exists())
-        self.soltar(self.api(normal=True))
+        self.cerrar_api(self.api())
 
     def test_api_fallo_al_cargar_libera_la_base(self):
-        p = self.proceso('import api; api.main()', '--almacen', 'sql', '--base', self.base,
-                         '--ambito', self.tmp / 'no-existe.json', '--port', '1')
-        p.wait(timeout=10)
+        p = subprocess.run([sys.executable, '-B', '-m', 'uvicorn', 'app:app', '--host', '127.0.0.1', '--port', '0'],
+                           cwd=RAIZ, capture_output=True, text=True, encoding='utf-8',
+                           env=self.api_environment(self.tmp / 'no-existe.json'), timeout=15)
         self.assertNotEqual(p.returncode, 0)
         self.assertTrue(sincronizacion.verificar(self.base)['ok'])
 

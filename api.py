@@ -1,12 +1,7 @@
-"""API local de solo lectura. Python 3.10+. Sin dependencias."""
-import argparse
+"""Carga y composición de los datos servidos por sports-data. Python 3.10+."""
 import json
-import math
-from contextlib import ExitStack
 from datetime import date, datetime
 from pathlib import Path
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlsplit
 
 # Las reglas de versiones y de datos maestros son las del importador: una sola implementación.
 from importar import ficha_combinada, ficha_de_entrada, rasgos_evento, validar_ficha
@@ -236,65 +231,3 @@ def aplicar_sustituciones(datos, sustituciones):
         vigente['replaces'] = vigente['replaces'] + [decision(s, s['sustituido'])]
         marcados[s['vigente']] = vigente
     return dict(datos, partidos=[marcados.get(m['match_id'], m) for m in datos['partidos']], sustituciones=sustituciones)
-
-def datos_de_sql(ap, args, recursos):
-    """Modo SQL: solo la base SQLite indicada, en solo lectura y con su revisión de esquema; las sustituciones son
-    las guardadas en ella. Si falta, no es compatible o no se lee, la API no arranca: nunca crea una base ni recurre
-    a los JSON. Las dependencias (requirements-sql.txt) solo se importan aquí."""
-    if args.base is None:
-        ap.error('--almacen sql necesita --base RUTA')
-    if args.datos is not None or args.sustituciones is not None:
-        ap.error('--almacen sql lee solo la base: no admite --datos ni --sustituciones (las sustituciones están en la base)')
-    try:
-        from persistencia.lectura import BaseNoUtilizable, cargar_desde_base
-        from persistencia.bloqueo import BaseEnUso, bloquear
-    except ImportError as e:
-        ap.exit(1, f'El modo SQL necesita las dependencias de requirements-sql.txt (entorno .venv): {e}\n')
-    try:
-        if not args.base.is_file():
-            raise BaseNoUtilizable(f'No existe la base {args.base} (el modo SQL nunca crea una)')
-        recursos.enter_context(bloquear(args.base))
-        return cargar_desde_base(args.base, args.ambito)
-    except (BaseNoUtilizable, BaseEnUso) as e:
-        ap.exit(1, f'Base no utilizable: {e}\n')
-
-def main():
-    ap=argparse.ArgumentParser(description=__doc__)
-    ap.add_argument('--almacen',choices=('json','sql'),default='json',
-                    help='json (predeterminado): carpeta de importación; sql: solo la base de --base')
-    ap.add_argument('--datos',type=Path,default=None,help='carpeta de importación (modo json; por defecto datos/)')
-    ap.add_argument('--base',type=Path,default=None,help='base SQLite (solo modo sql)')
-    ap.add_argument('--host',default='127.0.0.1',help='dirección de escucha (por defecto solo loopback)')
-    ap.add_argument('--port',type=int,default=8001)
-    ap.add_argument('--ambito',type=Path,default=AMBITO)
-    ap.add_argument('--sustituciones',type=Path,default=None,
-                    help='decisiones locales de eventos sustituidos (modo json; sin él, ninguna)')
-    args=ap.parse_args()
-    with ExitStack() as recursos:
-        if args.almacen=='sql':
-            datos=datos_de_sql(ap,args,recursos)
-        else:
-            if args.base is not None:
-                ap.error('--base solo se usa con --almacen sql')
-            datos=cargar(args.datos or Path(__file__).parent/'datos',args.ambito,args.sustituciones)
-        class Handler(BaseHTTPRequestHandler):
-            def do_GET(self):
-                url=urlsplit(self.path)
-                if url.query:
-                    estado,respuesta=400,{'error':'Esta versión no admite filtros de consulta.'}
-                else:
-                    estado,respuesta=consultar(datos,url.path)
-                cuerpo=json.dumps(respuesta,ensure_ascii=False,allow_nan=False).encode('utf-8')
-                self.send_response(estado)
-                self.send_header('Content-Type','application/json; charset=utf-8')
-                self.send_header('Content-Length',str(len(cuerpo)))
-                self.send_header('Cache-Control','no-store')
-                self.end_headers()
-                self.wfile.write(cuerpo)
-        print(f'API: http://{args.host}:{args.port} (almacén {args.almacen}) — Ctrl+C para detener',flush=True)
-        servidor=ThreadingHTTPServer((args.host,args.port),Handler)
-        try:servidor.serve_forever()
-        except KeyboardInterrupt:pass
-        finally:servidor.server_close()
-
-if __name__=='__main__':main()

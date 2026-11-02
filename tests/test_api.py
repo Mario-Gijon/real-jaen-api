@@ -1,19 +1,13 @@
-"""Pruebas de la API con la muestra sintética de tests/fixtures/datos (solo biblioteca estándar).
+"""Pruebas de las reglas de consulta con la muestra sintética de tests/fixtures/datos.
 
-No necesitan la exportación real ni el servicio del puerto 8001: usan el ambito.json del
-proyecto y arrancan api.py en un puerto libre para las comprobaciones HTTP.
+La interfaz HTTP y su ciclo de vida se verifican en tests/test_fastapi_api.py.
 Ejecutar desde la carpeta de la API:  python -m unittest discover -s tests -v
 Para regenerar la muestra:  python tests/fixtures/crear.py
 """
 import copy
 import json
-import socket
-import subprocess
 import sys
-import time
 import unittest
-import urllib.error
-import urllib.request
 from pathlib import Path
 
 RAIZ = Path(__file__).resolve().parent.parent
@@ -612,51 +606,6 @@ class AcumuladosJugadores(unittest.TestCase):
         self.assertEqual((c['matches'], c['players']), ({'counted': 0, 'with_call_ups': 0}, []))
         self.assertEqual(consultar('/api/v1/teams/1/player-stats'), (404, {'error': 'Entidad no encontrada'}))
 
-
-class ServidorHTTP(unittest.TestCase):
-    """Arranca api.py de verdad con la muestra sintética y consulta por HTTP."""
-
-    @classmethod
-    def setUpClass(cls):
-        with socket.socket() as s:
-            s.bind(('127.0.0.1', 0))
-            cls.puerto = s.getsockname()[1]
-        cls.proceso = subprocess.Popen([sys.executable, str(RAIZ / 'api.py'), '--datos', str(MUESTRA), '--port', str(cls.puerto)],
-                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        limite = time.monotonic() + 10
-        while time.monotonic() < limite:
-            try:
-                urllib.request.urlopen(f'http://127.0.0.1:{cls.puerto}/health', timeout=1).close()
-                return
-            except OSError:
-                time.sleep(0.1)
-        cls.proceso.kill()
-        raise RuntimeError('La API no arrancó')
-
-    @classmethod
-    def tearDownClass(cls):
-        cls.proceso.terminate()
-        cls.proceso.wait(timeout=10)
-
-    def get(self, ruta):
-        try:
-            with urllib.request.urlopen(f'http://127.0.0.1:{self.puerto}{ruta}', timeout=5) as r:
-                return r.status, r.headers['Content-Type'], json.loads(r.read().decode('utf-8'))
-        except urllib.error.HTTPError as e:
-            with e:
-                return e.code, e.headers['Content-Type'], json.loads(e.read().decode('utf-8'))
-
-    def test_rutas_por_http(self):
-        for ruta, estado in (('/health', 200), ('/api/v1/scope', 200), (f'/api/v1/teams/{crear.JAEN}/matches', 200),
-                             (f'/api/v1/teams/{crear.JAEN}/players', 200), (f'/api/v1/players/{crear.UNO}/matches', 200),
-                             (f'/api/v1/teams/{crear.JAEN}/performance', 200), ('/api/v1/teams/1/performance', 404),
-                             (f'/api/v1/teams/{crear.JAEN}/player-stats', 200),
-                             (f'/api/v1/matches/{crear.FINALIZADO}/lineups', 200), (f'/api/v1/matches/{crear.EN_COPA}', 404),
-                             (f'/api/v1/matches/{crear.EN_COPA}/lineups', 404), ('/api/v1/teams/abc', 400),
-                             (f'/api/v1/teams/{crear.JAEN}?x=1', 400)):
-            recibido, tipo, _ = self.get(ruta)
-            self.assertEqual(recibido, estado, ruta)
-            self.assertEqual(tipo, 'application/json; charset=utf-8')
 
 
 if __name__ == '__main__':

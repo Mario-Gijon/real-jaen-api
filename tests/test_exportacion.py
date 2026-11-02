@@ -9,14 +9,9 @@ Los recuentos son los de la exportación del 2026-10-21 (real-jaen-raw_2026-10-2
 """
 import json
 import shutil
-import socket
-import subprocess
 import sys
 import tempfile
-import time
 import unittest
-import urllib.error
-import urllib.request
 from pathlib import Path
 
 RAIZ = Path(__file__).resolve().parent.parent
@@ -399,61 +394,6 @@ class AcumuladosJugadoresExportacion(unittest.TestCase):
             'substitution_in': False, 'lineup_confirmed': True, 'substitutions_cover_side': True})
         self.assertEqual(evidencia['records'], ['2026-10-21T12:07:34+00:00'])
 
-
-class ServidorHTTP(unittest.TestCase):
-    """Arranca api.py de verdad (otro puerto, mismos datos) y consulta por HTTP."""
-
-    @classmethod
-    def setUpClass(cls):
-        with socket.socket() as s:
-            s.bind(('127.0.0.1', 0))
-            cls.puerto = s.getsockname()[1]
-        cls.proceso = subprocess.Popen([sys.executable, str(RAIZ / 'api.py'), '--port', str(cls.puerto)],
-                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        limite = time.monotonic() + 10
-        while time.monotonic() < limite:
-            try:
-                urllib.request.urlopen(f'http://127.0.0.1:{cls.puerto}/health', timeout=1).close()
-                return
-            except OSError:
-                time.sleep(0.1)
-        cls.proceso.kill()
-        raise RuntimeError('La API no arrancó')
-
-    @classmethod
-    def tearDownClass(cls):
-        cls.proceso.terminate()
-        cls.proceso.wait(timeout=10)
-
-    def get(self, ruta):
-        try:
-            with urllib.request.urlopen(f'http://127.0.0.1:{self.puerto}{ruta}', timeout=5) as r:
-                return r.status, r.headers['Content-Type'], json.loads(r.read().decode('utf-8'))
-        except urllib.error.HTTPError as e:
-            with e:
-                return e.code, e.headers['Content-Type'], json.loads(e.read().decode('utf-8'))
-
-    def test_rutas_existentes_por_http(self):
-        for ruta, estado in (('/health', 200), ('/api/v1/teams/2841', 200), ('/api/v1/teams/2841/players', 200),
-                             ('/api/v1/teams/2841/matches', 200), ('/api/v1/players/966303', 200),
-                             ('/api/v1/players/966303/matches', 200), ('/api/v1/players/1', 404),
-                             ('/api/v1/teams/abc', 400), ('/api/v1/teams/2841?x=1', 400),
-                             ('/api/v1/scope', 200), (f'/api/v1/matches/{COPA}', 404), (f'/api/v1/matches/{COPA}/lineups', 404)):
-            recibido, tipo, _ = self.get(ruta)
-            self.assertEqual(recibido, estado, ruta)
-            self.assertEqual(tipo, 'application/json; charset=utf-8')
-
-    def test_rutas_nuevas_por_http(self):
-        estado, _, cuerpo = self.get(f'/api/v1/matches/{FINALIZADO}')
-        self.assertEqual((estado, cuerpo['data']['home_team_name']), (200, 'CE Europa'))
-        for seccion in SECCIONES:
-            estado, _, cuerpo = self.get(f'/api/v1/matches/{FINALIZADO}/{seccion}')
-            self.assertEqual((estado, cuerpo['meta']['availability']), (200, 'stored'), seccion)
-            estado, _, cuerpo = self.get(f'/api/v1/matches/{PENDIENTE}/{seccion}')
-            self.assertEqual((estado, cuerpo['meta']['availability'], cuerpo['data']), (200, 'not_stored', None), seccion)
-            self.assertEqual(self.get(f'/api/v1/matches/{INEXISTENTE}/{seccion}')[0], 404, seccion)
-        self.assertEqual(self.get(f'/api/v1/matches/{INEXISTENTE}')[0], 404)
-        self.assertEqual(self.get('/api/v1/matches/abc')[0], 400)
 
 
 if __name__ == '__main__':

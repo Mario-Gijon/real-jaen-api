@@ -1,10 +1,5 @@
-"""Lectura de la API desde la base SQLite (fase 3, docs/persistencia-sqlite.md 5.1).
-
-Equivalencia de todas las rutas entre modo JSON y modo SQL con casos sintéticos (conflictos, valores inválidos,
-ausencias, sustituciones), errores de arranque y una muestra por HTTP en un puerto libre. Bases temporales fuera del
-repositorio. Sin requirements-sql.txt se omiten, salvo la comprobación del mensaje del modo SQL sin dependencias.
-"""
-from contextlib import closing
+"""SQLite loading through FastAPI, compared with the same synthetic JSON fixtures."""
+from contextlib import ExitStack, closing
 import importlib.util
 import json
 import os
@@ -19,162 +14,161 @@ import unittest
 import urllib.error
 import urllib.request
 from pathlib import Path
+from unittest import mock
 
-RAIZ = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(RAIZ))
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 CON_SQL = importlib.util.find_spec('sqlalchemy') is not None and importlib.util.find_spec('alembic') is not None
+CON_FASTAPI = importlib.util.find_spec('uvicorn') is not None
 
 import api  # noqa: E402
 from test_carga import AMBITO, Base as BaseCarga, respuestas  # noqa: E402
 
 if CON_SQL:
     from alembic import command
-
     from persistencia.carga import cargar, configuracion_alembic
     from persistencia.decisiones import cargar_sustituciones
     from persistencia.lectura import BaseNoUtilizable, cargar_desde_base
 
 
-def arrancar(*argumentos, timeout=60):
-    """api.py con esos argumentos, para los casos en que no debe llegar a escuchar."""
-    return subprocess.run([sys.executable, '-B', str(RAIZ / 'api.py'), *map(str, argumentos)], capture_output=True,
-                          text=True, encoding='utf-8', timeout=timeout, env=dict(os.environ, PYTHONUTF8='1'))
-
-
-@unittest.skipIf(CON_SQL, 'solo sin requirements-sql.txt')
-class SinDependenciasSQL(unittest.TestCase):
-    def test_el_modo_sql_lo_dice_y_no_arranca(self):
-        salida = arrancar('--almacen', 'sql', '--base', RAIZ / 'no-existe.sqlite', '--port', '1')
-        self.assertEqual(salida.returncode, 1)
-        self.assertIn('requirements-sql.txt', salida.stderr)
+def _free_port():
+    with socket.socket() as sock:
+        sock.bind(('127.0.0.1', 0))
+        return sock.getsockname()[1]
 
 
 @unittest.skipUnless(CON_SQL, 'requiere requirements-sql.txt (.venv)')
 class EquivalenciaJsonSql(BaseCarga):
     def test_todas_las_rutas_iguales_con_conflictos_invalidos_y_ausencias(self):
-        carpeta = self.importacion()
-        cargar(carpeta, self.base)
-        self.assertEqual(respuestas(cargar_desde_base(self.base, AMBITO)), respuestas(api.cargar(carpeta, AMBITO)))
+        folder = self.importacion()
+        cargar(folder, self.base)
+        self.assertEqual(respuestas(cargar_desde_base(self.base, AMBITO)), respuestas(api.cargar(folder, AMBITO)))
 
     def test_todas_las_rutas_iguales_con_sustituciones_leidas_de_la_base(self):
-        carpeta = self.importacion()
-        cargar(carpeta, self.base)
-        archivo = self.sustituciones((300, 301))
-        cargar_sustituciones(self.base, archivo, AMBITO)
+        folder = self.importacion()
+        cargar(folder, self.base)
+        replacement = self.sustituciones((300, 301))
+        cargar_sustituciones(self.base, replacement, AMBITO)
         sql = respuestas(cargar_desde_base(self.base, AMBITO))
-        self.assertEqual(sql, respuestas(api.cargar(carpeta, AMBITO, archivo)))
-        # El evento sustituido sigue servido, con su decisión; el calendario del equipo solo lleva el vigente.
-        detalle = json.loads(next(t for r, _, t in sql if r == '/api/v1/matches/300'))
-        self.assertEqual(detalle['data']['replaced_by']['match_id'], 301)
+        self.assertEqual(sql, respuestas(api.cargar(folder, AMBITO, replacement)))
+        detail = json.loads(next(body for route, _, body in sql if route == '/api/v1/matches/300'))
+        self.assertEqual(detail['data']['replaced_by']['match_id'], 301)
 
     def test_normalizacion_y_evidencia_desde_la_base(self):
-        carpeta = self.importacion()
-        cargar(carpeta, self.base)
-        sql, json_ = cargar_desde_base(self.base, AMBITO), api.cargar(carpeta, AMBITO)
-        # Participación, cifras, normalized.stats, incidencias y evidencia: idénticas en los dos modos.
-        self.assertEqual(api.actuaciones_del_partido(sql, 200), api.actuaciones_del_partido(json_, 200))
-        jugadores = api.actuaciones_del_partido(sql, 200)
-        motivo = lambda j, m: jugadores[j]['stats'][m]['reason'] or jugadores[j]['stats'][m]['source']
-        # Versiones de la alineación que discrepan en un grupo: sin dato en ese grupo, con su evidencia.
-        self.assertEqual((motivo(3, 'shots'), motivo(3, 'passes')), ('version_conflict', 'reported'))
-        self.assertTrue(any(e['issue'] == 'stat_version_conflict' for e in jugadores[3]['evidence']))
-        # No utilizado, participación sin resolver y ausencias: nunca un cero inventado.
-        self.assertEqual((motivo(2, 'fouls'), motivo(5, 'shots'), motivo(1, 'fouls')),
+        folder = self.importacion()
+        cargar(folder, self.base)
+        sql, json_data = cargar_desde_base(self.base, AMBITO), api.cargar(folder, AMBITO)
+        self.assertEqual(api.actuaciones_del_partido(sql, 200), api.actuaciones_del_partido(json_data, 200))
+        players = api.actuaciones_del_partido(sql, 200)
+        reason = lambda player, metric: players[player]['stats'][metric]['reason'] or players[player]['stats'][metric]['source']
+        self.assertEqual((reason(3, 'shots'), reason(3, 'passes')), ('version_conflict', 'reported'))
+        self.assertTrue(any(item['issue'] == 'stat_version_conflict' for item in players[3]['evidence']))
+        self.assertEqual((reason(2, 'fouls'), reason(5, 'shots'), reason(1, 'fouls')),
                          ('unused', 'participation_unknown', 'not_reported'))
 
 
 @unittest.skipUnless(CON_SQL, 'requiere requirements-sql.txt (.venv)')
-class ErroresDeArranque(BaseCarga):
-    def comprobar(self, salida, codigo, texto):
-        self.assertEqual(salida.returncode, codigo, salida.stderr)
-        self.assertIn(texto, salida.stderr)
-
-    def test_combinaciones_de_argumentos(self):
-        self.comprobar(arrancar('--almacen', 'sql', '--port', '1'), 2, '--almacen sql necesita --base')
-        self.comprobar(arrancar('--almacen', 'sql', '--base', self.base, '--datos', self.tmp), 2, 'no admite --datos')
-        self.comprobar(arrancar('--almacen', 'sql', '--base', self.base, '--sustituciones', self.tmp / 's.json'), 2,
-                       'no admite --datos ni --sustituciones')
-        self.comprobar(arrancar('--base', self.base), 2, '--base solo se usa con --almacen sql')
-        self.comprobar(arrancar('--almacen', 'otro'), 2, 'invalid choice')
+class ErroresDeCargaSql(BaseCarga):
+    def cargar_desde_entorno(self, database, scope=AMBITO):
+        import app
+        with mock.patch.dict(os.environ, {
+            'SPORTS_DATA_STORAGE': 'sql',
+            'SPORTS_DATA_DB': str(database),
+            'SPORTS_DATA_SCOPE': str(scope),
+        }, clear=False), ExitStack() as resources:
+            return app._load_data(resources)
 
     def test_base_inexistente_no_se_crea(self):
-        self.comprobar(arrancar('--almacen', 'sql', '--base', self.base, '--port', '1'), 1, 'No existe la base')
+        from persistencia.lectura import BaseNoUtilizable
+        with self.assertRaisesRegex(BaseNoUtilizable, 'nunca crea una'):
+            self.cargar_desde_entorno(self.base)
         self.assertFalse(self.base.exists())
-        self.assertFalse(self.base.parent.exists())
 
     def test_archivo_que_no_es_una_base(self):
-        self.base.parent.mkdir(parents=True)
+        from persistencia.lectura import BaseNoUtilizable
+        self.base.parent.mkdir(parents=True, exist_ok=True)
         self.base.write_text('no es una base', encoding='utf-8')
-        self.comprobar(arrancar('--almacen', 'sql', '--base', self.base, '--port', '1'), 1, 'No se puede leer')
+        with self.assertRaises(BaseNoUtilizable):
+            self.cargar_desde_entorno(self.base)
         self.assertEqual(self.base.read_text(encoding='utf-8'), 'no es una base')
 
     def test_base_sqlite_ajena_o_de_otra_revision(self):
-        self.base.parent.mkdir(parents=True)
-        with closing(sqlite3.connect(self.base)) as c, c:
-            c.execute('CREATE TABLE otra (x INTEGER)')
-        self.comprobar(arrancar('--almacen', 'sql', '--base', self.base, '--port', '1'), 1, 'sin revisión de esquema')
-        cargar(self.importacion(), self.tmp / 'valida.sqlite')
-        shutil.copy(self.tmp / 'valida.sqlite', self.tmp / 'antigua.sqlite')
-        with closing(sqlite3.connect(self.tmp / 'antigua.sqlite')) as c, c:
-            c.execute("UPDATE alembic_version SET version_num = '0001'")
+        from persistencia.lectura import BaseNoUtilizable
+        self.base.parent.mkdir(parents=True, exist_ok=True)
+        with closing(sqlite3.connect(self.base)) as connection, connection:
+            connection.execute('CREATE TABLE otra (x INTEGER)')
+        with self.assertRaisesRegex(BaseNoUtilizable, 'sin revisión de esquema'):
+            self.cargar_desde_entorno(self.base)
+        cargar(self.importacion(), self.tmp / 'valid.sqlite')
+        shutil.copy(self.tmp / 'valid.sqlite', self.tmp / 'old.sqlite')
+        with closing(sqlite3.connect(self.tmp / 'old.sqlite')) as connection, connection:
+            connection.execute("UPDATE alembic_version SET version_num = '0001'")
         with self.assertRaisesRegex(BaseNoUtilizable, 'revisión de esquema 0001; este código necesita 0004'):
-            cargar_desde_base(self.tmp / 'antigua.sqlite', AMBITO)
+            cargar_desde_base(self.tmp / 'old.sqlite', AMBITO)
 
     def test_base_sin_carga_inicial(self):
-        self.base.parent.mkdir(parents=True)
+        self.base.parent.mkdir(parents=True, exist_ok=True)
         command.upgrade(configuracion_alembic(self.base), 'head')
         with self.assertRaisesRegex(BaseNoUtilizable, 'carga inicial confirmada'):
             cargar_desde_base(self.base, AMBITO)
 
     def test_sustituciones_guardadas_fuera_del_ambito(self):
         cargar(self.importacion(), self.base)
-        cargar_sustituciones(self.base, self.sustituciones((300, 301)), AMBITO)
-        ambito = self.tmp / 'otro-ambito.json'
-        ambito.write_text(json.dumps({'competiciones': [{'nombre': 'Otro', 'unique_tournament_id': 1, 'tournament_id': 2,
-                                                         'season_id': 3}]}), encoding='utf-8')
-        self.comprobar(arrancar('--almacen', 'sql', '--base', self.base, '--ambito', ambito, '--port', '1'), 1,
-                       'fuera del ámbito')
+        replacement = self.sustituciones((300, 301))
+        cargar_sustituciones(self.base, replacement, AMBITO)
+        scope = self.tmp / 'other-scope.json'
+        scope.write_text(json.dumps({'competiciones': [{'nombre': 'Otro', 'unique_tournament_id': 1,
+                                                        'tournament_id': 2, 'season_id': 3}]}), encoding='utf-8')
+        with self.assertRaisesRegex(BaseNoUtilizable, 'fuera del ámbito'):
+            self.cargar_desde_entorno(self.base, scope)
 
 
-@unittest.skipUnless(CON_SQL, 'requiere requirements-sql.txt (.venv)')
-class MuestraPorHTTP(BaseCarga):
-    def test_el_servidor_en_modo_sql_responde_igual_que_el_modo_json(self):
-        carpeta = self.importacion()
-        cargar(carpeta, self.base)
-        archivo = self.sustituciones((300, 301))
-        cargar_sustituciones(self.base, archivo, AMBITO)
-        with socket.socket() as s:
-            s.bind(('127.0.0.1', 0))
-            puerto = s.getsockname()[1]
-        proceso = subprocess.Popen([sys.executable, '-B', str(RAIZ / 'api.py'), '--almacen', 'sql', '--base', str(self.base),
-                                    '--port', str(puerto)], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+@unittest.skipUnless(CON_SQL and CON_FASTAPI, 'requiere requirements-sql.txt y requirements-fastapi.txt')
+class FastAPISqlOverHttp(BaseCarga):
+    def test_sql_served_by_fastapi_matches_json_and_releases_the_lock(self):
+        from persistencia.bloqueo import bloquear
+        folder = self.importacion()
+        cargar(folder, self.base)
+        replacement = self.sustituciones((300, 301))
+        cargar_sustituciones(self.base, replacement, AMBITO)
+        port = _free_port()
+        env = dict(os.environ, SPORTS_DATA_CONTROL='0', SPORTS_DATA_STORAGE='sql', SPORTS_DATA_DB=str(self.base),
+                   SPORTS_DATA_SCOPE=str(AMBITO), PYTHONUTF8='1')
+        process = subprocess.Popen([sys.executable, '-B', '-m', 'uvicorn', 'app:app', '--host', '127.0.0.1',
+                                    '--port', str(port), '--log-level', 'warning'], cwd=ROOT, env=env,
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        base_url = f'http://127.0.0.1:{port}'
         try:
-            limite = time.monotonic() + 30
+            deadline = time.monotonic() + 30
             while True:
                 try:
-                    urllib.request.urlopen(f'http://127.0.0.1:{puerto}/health', timeout=1).close()
+                    urllib.request.urlopen(base_url + '/health', timeout=1).close()
                     break
                 except OSError:
-                    if proceso.poll() is not None or time.monotonic() > limite:
-                        raise RuntimeError(f'La API en modo SQL no arrancó: {proceso.stderr.read()}')
-                    time.sleep(0.2)
-            esperadas = {r: (e, t) for r, e, t in respuestas(api.cargar(carpeta, AMBITO, archivo))}
-            muestra = ['/api/v1/scope', '/api/v1/teams/2841/matches', '/api/v1/teams/2841/performance',
-                       '/api/v1/teams/2841/player-stats', '/api/v1/players/1/matches', '/api/v1/matches/200/lineups',
-                       '/api/v1/matches/300', '/api/v1/matches/400', '/api/v1/teams/1', '/api/v1/teams/abc']
-            for ruta in muestra:
+                    if process.poll() is not None or time.monotonic() > deadline:
+                        raise RuntimeError(f'FastAPI SQL no arrancó: {process.stderr.read()}')
+                    time.sleep(0.1)
+            expected = {route: (status, json.loads(body)) for route, status, body in
+                        respuestas(api.cargar(folder, AMBITO, replacement))}
+            sample = ['/api/v1/scope', '/api/v1/teams/2841/matches', '/api/v1/teams/2841/performance',
+                      '/api/v1/teams/2841/player-stats', '/api/v1/players/1/matches',
+                      '/api/v1/matches/200/lineups', '/api/v1/matches/300', '/api/v1/matches/400',
+                      '/api/v1/teams/1', '/api/v1/teams/abc']
+            for route in sample:
                 try:
-                    with urllib.request.urlopen(f'http://127.0.0.1:{puerto}{ruta}', timeout=10) as r:
-                        estado, texto = r.status, r.read().decode('utf-8')
-                except urllib.error.HTTPError as e:
-                    with e:
-                        estado, texto = e.code, e.read().decode('utf-8')
-                self.assertEqual((estado, texto), esperadas[ruta], ruta)
+                    with urllib.request.urlopen(base_url + route, timeout=10) as response:
+                        status, body = response.status, json.loads(response.read().decode('utf-8'))
+                except urllib.error.HTTPError as error:
+                    with error:
+                        status, body = error.code, json.loads(error.read().decode('utf-8'))
+                self.assertEqual((status, body), expected[route], route)
         finally:
-            proceso.terminate()
-            proceso.wait(timeout=10)
-            proceso.stderr.close()
+            process.terminate()
+            process.wait(timeout=10)
+            process.stderr.close()
+        with bloquear(self.base):
+            self.assertTrue(self.base.is_file())
 
 
 if __name__ == '__main__':

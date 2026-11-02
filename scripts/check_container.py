@@ -24,9 +24,11 @@ def spawn(code, *args):
                             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
 
-def stop(child, normal=False):
+def stop(child, normal=False, graceful=False):
     if child.poll() is None:
-        if normal:
+        if graceful:
+            child.terminate()
+        elif normal:
             child.stdin.write('stop\n')
             child.stdin.flush()
         else:
@@ -40,19 +42,11 @@ def api(base, scope):
     with socket.socket() as sock:
         sock.bind(('127.0.0.1', 0))
         port = sock.getsockname()[1]
-    # The real main and server; stdin is a test-only graceful shutdown, not an application endpoint.
-    code = """import api, sys, threading
-class Server(api.ThreadingHTTPServer):
-    def serve_forever(self):
-        def shutdown():
-            sys.stdin.readline()
-            self.shutdown()
-        threading.Thread(target=shutdown, daemon=True).start()
-        super().serve_forever()
-api.ThreadingHTTPServer = Server
-api.main()
-"""
-    p = spawn(code, '--almacen', 'sql', '--base', base, '--ambito', scope, '--host', '0.0.0.0', '--port', port)
+    env = dict(os.environ, SPORTS_DATA_CONTROL='0', SPORTS_DATA_STORAGE='sql',
+               SPORTS_DATA_DB=str(base), SPORTS_DATA_SCOPE=str(scope))
+    p = subprocess.Popen([sys.executable, '-B', '-m', 'uvicorn', 'app:app', '--host', '127.0.0.1',
+                          '--port', str(port), '--log-level', 'warning'], cwd=ROOT, env=env,
+                         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     try:
         deadline = time.monotonic() + 30
         while True:
@@ -104,7 +98,7 @@ def check(source, scope):
                 assert result.returncode == 1 and 'Base en uso' in result.stderr, result.stderr
                 assert not (work / 'copias').exists(), 'Una operación rechazada creó copias'
         finally:
-            stop(child, normal=True)
+            stop(child, graceful=True)
         assert archivo_de_bloqueo(base).exists(), 'Se borró el archivo de coordinación'
         assert sincronizacion.verificar(base)['ok']
         child = api(base, scope)

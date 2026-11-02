@@ -1,5 +1,8 @@
 # Fase 4: importación incremental con sincronización completa
 
+> Nota 02-11-2026: las rutas de operación y comandos de servidor que aparecen en los registros de esta fase son
+> históricos. El servicio actual usa FastAPI/Uvicorn desde `app.py`; consulte [README.md](../README.md) para arrancarlo.
+
 > Estado 29-10-2026: activa. La base de la instalación habitual está en la revisión `0004` y cada actualización
 > publicada entra con esta importación incremental (registros `import_run`).
 

@@ -4,8 +4,6 @@ import sys
 import threading
 import time
 import unittest
-import urllib.error
-import urllib.request
 import uuid
 from pathlib import Path
 
@@ -231,49 +229,6 @@ class Control(unittest.TestCase):
             self.assertEqual((again.get(done['id'])['status'], again.get(done['id'])['published']), ('completed', True))
             self.assertEqual(len(self.cliente.calls), 2)  # nothing resumed
 
-    def test_http_autorizacion_rutas_y_datos(self):
-        from control import handler_for, PREFIX
-        from http.server import ThreadingHTTPServer
-        coord, control = self.open()
-        token = b's' * 48
-        with coord:
-            server = ThreadingHTTPServer(('127.0.0.1', 0), handler_for(coord, control, token))
-            threading.Thread(target=server.serve_forever, daemon=True).start()
-            self.addCleanup(lambda: (server.shutdown(), server.server_close()))
-            base = f'http://127.0.0.1:{server.server_port}'
-
-            def call(path, method='GET', headers=None):
-                request = urllib.request.Request(base + path, method=method, data=b'' if method == 'POST' else None,
-                                                 headers=headers or {})
-                try:
-                    with urllib.request.urlopen(request, timeout=5) as response:
-                        return response.status, json.loads(response.read()), dict(response.headers)
-                except urllib.error.HTTPError as error:
-                    body = error.read()
-                    error.close()
-                    return error.code, json.loads(body), {}
-            auth = {'Authorization': 'Bearer ' + token.decode()}
-            for headers in ({}, {'Authorization': 'Bearer wrong'}):
-                status, body, _ = call(PREFIX + '/current', headers=headers)
-                self.assertEqual(status, 401)
-                self.assertNotIn(token.decode(), json.dumps(body))
-            self.assertEqual(call(PREFIX, 'POST', auth)[0], 400)  # no Idempotency-Key
-            self.assertEqual(call(PREFIX, 'POST', dict(auth, **{'Idempotency-Key': 'x'}))[0], 400)
-            key = str(uuid.uuid4())
-            status, body, _ = call(PREFIX, 'POST', dict(auth, **{'Idempotency-Key': key}))
-            self.assertEqual((status, body['reused']), (202, False))
-            wait(control, body['job']['id'])
-            status, again, _ = call(PREFIX, 'POST', dict(auth, **{'Idempotency-Key': key}))
-            self.assertEqual((status, again['job']['id'], again['reused']), (200, body['job']['id'], True))
-            self.assertEqual(call(PREFIX + '/' + body['job']['id'] + '/cancel', 'POST', auth)[0], 409)
-            self.assertEqual(call(PREFIX + '/' + str(uuid.uuid4()), headers=auth)[0], 404)
-            status, current, headers = call(PREFIX + '/current', headers=auth)
-            self.assertEqual((status, current['last_job']['status']), (200, 'completed'))
-            self.assertNotIn('request_id', json.dumps(current))
-            self.assertEqual(call('/health')[0:2], (200, {'data': {'status': 'ok'}}))
-            status, scope, headers = call('/api/v1/scope')
-            self.assertEqual((status, headers.get('Cache-Control')), (200, 'no-store'))
-            self.assertEqual(scope, coord.capturar().consultar('/api/v1/scope')[1])
 
 
 if __name__ == '__main__':

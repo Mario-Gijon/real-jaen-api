@@ -1,7 +1,7 @@
-IMPORTADOR Y API DE DATOS — referencia de comportamiento (api.py, queries.py, importar.py, persistencia)
-Entrada al repositorio, instalacion y estado vigente: ../README.md. En la instalacion habitual
-(Docker) la API sirve la base SQLite desde control.py; las secciones sobre la carpeta de
-importacion JSON describen el modo --almacen json y el importador, que sigue alimentando la base.
+IMPORTADOR Y API DE DATOS — referencia de comportamiento (app.py, api.py, queries.py, importar.py, persistencia)
+Entrada al repositorio, instalacion y estado vigente: ../README.md. `app.py` expone el contrato REST mediante
+FastAPI/Uvicorn; `api.py` carga y compone datos. Las secciones sobre la carpeta de importacion JSON describen
+el almacenamiento JSON y el importador, que tambien alimenta la base SQLite.
 
 NECESITA DATOS (no incluidos en el repositorio)
 La API sirve exportaciones de SofaScore ya importadas. Esos datos no se versionan
@@ -22,8 +22,8 @@ de fechas y de datos maestros, asi que importador y API aplican las mismas regla
 
 CONSULTAS DEPORTIVAS (queries.py)
 Contiene rendimiento, detalle y normalizacion de partidos y jugadores, ademas de la
-construccion de respuestas para /api/v1/*. api.py conserva reexportaciones para
-compatibilidad con consumidores internos y mantiene el servidor HTTP.
+construccion de respuestas para /api/v1/*. `app.py` conecta esas consultas con FastAPI/Uvicorn;
+`api.py` mantiene la carga y composicion de datos.
   python importar.py --exportacion 2841=real-jaen-raw_AAAA-MM-DD.jsonl \
                      --exportacion 24368=ud-ibiza-raw_AAAA-MM-DD.jsonl --salida datos_AAAA-MM-DD
   python importar.py exportacion.jsonl --salida otra   (sin equipo seguido declarado)
@@ -110,26 +110,26 @@ con sus exportaciones. Una exportacion propia no acredita un calendario ni unas
 estadisticas completas; los rivales que solo aparecen en partidos ajenos no figuran.
 
 ARRANCAR
-  python api.py                       (lee datos/ y ambito.json de esta carpeta)
-  python api.py --datos C:\ruta\datos_normalizados --ambito ambito.json --port 8001
-  python api.py ... --sustituciones correcciones\sustituciones.json   (decisiones locales, abajo)
-Abre http://127.0.0.1:8001/health y http://127.0.0.1:8001/api/v1/scope
---almacen json (predeterminado) es todo lo anterior. Modo SQL, solo con la base de la persistencia
-(entorno .venv con requirements-sql.txt; docs/persistencia-sqlite.md):
-  .venv\Scripts\python api.py --almacen sql --base C:\ruta\real-jaen.sqlite --ambito ambito.json --port 8001
-Lee solo esa base, en solo lectura, con su revision de esquema y sus sustituciones guardadas; no
-admite --datos ni --sustituciones. Si la base falta, no es de este esquema o no se puede leer, la API
-no arranca: nunca crea una base ni recurre a los JSON. Mismas rutas, contratos y respuestas.
-La API SQL mantiene un bloqueo cooperativo <base>.lock hasta terminar. Cierre la API antes de importar,
+Instala los requisitos de FastAPI y, para SQLite, los requisitos SQL:
+  python -m pip install -r requirements-fastapi.txt
+Modo JSON (predeterminado):
+  SPORTS_DATA_DIR=datos SPORTS_DATA_SCOPE=ambito.json python -m uvicorn app:app --host 127.0.0.1 --port 8002
+Modo SQLite, solo con la base de persistencia (docs/persistencia-sqlite.md):
+  SPORTS_DATA_STORAGE=sql SPORTS_DATA_DB=C:/ruta/real-jaen.sqlite SPORTS_DATA_SCOPE=ambito.json \
+    python -m uvicorn app:app --host 127.0.0.1 --port 8002 --workers 1
+Abre http://127.0.0.1:8002/health y http://127.0.0.1:8002/api/v1/scope. En modo JSON se pueden configurar
+`SPORTS_DATA_DIR`, `SPORTS_DATA_SCOPE` y `SPORTS_DATA_REPLACEMENTS`. En modo SQL se lee solo la base indicada,
+con su revision de esquema y sustituciones guardadas: no crea una base ni recurre a JSON. Los modos conservan las
+mismas rutas, contratos y respuestas.
+La API SQL mantiene un bloqueo cooperativo <base>.lock hasta terminar. Cierre el proceso antes de importar,
 reconstruir, migrar, incorporar sustituciones o restaurar: esas operaciones se rechazan mientras esté activa.
 El sistema operativo libera el bloqueo ante una caída; no borre el archivo .lock ni WAL/SHM.
 Coordina nuestras herramientas, no programas SQLite externos. Procedimiento y límites: docs/fase4-sincronizacion.md, 11.
 
-SUSTITUCIONES LOCALES (--sustituciones RUTA)
+SUSTITUCIONES LOCALES
 Decisiones de esta instalacion, no datos de SofaScore: "el evento X queda sustituido por el Y"
-(p. ej. un aplazado que se jugo con otro id; la fuente no enlaza ambos). Sin --sustituciones no se
-aplica ninguna. Archivo: correcciones\sustituciones.json, aparte de las exportaciones y de la
-importacion, que no se tocan. Cada entrada: sustituido, vigente (ids de evento), motivo y
+(p. ej. un aplazado que se jugo con otro id; la fuente no enlaza ambos). En modo JSON se configura
+`SPORTS_DATA_REPLACEMENTS` con `correcciones/sustituciones.json`; en modo SQL las decisiones se guardan en la base. Cada entrada: sustituido, vigente (ids de evento), motivo y
 procedencia {decidido_por, fecha AAAA-MM-DD, evidencia opcional}. Nunca se deducen por equipos,
 jornada, slug ni customId: solo cuentan las entradas escritas.
 Al arrancar se comprueba y, si algo falla, la API no arranca (nunca se aplica a medias): ids
@@ -143,8 +143,8 @@ vigentes; matches.replaced_locally los sustituidos) y sale de /teams/{id}/matche
 procedencia, nota) y el vigente lleva replaces. /scope publica matches {events, current,
 replaced_locally} y local_replacements. Originales, convocatorias, resultados y estadisticas no
 cambian; las otras reglas de aplazamientos tampoco.
-Revertir una decision: borrar su entrada del archivo (o arrancar sin --sustituciones) y
-reiniciar la API. No hay que reimportar.
+En modo JSON, revertir una decision requiere borrar su entrada del archivo y reiniciar FastAPI. En SQL, use el
+comando de persistencia para cambiar la decision y vuelva a iniciar el servicio. No hay que reimportar.
 
 Rutas:
 /health
@@ -179,7 +179,7 @@ un jugador observado solo fuera del ambito, 404 "Jugador fuera del ambito...". L
 ficha de un jugador con convocatorias excluidas se rehace con sus alineaciones
 incluidas: nunca sale de un partido excluido. Los JSON de datos/ no se modifican:
 lo excluido sigue ahi para trazabilidad. Sin ambito.json valido la API no arranca.
-Otro archivo: python api.py --ambito ruta\ambito.json
+Otro archivo de ámbito: configure `SPORTS_DATA_SCOPE` antes de iniciar FastAPI.
 GET /api/v1/scope devuelve las competiciones permitidas con sus ids.
 
 Los IDs pueden cambiarse por cualquier identificador incluido en los datos.
@@ -187,7 +187,7 @@ Con la exportacion del 2026-10-21 (38 partidos) el ambito sirve 37: 8 finalizado
 29 pendientes de Primera Federacion, Grupo 2; Copa del Rey queda fuera.
 Los JSON se cargan al arrancar. Reinicia para leer una nueva importacion.
 Solo lectura; no descarga ni refresca SofaScore. No modifica los JSON.
-Por defecto escucha en 127.0.0.1, puerto 8001, sin autenticacion propia: solo la consulta
+Por defecto Uvicorn escucha en 127.0.0.1, puerto 8002, sin autenticacion propia: solo la consulta
 el servidor del dashboard (rj-analyst), que exige la contrasena de acceso. En Docker escucha
 dentro de la red interna, sin puerto publicado. No incluye CORS para llamadas desde el navegador.
 Los jugadores del equipo son los observados en las convocatorias de la muestra,
@@ -238,7 +238,7 @@ posesion es la media aritmetica de los porcentajes. Precision completa: se redon
 solo al presentar. last3: los tres partidos contados con fecha mas recientes; la
 cobertura se calcula despues, sin buscar partidos anteriores. undated: contados sin
 fecha (entran en season, no en last3).
-Tras actualizar api.py hay que reiniciar el servicio (ver REINICIAR EL SERVICIO).
+Tras actualizar código de carga o consulta hay que reiniciar FastAPI (ver REINICIAR EL SERVICIO).
 
 ACUMULADOS DE JUGADORES
 GET /api/v1/teams/{teamId}/player-stats
@@ -369,17 +369,12 @@ GET /api/v1/matches/{matchId}/statistics | /lineups | /incidents
   ningun valor ausente se convierte en cero.
 
 REINICIAR EL SERVICIO (desarrollo local, fuera de Docker)
-Los datos y el codigo se cargan al arrancar: tras cambiar api.py o los JSON,
-detenlo con Ctrl+C en su terminal y vuelve a ejecutar: python api.py
-Si no encuentras la terminal (Windows, PowerShell):
-  Get-NetTCPConnection -LocalPort 8001 -State Listen | ForEach-Object { Stop-Process -Id $_.OwningProcess }
-  python api.py
-Comprueba: http://127.0.0.1:8001/health
+Los datos y el código se cargan al arrancar. Tras cambiar código o una importación, detén Uvicorn con Ctrl+C y
+vuelve a ejecutar el comando de ARRANCAR. Comprueba http://127.0.0.1:8002/health.
 
 PRUEBAS
 Desde esta carpeta: python -m unittest discover -s tests -v
-No necesitan que el servicio del puerto 8001 este en marcha: arrancan api.py en un
-puerto libre para comprobar las respuestas HTTP.
+No necesitan que otro servicio esté en marcha: arrancan Uvicorn en un puerto libre para comprobar el contrato REST.
 Persistencia SQL (docs/persistencia-sqlite.md): entorno propio
   py -3.14 -m venv .venv  y  .venv\Scripts\python -m pip install -r requirements-sql.txt
   .venv\Scripts\python -m unittest discover -s tests -v
@@ -405,7 +400,7 @@ duplicados legados en jugador_partido (que la API en modo JSON si lee y une) se 
   Funcionan en un clon sin datos/.
 - tests/test_importar.py: el importador con exportaciones sinteticas pequeñas (repeticion,
   solapamiento, contenido identico y discrepante, desfases y fechas invalidas, estados,
-  alineaciones, jugador en varios equipos, datos maestros, cobertura) y como las sirve api.py.
+  alineaciones, jugador en varios equipos, datos maestros, cobertura) y cómo las sirve FastAPI.
 - tests/test_exportacion.py: la exportacion real de datos/ (recuentos incluidos). Sin
   datos/ se omiten. Usan los JSON sin modificarlos y construyen en una carpeta
   temporal los casos que no estan en la muestra (varias versiones, contenido vacio,
@@ -462,9 +457,9 @@ Obtencion con el scraper (flujo normal; el importador no descarga):
 4. ssc export --dataset player_profiles [--player ID ...] --out fichas.jsonl
    Reimportar TODOS los raw, calendarios y complementos conservados a una carpeta nueva.
    Revisar discrepancias antes de cambiar servicios. Arrancar con --ambito y
-   --sustituciones explicitos: importar no activa datos ni aplica decisiones locales.
+   `SPORTS_DATA_REPLACEMENTS` explícito: importar no activa datos ni aplica decisiones locales.
 
 Pruebas: tests/test_fichas.py cubre identidad, estructura, zonas horarias, nulos,
 conflictos de valores, reimportacion, aislamiento de relaciones/deporte, reconstruccion
 por ambito y registros Slice del scraper (propietario, clave, identidad, sin ficha).
-Todas las pruebas de la API se ejecutan con unittest discover -s tests.
+Todas las pruebas de la API se ejecutan con `python -m unittest discover -s tests -v`.

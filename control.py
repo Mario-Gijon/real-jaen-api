@@ -1,10 +1,8 @@
-"""Backend in control mode: the API served from the coordinator's current generation, plus the update control.
-
-    python control.py --base /state/real-jaen.sqlite --ambito ambito.json [--host 0.0.0.0] [--port 8001]
+"""Update jobs and configuration for the optional FastAPI control mode.
 
 The process owns the coordinator (and so the base lock) for its whole life; every sporting GET captures the current
-generation once and a publication swaps it without cutting requests in flight. Same sporting routes and /health as
-api.py; api.py itself (static snapshot) is unchanged. Contract: ../rj-analyst/docs/contrato-actualizaciones.md.
+generation once and a publication swaps it without cutting requests in flight. Contract:
+../rj-analyst/docs/contrato-actualizaciones.md.
 
 Environment: RJ_CONTROL_SECRET_FILE (bearer secret of /internal/v1/updates, shared only with Next's server),
 RJ_ACQUISITION_URL and RJ_ACQUISITION_SECRET_FILE (the acquisition service), RJ_UPDATE_RECIPE (the group's by
@@ -12,21 +10,15 @@ default; the pilot's for its tests), RJ_ACQUISITION_TEST=1 only on an
 installation marked by its test fixture (persistencia.adquisicion, modo 'prueba'). Without the control secret the
 mode refuses to start. This module is outside persistencia/: it does not change the coordinator's rule fingerprint.
 """
-import argparse
 from contextlib import closing
 from datetime import datetime, timezone
-import hmac
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
-import os
 from pathlib import Path
 import re
-import signal
 import sqlite3
 import sys
 import threading
 import uuid
-from urllib.parse import urlsplit
 
 PILOT = 'sofascore-pilot-16599363-v1'
 GROUP = 'sofascore-group2-2627-v1'
@@ -47,7 +39,6 @@ RECIPE = GROUP
 ACTIVE = ('queued', 'running')
 CANCELLABLE_PHASES = ('queued', 'acquiring')
 POLL_SECONDS = 3
-PREFIX = '/internal/v1/updates'
 # Safe public messages per error code; internal reasons stay in the backend log, keyed by job id.
 MESSAGES = {
     'ACQUISITION_FAILED': ('La consulta al proveedor no se completó o fue rechazada. No se reintenta sola.', True),
@@ -297,113 +288,3 @@ class Actualizaciones:
     def close(self, timeout=5):
         for thread in self.threads:
             thread.join(timeout)
-
-
-def dispatch_control(method, path, headers, control, token):
-    """Return the legacy control HTTP result, or None when this is not a control request."""
-    route = urlsplit(path).path
-    if method == 'POST' and not route.startswith(PREFIX):
-        return 404, {'error': 'Ruta inexistente'}
-    if method == 'GET' and not route.startswith('/internal/'):
-        return None
-    if method not in ('GET', 'POST'):
-        return None
-
-    provided = headers.get('Authorization', '').encode('utf-8')
-    if not hmac.compare_digest(provided, b'Bearer ' + token):
-        return 401, {'error': 'unauthorized'}
-    try:
-        if route == PREFIX and method == 'POST':
-            item, reused = control.solicitar(headers.get('Idempotency-Key', ''))
-            return (200 if reused else 202), {'job': control.public(item), 'reused': reused}
-        if route == PREFIX + '/current' and method == 'GET':
-            return 200, control.actual()
-        match = re.fullmatch(PREFIX + r'/([0-9a-f-]{36})(/cancel)?', route)
-        if not match or str(uuid.UUID(match[1])) != match[1]:
-            return 404, {'error': 'not_found'}
-        if method == 'POST' and match[2]:
-            return 202, control.public(control.cancelar(match[1]))
-        if method == 'GET' and not match[2]:
-            return 200, control.public(control.get(match[1]))
-        return 404, {'error': 'not_found'}
-    except KeyError:
-        return 404, {'error': 'not_found'}
-    except (ValueError, TypeError):
-        return 400, {'error': 'invalid_request'}
-    except NotCancellable:
-        return 409, {'error': 'not_cancellable'}
-    except Unavailable:
-        return 409, {'error': 'update_unavailable'}
-    except Exception as e:
-        print(f'[control] {type(e).__name__}: {e}', file=sys.stderr, flush=True)
-        return 503, {'error': 'unavailable'}
-
-
-def handler_for(coordinador, control, token):
-
-    class Handler(BaseHTTPRequestHandler):
-        def log_message(self, *args):
-            pass
-
-        def reply(self, status, value):
-            body = json.dumps(value, ensure_ascii=False, allow_nan=False).encode('utf-8')
-            self.send_response(status)
-            self.send_header('Content-Type', 'application/json; charset=utf-8')
-            self.send_header('Content-Length', str(len(body)))
-            self.send_header('Cache-Control', 'no-store')
-            self.end_headers()
-            self.wfile.write(body)
-
-        def do_POST(self):
-            result = dispatch_control('POST', self.path, self.headers, control, token)
-            return self.reply(*result)
-
-        def do_GET(self):
-            url = urlsplit(self.path)
-            if url.path.startswith('/internal/'):
-                result = dispatch_control('GET', self.path, self.headers, control, token)
-                return self.reply(*result)
-            if url.query:
-                return self.reply(400, {'error': 'Esta versión no admite filtros de consulta.'})
-            try:
-                generacion = coordinador.capturar()  # one generation for the whole request
-            except Exception as e:
-                print(f'[control] capture: {e}', file=sys.stderr, flush=True)
-                return self.reply(503, {'error': 'Datos no disponibles'})
-            return self.reply(*generacion.consultar(url.path))
-    return Handler
-
-
-def main():
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('--base', type=Path, required=True)
-    ap.add_argument('--ambito', type=Path, default=Path(__file__).with_name('ambito.json'))
-    ap.add_argument('--host', default='127.0.0.1')
-    ap.add_argument('--port', type=int, default=8001)
-    args = ap.parse_args()
-    if not os.environ.get('RJ_CONTROL_SECRET_FILE'):
-        ap.exit(1, 'El modo control necesita RJ_CONTROL_SECRET_FILE\n')
-    token = secret(os.environ['RJ_CONTROL_SECRET_FILE'])
-    from persistencia.actualizacion import Coordinador
-    from persistencia.adquisicion import Cliente
-    modo = 'prueba' if os.environ.get('RJ_ACQUISITION_TEST') == '1' else 'real'
-    cliente = Cliente(os.environ.get('RJ_ACQUISITION_URL', 'http://acquisition:8002'),
-                      os.environ.get('RJ_ACQUISITION_SECRET_FILE', '/run/secrets/acquisition-token'), modo=modo,
-                      restriccion=restriccion(os.environ))
-    with Coordinador(args.base, args.ambito) as coordinador:
-        control = Actualizaciones(coordinador, cliente, recipe=os.environ.get('RJ_UPDATE_RECIPE', RECIPE))
-        server = ThreadingHTTPServer((args.host, args.port), handler_for(coordinador, control, token))
-        server.daemon_threads = True
-        signal.signal(signal.SIGTERM, lambda *a: threading.Thread(target=server.shutdown, daemon=True).start())
-        print(f'API (modo control, {modo}): http://{args.host}:{args.port}', flush=True)
-        try:
-            server.serve_forever(poll_interval=.2)
-        except KeyboardInterrupt:
-            pass
-        finally:
-            server.server_close()
-            control.close()
-
-
-if __name__ == '__main__':
-    main()

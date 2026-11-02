@@ -35,7 +35,7 @@ adquisición: [docs/adquisicion-sofascore.md](docs/adquisicion-sofascore.md).
 
 ## Contratos
 
-- Las rutas `/api/v1/*` de `api.py` las consume `dashboard/src/server/local-api`, que además comprueba algunos
+- Las rutas `/api/v1/*` de `app.py` las consume `dashboard/src/server/local-api`, que además comprueba algunos
   valores derivados (p. ej. los tres partidos más recientes y las medias de goles). Cambiar una respuesta exige el
   cambio coordinado en el dashboard: detenerse y explicar primero el impedimento y la propuesta mínima.
 - El control de actualizaciones (`control.py`) y el contrato con la adquisición

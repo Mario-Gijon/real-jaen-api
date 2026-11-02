@@ -82,39 +82,7 @@ services:
   # published, on loopback, for a Next production server on the host. Test installation only (modo prueba).
   backend-control:
     profiles: [updates]
-    image: ${RJ_TEST_BACKEND_IMAGE:?Set a local test backend image}
-    pull_policy: never
-    entrypoint: [python, -B, /app/control.py]
-    command: [--base, /state/base.sqlite, --ambito, /app/ambito.json, --host, 0.0.0.0, --port, "8001"]
-    init: true
-    user: "10001:10001"
-    cap_drop: [ALL]
-    security_opt: ["no-new-privileges:true"]
-    environment:
-      RJ_ACQUISITION_TEST: "1"
-      RJ_UPDATE_RECIPE: ${RJ_TEST_RECIPE:-sofascore-pilot-16599363-v1}
-      RJ_ACQUISITION_URL: http://acquisition:8002
-      RJ_ACQUISITION_SECRET_FILE: /run/secrets/acquisition-token
-      RJ_CONTROL_SECRET_FILE: /run/secrets/control-token
-    volumes:
-      - state:/state
-      - type: bind
-        source: ${RJ_TEST_SECRET_FILE:?Set temporary secret file outside code and images}
-        target: /run/secrets/acquisition-token
-        read_only: true
-        bind: {create_host_path: false}
-      - type: bind
-        source: ${RJ_TEST_CONTROL_SECRET_FILE:-/nonexistent-control-secret}
-        target: /run/secrets/control-token
-        read_only: true
-        bind: {create_host_path: false}
-    ports: ["127.0.0.1:${RJ_TEST_CONTROL_PORT:-18001}:8001"]
-    networks: [control, published]
-  # FastAPI counterpart for the isolated update flow. It and acquisition share only the private control network;
-  # test requests are issued inside the container, so this profile exposes no host port.
-  backend-fastapi:
-    profiles: [fastapi-updates]
-    image: ${RJ_TEST_FASTAPI_IMAGE:-local/sports-data-fastapi-test:required}
+    image: ${RJ_TEST_FASTAPI_IMAGE:?Set the local FastAPI runtime image}
     pull_policy: never
     entrypoint: [python, -B, -m, uvicorn]
     command: [app:app, --host, 0.0.0.0, --port, "8002", --workers, "1"]
@@ -142,14 +110,14 @@ services:
         read_only: true
         bind: {create_host_path: false}
       - type: bind
-        source: ${RJ_TEST_CONTROL_SECRET_FILE:-/nonexistent-control-secret}
+        source: ${RJ_TEST_CONTROL_SECRET_FILE:?Set temporary control secret file outside code and images}
         target: /run/secrets/control-token
         read_only: true
         bind: {create_host_path: false}
+    ports: ["127.0.0.1:${RJ_TEST_CONTROL_PORT:-18001}:8002"]
     networks: [control]
 networks:
   control: {internal: true}
-  published: {}
 volumes:
   profiles:
     external: true
