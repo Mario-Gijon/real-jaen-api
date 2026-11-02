@@ -280,6 +280,13 @@ def group_check():
     second, raw_second, baseline2, context2 = sealed[1]
     for envelope, raw, baseline, context in sealed:
         check(raw, baseline, context)  # each sealed bundle still verifies as it was published
+        manifest = envelope['manifest']
+        calendar_ids = {row['id'] for row in lines(envelope, 'calendar.jsonl')}
+        attempted_ids = {int(a['path'].split('/')[2]) for a in manifest['attempts']
+                         if a['path'].startswith('/event/')}
+        for candidate in manifest['plan']['new_matches']:
+            assert candidate['id'] not in calendar_ids, ('new ID reached the published calendar', candidate)
+            assert candidate['id'] not in attempted_ids, ('new ID received detail requests', candidate)
     # A pending resource without data presented as data.
     altered = json.loads(json.dumps(first))
     entry = next(c for c in altered['manifest']['coverage'] if c['status'] == 'pending' and c['origin'] == 'none')
@@ -294,6 +301,14 @@ def group_check():
     calendar = lines(first, 'calendar.jsonl')
     ghost = dict(json.loads(json.dumps(calendar[0])), id=99999999)
     tampered['unlisted-new-match'] = rejected(lambda: check(rebuilt(first, 'calendar.jsonl', calendar + [ghost]), baseline1, context1), Rejected)
+    candidate = first['manifest']['plan']['new_matches'][0] if first['manifest']['plan']['new_matches'] else None
+    if candidate:
+        listed_candidate = dict(json.loads(json.dumps(calendar[0])), id=candidate['id'])
+        tampered['listed-new-match-requires-review'] = rejected(
+            lambda: check(rebuilt(first, 'calendar.jsonl', calendar + [listed_candidate]), baseline1, context1), Rejected)
+        altered = json.loads(json.dumps(first))
+        altered['manifest']['plan']['new_matches'] = []
+        tampered['omitted-new-match-review'] = rejected(lambda: check(rebuilt(altered), baseline1, context1), Rejected)
     # An unconsulted original altered.
     kept = next(c for c in first['manifest']['coverage'] if c['status'] == 'data' and c['origin'] == 'inventory' and c['resource'] == 'statistics')
     rows = lines(first, kept['evidence']['file'])

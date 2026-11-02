@@ -297,8 +297,10 @@ def assemble_group(store,baseline,transport,workspace,*,now,listing,planned,defe
     import tempfile
     expected=check_inventory(baseline)
     listed=listing.listed
-    ids=tuple(sorted(set(expected)|set(listed)))
-    current=[i for i in ids if i not in expected or expected[i]['current']]
+    # The listing may reveal a new ID (often a postponed match's replacement). Keep it in plan.new_matches for
+    # review, but only refresh the IDs already present in the published inventory.
+    ids=tuple(sorted(expected))
+    current=[i for i in ids if expected[i]['current']]
     prior={(s['record']['event_id'],s['record']['key']):s['record'] for s in baseline['records']}
     with tempfile.TemporaryDirectory(prefix='group-export-',dir=workspace) as tmp:
         tmp=Path(tmp)

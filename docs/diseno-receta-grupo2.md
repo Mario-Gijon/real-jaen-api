@@ -46,9 +46,11 @@ SofaScore el 29-10-2026 sobre una copia aislada, con los detalles restringidos a
 Lo que no cabe queda **aplazado** (`deferred`) para la pulsación siguiente. Sus datos se conservan; no es un
 pendiente.
 
-**Partidos nuevos:** se importan si pertenecen al ámbito (torneo, grupo, temporada y dos de los 20 equipos) y salen
-en una jornada listada. Si repiten el emparejamiento de un partido sin finalizar, se informan como posible
-sustitución: decide el operador, nunca se enlazan solos. El histórico (`retained`) nunca se consulta ni se toca.
+**IDs nuevos detectados:** si una jornada listada contiene un ID que no está en el inventario, se informa en
+`new_matches` para revisión. No se solicitan sus detalles ni se incluye en el calendario o las exportaciones de la
+publicación. Si repite el emparejamiento de un partido sin finalizar, se muestra como posible sustitución; decide el
+operador mediante la herramienta local, nunca se enlaza automáticamente. El histórico (`retained`) nunca se consulta
+ni se toca.
 
 **Caché:** el inventario publicado es la caché. Solo se pide lo que el plan decide. Las jornadas completas fuera de
 la ventana no se listan, y lo no consultado viaja con su original exacto.
@@ -84,7 +86,7 @@ Garantías del verificador (`persistencia/bundle.py`, `_verify_group`):
 - lo no consultado es idéntico al inventario;
 - lo consultado coincide con su intento;
 - un vacío nunca cuenta como dato;
-- los partidos nuevos solo pueden venir de una jornada listada;
+- los IDs nuevos detectados se informan, pero no se importan ni reciben consultas de detalle;
 - el histórico, la generación, el productor aprobado y el transporte, como en el piloto.
 
 Si el proveedor rechaza (403 sin challenge, 429, challenge repetido o interruptor abierto), o falla el navegador, la
@@ -93,7 +95,7 @@ rechazo: se publica lo obtenido.
 
 El resultado del trabajo trae el resumen (`coverage`):
 - datos nuevos, conservados y pendientes por partido, con su motivo;
-- aplazados y partidos nuevos;
+- aplazados y posibles sustituciones, pendientes de decisión local;
 - jornadas listadas;
 - nombres de los partidos, sacados de la generación recién publicada.
 
@@ -157,7 +159,7 @@ La rotación de las 28 jornadas lejanas completa una vuelta en 5 pulsaciones.
   - cambio lejano de calendario que solo pide el evento;
   - regla 72 h / 6 h;
   - prioridad de pendientes y presupuesto;
-  - partido nuevo y posible sustitución;
+  - ID detectado y posible sustitución, sin plan de detalles;
   - histórico intacto.
 - `tests/acquisition/test_sdk_adapter.py`: 10 escenarios con el navegador real, sandbox exigido. Incluyen el 500
   tras el challenge y el 500 seguido de un 403 sin challenge.
@@ -168,7 +170,8 @@ La rotación de las 28 jornadas lejanas completa una vuelta en 5 pulsaciones.
 
 **Recorrido completo:** `docker/acquisition/test_group.py`. Usa el sitio local con la temporada construida a partir
 de los originales de la copia inactiva, el servicio de adquisición con el navegador y el sandbox, el control del
-backend y la copia aislada. Tres pulsaciones con horas simuladas:
+backend y la copia aislada. Comprueba también que un ID nuevo en una jornada se informa sin pedir sus detalles ni
+incluirlo en el calendario publicado. Cuatro pulsaciones con horas simuladas:
 
 1. **Día siguiente a la jornada 9.** Resultados nuevos. Unas estadísticas vacías y unas alineaciones con 404 quedan
    pendientes sin datos (la API responde `data: null`, nunca ceros). Un partido sigue sin resultado. Un cambio de
@@ -199,8 +202,8 @@ backend y la copia aislada. Tres pulsaciones con horas simuladas:
 **Con el backend detenido:**
 - integridad e identidades conservadas;
 - los tres bundles sellados siguen verificándose;
-- cuatro manipulaciones rechazadas: un pendiente presentado como dato, un original anterior eliminado, un partido
-  nuevo no listado y un original no consultado alterado.
+- cinco manipulaciones rechazadas: un pendiente presentado como dato, un original anterior eliminado, un partido
+  nuevo no listado, un ID detectado añadido al calendario y un original no consultado alterado.
 
 ## Restricciones de una instalación
 

@@ -20,6 +20,7 @@ An empty answer, a 404 or an error never means "no data" here: the section stays
 from datetime import datetime
 
 from importar import evento_de, rasgos_evento
+from queries import vacia
 from persistencia.bundle import (GROUP_RECIPE as RECIPE, ROUND_NUMBERS as ROUNDS, SECTIONS, SEASON, TOURNAMENT,
                                  UNIQUE_TOURNAMENT, event_path, round_path)
 
@@ -77,7 +78,9 @@ def matches(baseline):
             checked = instant((payload.get('quality') or {}).get('observed_at_utc'))
         out[ident] = dict(id=ident, current=e['current'], round=number, start=start, status=status,
                           event_fetched=instant(event['fetched_at']) if event else None, checked=checked,
-                          sections={k for k in SECTIONS if (ident, k) in records}, traits=rasgos_evento(event['payload']) if event else None,
+                          sections={k for k in SECTIONS if (ident, k) in records and
+                                    not vacia(k, records[(ident, k)]['payload'])},
+                          traits=rasgos_evento(event['payload']) if event else None,
                           home=e['home'], away=e['away'])
     return out
 
@@ -175,12 +178,8 @@ def plan_matches(baseline, listed, now, *, budget=PLANNED_ATTEMPTS, detail_round
             candidates.append(('changed', m['start'] or 0, ident, SECTIONS if finished_now else ()))
         elif refresh_due(m, now):
             candidates.append(('refresh', m['start'] or 0, ident, SECTIONS))
-    teams = baseline['teams']
-    for ident, row in listed.items():
-        if ident not in known and in_scope(row, teams):
-            finished_now = ((row.get('status') or {}).get('type')) == FINISHED
-            candidates.append(('finished' if finished_now else 'changed', row.get('startTimestamp') or 0, ident,
-                               SECTIONS if finished_now else ()))
+    # New provider IDs are reported separately by new_matches(). They are not eligible for detail requests or
+    # publication; a possible replacement is a local operator decision, never a source-side inference.
     candidates.sort(key=lambda c: (PRIORITY.index(c[0]), c[1], c[2]))
     planned, deferred, used = [], {}, 0
     for reason, _start, ident, keys in candidates:

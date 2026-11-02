@@ -244,11 +244,20 @@ def check_plan(plan,attempts):
     if rounds is None and 'restricted' in plan['deferred'].values():raise Rejected('Restriction without declared rounds')
     return limits,rounds
 
+def listed_candidate(row,teams):
+    """Same fixed-scope predicate as the producer, repeated at the receiving trust boundary."""
+    tournament=row.get('tournament') or {}
+    season=(row.get('season') or {}).get('id')
+    home=(row.get('homeTeam') or {}).get('id');away=(row.get('awayTeam') or {}).get('id')
+    return (tournament.get('id')==TOURNAMENT and (tournament.get('uniqueTournament') or {}).get('id')==UNIQUE_TOURNAMENT
+            and season in (None,SEASON) and {home,away}<=set(teams) and home!=away)
+
 def _verify_group(body,descriptor,baseline,*,context,expected_rules,test_transport):
     """Like _verify, generalized from the pilot match to the set the job consulted. What was not consulted equals
     the inventory; what was, matches its attempt; a resource with a previous original is never dropped: it is new
     data, the same original, or pending with that original kept. Empty, 404, unreadable or not asked: pending with
-    its reason, never data and never absence. New matches only from a listed round of the scope."""
+    its reason, never data and never absence. New IDs from listed rounds are review-only: no detail request or
+    calendar publication is accepted until an operator makes a local replacement decision."""
     expected=check_inventory(baseline)
     if set(descriptor)!={'bytes','sha256'} or type(descriptor['bytes']) is not int or len(body)!=descriptor['bytes'] or len(body)>MAX_WIRE or sha(body)!=descriptor['sha256']:raise Rejected('Bundle descriptor mismatch')
     obj=parse(body)
@@ -300,6 +309,14 @@ def _verify_group(body,descriptor,baseline,*,context,expected_rules,test_transpo
             for row in payload.get('events') or []:
                 if isinstance(row,dict) and (row.get('tournament') or {}).get('id')==TOURNAMENT:listed[row.get('id')]=(row,a)
     if not {a['number'] for a in latest.values() if a['status']==200}<=set(provenance):raise Rejected('Original successful responses missing')
+    reported=[]
+    for ident,(row,_attempt) in sorted(listed.items()):
+        if ident in expected or type(ident) is not int or not listed_candidate(row,baseline['teams']):continue
+        pair={(row.get('homeTeam') or {}).get('id'),(row.get('awayTeam') or {}).get('id')}
+        replaces=sorted(i for i,e in expected.items() if e['current'] and e['status']!='finished' and
+                        {e['home'],e['away']}==pair)
+        reported.append(dict(id=ident,replaces=replaces))
+    if m['plan']['new_matches']!=reported:raise Rejected('Detected new IDs missing or changed in review report')
     calendar={}
     for row in rows['calendar.jsonl']:
         ident=row['id']
@@ -309,11 +326,11 @@ def _verify_group(body,descriptor,baseline,*,context,expected_rules,test_transpo
         if not {parsed['home_team_id'],parsed['away_team_id']}<=set(baseline['teams']) or parsed['home_team_id']==parsed['away_team_id']:raise Rejected('Calendar participants outside scope')
         if ident in expected and (parsed['home_team_id'],parsed['away_team_id'])!=(expected[ident]['home'],expected[ident]['away']):raise Rejected('Calendar changed identity')
         if ident in retained and parsed['status']!=expected[ident]['status']:raise Rejected('Historical event modified')
-        if ident not in expected and ident not in listed:raise Rejected('New event not listed in a consulted round')
+        if ident not in expected:raise Rejected('New event requires explicit review before import')
         calendar[ident]=(row,parsed)
     if not set(expected)<=set(calendar):raise Rejected('Inventory events missing from calendar')
     order=list(calendar)
-    current={i for i in calendar if i not in expected or expected[i]['current']}
+    current={i for i in expected if expected[i]['current']}
     participants={i:((expected[i]['home'],expected[i]['away']) if i in expected else (p['home_team_id'],p['away_team_id'])) for i,(_,p) in calendar.items()}
     for path in latest:
         if path in ROUND_PATHS:continue

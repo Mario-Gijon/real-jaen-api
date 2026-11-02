@@ -5,7 +5,7 @@ python -X utf8 docker/acquisition/test_group.py --acquisition-image IMG --backen
 
 The local site serves a season built from the snapshot's own originals: round pages for the 38 rounds and the
 events of round 9 turned into results (sections copied from round 8 matches: test data of an isolated copy, never
-published elsewhere). Three updates through control.py (the button's path), the acquisition service and the
+published elsewhere). Four updates through control.py (the button's path), the acquisition service and the
 coordinator:
 
   1. T1 (the day after round 9): eight results new; one empty statistics answer and one lineups 404 stay
@@ -16,14 +16,16 @@ coordinator:
      budget with their data kept. The far rotation moves on.
   3. T1 + 1 day, small budget: the corrected match's sections are recovered first (pending) and the match without
      result, now finished more than 72 h after kick-off, is recovered too; the remaining refreshes are deferred.
-  4. T1 + 25 h: a calendar change asks for one event; the browser gets a 500 and the retry a 403 without challenge
+  4. A source-side replacement ID is seen in a listed round. It is reported for review, receives no detail request and
+     remains outside the published inventory. T1 + 25 h: a calendar change asks for one event; the browser gets a 500 and the retry a 403 without challenge
      (a refusal, not the normal challenge): the job fails and nothing is published. The deferred refreshes of the
      last publication stay visible in the status while their previous data are served.
 
 With --frontend (a production build of rj-analyst), a real Next server over the isolated copy shows the corrected
 match with the review notice after the second update and without it after the third (screenshots at 1440 and 390 px).
 
-Then, with the backend stopped: integrity, identities and four tampered group bundles rejected.
+Then, with the backend stopped: integrity, identities and tampered group bundles rejected, including a listed unknown
+ID added to the calendar.
 """
 import argparse
 import base64
@@ -111,6 +113,12 @@ def main():
         e['homeScore'], e['awayScore'] = dict(current=score[0], display=score[0]), dict(current=score[1], display=score[1])
         return e
 
+    # A source-side replacement ID for the pending fixture match. It is visible in the round listing, but remains
+    # outside the SQLite inventory until an operator reviews and applies a local replacement decision.
+    new_detected = finished(late, (2, 1))
+    new_detected['id'] = max(e['id'] for e in baseline['events']) + 1
+    results['matches']['new_detected'] = new_detected['id']
+
     def world(stage):
         """{path: bytes} served by the local site at one stage."""
         events = {}
@@ -133,6 +141,8 @@ def main():
         routes = {}
         for number in by_round:
             page = [events[p['id']] for p in by_round[number]]
+            if stage >= 1 and number == nine[0]['roundInfo']['round']:
+                page.append(copy.deepcopy(new_detected))
             routes[f'/unique-tournament/17073/season/97382/events/round/{number}'] = json.dumps({'events': page}).encode()
         for ident, e in events.items():
             routes[f'/event/{ident}'] = json.dumps({'event': e}).encode()
@@ -277,6 +287,8 @@ def main():
         assert match(ids['empty_stats'], '/statistics')['data'] is None  # pending: no data, never zeros
         assert match(ids['missing_lineups'], '/lineups')['data'] is None
         assert match(ids['late'])['data']['status'] == 'notstarted'
+        assert c1['new_matches'] == [dict(id=ids['new_detected'], replaces=[ids['late']])], c1
+        assert http(f"/api/v1/matches/{ids['new_detected']}", token=False)[0] == 404
         assert far_round in c1['rounds']['far']
         after_moved = match(ids['moved'])['data']['kickoff_utc']
         assert after_moved != before['moved'], (before, after_moved)  # the far calendar change is published
@@ -322,6 +334,7 @@ def main():
         dashboard('recovered', ids['corrected'])
         late_now = match(ids['late'])['data']
         assert late_now['status'] == 'finished', late_now
+        assert (late_now['home_score'], late_now['away_score']) == (0, 1), late_now
         for key in SECTIONS:
             assert match(ids['late'], '/' + key)['data'] is not None, key
         assert not c3['pending'], c3

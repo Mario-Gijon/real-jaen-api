@@ -64,7 +64,9 @@ evidencia sellada siga siendo verificable.
 2. **Cobertura por recurso**: calendario, evento y secciones de cada evento vigente con `data` o `not_applicable`
    justificado por fase. Un vacío o un 404 nunca es ausencia confirmada; un parcial no se sella ni se publica.
 3. **Procedencia**: cada respuesta original con su intento, `fetched_at` y huella; lo no consultado se reutiliza
-   tal cual del inventario, sin refechar. La receta se detiene ante un evento nuevo o una corrección fuera del partido.
+   tal cual del inventario, sin refechar. En Grupo 2, IDs nuevos de jornadas consultadas se informan para revisión,
+   pero no se consultan ni se publican en el calendario; una corrección que cambia la identidad de un partido se
+   rechaza antes de publicar.
 4. **Productor aprobado**: `producer_rules()` (huella del código de la receta, el transporte, el adaptador y el
    trabajo, la revisión del scraper y la política) debe estar en `productores-adquisicion.json`. Cambiar ese código
    exige añadir su huella tras revisarlo. La del productor del 28-10 (`e18eba33…`) solo vale para la generación de

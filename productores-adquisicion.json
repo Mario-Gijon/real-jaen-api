@@ -8,9 +8,9 @@
       "generacion": "0e80fdde-95d9-44b0-a2ea-8426bce14b03"
     },
     {
-      "rules_sha256": "da30e4cfe990139e1cf0ca8dd190110564176f981996ce469faf9bb55891ffbb",
-      "productor": "acquisition/{recipe,group_plan,transport,sdk_adapter,job}.py del servicio definitivo",
-      "uso": "Servicio de adquisición: recetas del piloto y del Grupo 2"
+      "rules_sha256": "1e0df6bd30aa1a4a9db510e86e334e83ae220116f2f2f56dbfcd6ff787f815be",
+      "productor": "acquisition/{recipe,group_plan,transport,sdk_adapter,job}.py; reintento de recursos incompletos y IDs nuevos solo para revisión",
+      "uso": "Servicio de adquisición: recetas del piloto y del Grupo 2 sin importar eventos nuevos"
     }
   ]
 }

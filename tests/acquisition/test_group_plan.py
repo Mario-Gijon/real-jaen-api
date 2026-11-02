@@ -40,7 +40,12 @@ class World:
                                 tournament_id=g.TOURNAMENT, season_id=g.SEASON))
         self.records.append(dict(record=dict(event_id=ident, key='event', sub='', fetched_at=iso(fetched), payload=payload), source={}))
         for key in sections:
-            self.records.append(dict(record=dict(event_id=ident, key=key, sub='', fetched_at=iso(fetched), payload={key: [1]}), source={}))
+            section_payload = {
+                'lineups': {'home': {'players': [{'player': {'id': 1}}]}, 'away': {'players': []}},
+                'statistics': {'statistics': [{'period': 'ALL', 'groups': [{'statisticsItems': [{'name': 'Total shots'}]}]}]},
+                'incidents': {'incidents': [{'incidentType': 'period'}]},
+            }[key]
+            self.records.append(dict(record=dict(event_id=ident, key=key, sub='', fetched_at=iso(fetched), payload=section_payload), source={}))
         return payload
 
     def baseline(self):
@@ -124,6 +129,16 @@ class Matches(unittest.TestCase):
         self.assertEqual([(p['id'], p['reason'], p['keys']) for p in planned], [(1009, 'finished', g.SECTIONS)])
         self.assertEqual(deferred, {})
 
+    def test_empty_stored_section_is_pending_and_retried(self):
+        w = World()
+        w.add(event(30, 5, NOW - 40 * 86400, 'finished', score=(1, 0)), fetched=NOW - 39 * 86400,
+              sections=g.SECTIONS)
+        next(row['record'] for row in w.records if row['record']['event_id'] == 30 and
+             row['record']['key'] == 'statistics')['payload'] = {'statistics': []}
+        planned, deferred = g.plan_matches(w.baseline(), {}, NOW)
+        self.assertEqual([(p['id'], p['reason'], p['keys']) for p in planned], [(30, 'pending', ('statistics',))])
+        self.assertEqual(deferred, {})
+
     def test_far_calendar_change_asks_only_the_event(self):
         w = season()
         far = next(e for e in w.records if e['record']['event_id'] == 1030)['record']['payload']
@@ -164,14 +179,14 @@ class Matches(unittest.TestCase):
         planned, _ = g.plan_matches(w.baseline(), listed, NOW, budget=7)
         self.assertEqual(planned[0]['reason'], 'pending')
 
-    def test_new_match_in_scope_and_possible_replacement(self):
+    def test_new_match_is_reported_for_review_but_never_planned(self):
         w = season()
         postponed = w.add(event(2000, 12, NOW - 10 * 86400, 'postponed', home=90007, away=90008), fetched=NOW - 9 * 86400)
         new = event(3000, 12, NOW - 3 * 86400, 'finished', home=90007, away=90008, score=(0, 1))
         outside = dict(event(4000, 12, NOW, 'finished', home=90007, away=777), tournament=dict(id=1, uniqueTournament=dict(id=17073)))
         listed = self.listed(new, outside)
         planned, _ = g.plan_matches(w.baseline(), listed, NOW)
-        self.assertIn((3000, 'finished'), [(p['id'], p['reason']) for p in planned])
+        self.assertNotIn(3000, [p['id'] for p in planned])
         self.assertNotIn(4000, [p['id'] for p in planned])
         self.assertEqual(g.new_matches(w.baseline(), listed), [dict(id=3000, replaces=[postponed['id']])])
 
@@ -203,15 +218,16 @@ class Restriction(unittest.TestCase):
     def test_only_the_declared_rounds_are_consulted(self):
         planned, deferred = g.plan_matches(self.w.baseline(), self.listed, NOW, detail_rounds=[9])
         self.assertEqual([(p['id'], p['reason']) for p in planned], [(1, 'finished')])
-        # Detected elsewhere (calendar changes, a new match, a due refresh, a row without round): deferred, flagged.
-        self.assertEqual(deferred, {2: 'restricted', 3: 'restricted', 4: 'restricted', 5: 'restricted', 6: 'restricted'})
+        # Detected elsewhere (calendar changes, a due refresh, a row without round): deferred, flagged.
+        # A new ID is reported separately and never becomes a detail candidate.
+        self.assertEqual(deferred, {2: 'restricted', 3: 'restricted', 4: 'restricted'})
 
     def test_restriction_before_budget_and_without_it_everything_is_planned(self):
         planned, deferred = g.plan_matches(self.w.baseline(), self.listed, NOW, budget=2, detail_rounds=[9])
         self.assertEqual((planned, deferred[1]), ([], 'budget'))
-        self.assertEqual({k: v for k, v in deferred.items() if k != 1}, {i: 'restricted' for i in (2, 3, 4, 5, 6)})
+        self.assertEqual({k: v for k, v in deferred.items() if k != 1}, {i: 'restricted' for i in (2, 3, 4)})
         planned, deferred = g.plan_matches(self.w.baseline(), self.listed, NOW)
-        self.assertEqual(({p['id'] for p in planned}, deferred), ({1, 2, 3, 4, 5, 6}, {}))
+        self.assertEqual(({p['id'] for p in planned}, deferred), ({1, 2, 3, 4}, {}))
 
 
 @unittest.skipUnless(importlib.util.find_spec('fcntl'), 'acquisition service (Linux image)')
