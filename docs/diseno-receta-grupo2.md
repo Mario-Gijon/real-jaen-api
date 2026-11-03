@@ -32,7 +32,7 @@ SofaScore el 29-10-2026 sobre una copia aislada, con los detalles restringidos a
   ninguna huella nueva en la base publicada; sin ella, la rotación se quedaba en las mismas jornadas (comprobado y
   corregido en la integración).
 
-**Partidos que se consultan, en este orden y dentro del presupuesto:**
+**Datos deportivos esenciales, en este orden y dentro del presupuesto:**
 
 1. `pending`: finalizados en el inventario a los que les falta alguna sección. Solo se piden esas secciones y el
    evento.
@@ -41,10 +41,38 @@ SofaScore el 29-10-2026 sobre una copia aislada, con los detalles restringidos a
 3. `changed`: el listado difiere del inventario en identidad, estado, marcador u hora (`importar.rasgos_evento`).
    Puede ser una corrección o un cambio de calendario, también lejano. Si el partido no está finalizado, solo se
    pide su evento.
-4. `refresh`: la regla del SDK. Finalizado, observado antes de 72 h tras el inicio y hace al menos 6 h.
+4. `refresh`: la regla del SDK. Finalizado, observado antes de 72 h tras el inicio y hace al menos 6 h. Esta revisión
+   rutinaria se planifica después de los comentarios para que pueda cederles capacidad.
 
-Lo que no cabe queda **aplazado** (`deferred`) para la pulsación siguiente. Sus datos se conservan; no es un
-pendiente.
+La asignación de cada actualización es compartida, sin un presupuesto separado para comentarios:
+
+1. Los listados consumen primero los intentos y envíos que requieran.
+2. Se atienden resultados nuevos y recursos deportivos esenciales (`pending`, `finished`, `changed`). La capacidad
+   se calcula con los intentos y envíos que realmente quedan, conservando `SEND_RESERVE` para el flujo del navegador.
+3. Se solicitan comentarios en español de partidos finalizados y vigentes que no tengan una captura española válida.
+   Se ordenan primero los que acaban de pasar a finalizados, después los históricos incompletos más antiguos y, por
+   último, una captura completa que deba revisarse porque cambió el evento.
+4. Solo con el presupuesto restante se hacen revisiones deportivas rutinarias (`refresh`). Si falla o se bloquea la
+   consulta de comentarios, se omiten esas revisiones rutinarias y se conserva la publicación deportiva esencial.
+
+Se conservan los límites efectivos de la instalación: en la configuración de preparación de la prueba, 48 intentos
+lógicos y 52 envíos físicos, con el margen existente de 4 envíos. No se crea un límite adicional para comentarios ni
+se amplían los máximos aprobados. Los intentos que no quepan quedan **aplazados** para la siguiente pulsación y sus
+datos publicados se conservan.
+
+### Comentarios narrativos y jornadas permitidas
+
+La misma restricción `detail_rounds` se aplica a las solicitudes deportivas de detalle y a `/comments/es-la`.
+Con `ACQ_DETAIL_ROUNDS=10`, solo se podrán recopilar comentarios de partidos vigentes de la jornada 10; los demás
+finalizados seguirán apareciendo como pendientes y avanzarán cuando la configuración permita sus jornadas. Para
+recorrer el histórico del Grupo 2 en la activación posterior, habrá que configurar explícitamente las jornadas 1–38
+o dejar la restricción sin establecer, según el alcance aprobado entonces. El código no amplía ni elude la lista
+declarada por la instalación.
+
+La cobertura de comentarios distingue las capturas españolas válidas, respuestas vacías válidas, pendientes y
+fallos. Una captura inglesa previa se conserva como evidencia pero no se considera completa en español. Una respuesta
+española vacía se conserva como captura válida; un 404, un error o una respuesta inválida no desplazan una captura
+española válida anterior. Los IDs, textos y metadatos de SofaScore permanecen sin traducir ni fabricar.
 
 **IDs nuevos detectados:** si una jornada listada contiene un ID que no está en el inventario, se informa en
 `new_matches` para revisión. No se solicitan sus detalles ni se incluye en el calendario o las exportaciones de la

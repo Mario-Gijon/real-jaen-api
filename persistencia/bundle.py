@@ -457,15 +457,17 @@ def _verify_group(body,descriptor,baseline,*,context,expected_rules,test_transpo
     if set(raw_records)!=covered:raise Rejected('Raw resource outside coverage')
     if with_comments:
         _verify_group_comments(m['plan']['comments'],rows['comments.jsonl'],baseline,expected,current,calendar,
-                               attempts,latest,m['plan']['planned'])
+                               attempts,latest,m['plan']['planned'],detail_rounds)
     return m,decoded
 
 
-def _verify_group_comments(summary,records,baseline,expected,current,calendar,attempts,latest,planned):
+def _verify_group_comments(summary,records,baseline,expected,current,calendar,attempts,latest,planned,detail_rounds):
     """Verify the optional Spanish narrative backfill against the same job's scope and budget."""
     from persistencia.comentarios import validar_respuesta
+    from acquisition.group_plan import matches as planned_matches
     previous={item['event_id']:item for item in baseline.get('comments',[])}
     finished={ident for ident in current if calendar[ident][1]['status']=='finished'}
+    round_by_event={ident:item['round'] for ident,item in planned_matches(baseline).items()}
     valid_prior={ident for ident in finished if ident in previous and previous[ident]['spanish_complete'] is True}
     review_due={item['id'] for item in planned if item['reason'] in ('finished','changed')}
     eligible=(finished-valid_prior)|(finished&review_due)
@@ -491,6 +493,8 @@ def _verify_group_comments(summary,records,baseline,expected,current,calendar,at
         if ident not in eligible:raise Rejected('Comments attempt is not due or outside finished Group 2')
         if ident not in expected or not expected[ident]['current'] or ident not in finished:
             raise Rejected('Comments event outside current finished inventory')
+        if detail_rounds is not None and round_by_event.get(ident) not in detail_rounds:
+            raise Rejected('Comments event outside configured detail rounds')
         if row['attempt_numbers']!=[item['number'] for item in attempts_for_event]:
             raise Rejected('Comments attempt numbers mismatch')
         last=attempts_for_event[-1]

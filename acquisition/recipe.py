@@ -242,15 +242,21 @@ def _group_cached_events(store, ids, workspace):
                 (json.loads(line) for line in path.read_bytes().splitlines()) if row.get('key')=='event'}
 
 
-async def _collect_group_comments(store,transport,scope,baseline,output,*,listing,planned,limits):
+async def _collect_group_comments(store,transport,scope,baseline,output,*,listing,planned,attempt_limit,
+                                 detail_rounds):
     """Backfill one request at a time inside the existing Group 2 job and its remaining shared budget."""
     from persistencia.bundle import sha
     from sofascore_scraper.status import classify_status
     from sofascore_scraper.services.planning import phase_of
-    from .group_plan import SEND_RESERVE
+    from .group_plan import SEND_RESERVE, matches as planned_matches, round_of
 
     expected=check_inventory(baseline)
     ids={ident for ident,event in expected.items() if event['current']}
+    match_plan=planned_matches(baseline)
+    latest_event_attempt={}
+    for attempt in transport.state['attempts']:
+        if attempt['path'].startswith('/event/') and attempt['path'].count('/')==2:
+            latest_event_attempt[int(attempt['path'].split('/')[2])]=attempt
     cached=_group_cached_events(store,ids,output.parent)
     prior={item['event_id']:item for item in baseline.get('comments',[])}
     planned_by_id={item['id']:item for item in planned}
@@ -260,7 +266,9 @@ async def _collect_group_comments(store,transport,scope,baseline,output,*,listin
     for ident in ids:
         payload=cached.get(ident)
         listed_row=listing.listed.get(ident)
-        if ident in planned_ids and payload is not None:
+        if (ident in planned_ids and payload is not None
+                and (latest_event_attempt.get(ident) or {}).get('status')==200
+                and (latest_event_attempt.get(ident) or {}).get('payload_sha256') is not None):
             is_final=phase_of(classify_status(payload).value)=='post'
         elif listed_row is not None:
             is_final=phase_of(classify_status(listed_row[0]).value)=='post'
@@ -271,15 +279,17 @@ async def _collect_group_comments(store,transport,scope,baseline,output,*,listin
         if is_final:final.add(ident)
     complete={ident for ident in final if ident in prior and prior[ident]['spanish_complete'] is True}
     candidates=(final-complete)|(final&review_due)
-    newly_finished={ident for ident in candidates if ident in planned_by_id
-                    and planned_by_id[ident]['reason']=='finished' and expected[ident]['status']!='finished'}
+    newly_finished={ident for ident in candidates if expected[ident]['status']!='finished'}
     candidates=sorted(candidates,key=lambda ident:(0 if ident in newly_finished else 1 if ident not in complete else 2,
                                                     expected[ident].get('start') or float('inf'),ident))
     if baseline.get('comments_enabled') is not True:
         return dict(new=[],kept=sorted(complete-review_due),pending=sorted(candidates),failed=[]),[]
     attempts_by_event={};captured={};failed={};evidence=[]
     for ident in candidates:
-        if len(transport.state['attempts'])>=limits['attempts'] or transport.remaining_sends()<SEND_RESERVE:
+        round_number=round_of(match_plan[ident])
+        if detail_rounds is not None and round_number not in detail_rounds:
+            continue
+        if len(transport.state['attempts'])>=attempt_limit or transport.remaining_sends()<SEND_RESERVE:
             break
         route=f'/event/{ident}/comments/es-la'
         scope.admit_comments(ident,ids)
@@ -291,6 +301,12 @@ async def _collect_group_comments(store,transport,scope,baseline,output,*,listin
             outcome=None
         new_attempts=[a for a in transport.state['attempts'] if a['number'] not in prior_numbers]
         if not new_attempts:
+            if outcome is None:
+                # A stopped transport can refuse before charging a logical attempt (for example after an earlier
+                # provider refusal). Stop the comments pass and keep the already completed sporting work publishable.
+                transport.comments_stop_after_sport=True
+                transport.comments_stop_reason=transport.adapter.stopped
+                break
             # A durable backoff or exhausted budget costs nothing in this update; keep the match for a later one.
             continue
         attempts_by_event[ident]=new_attempts
@@ -365,15 +381,52 @@ def collect_group(store,transport,scope,baseline,output,*,now,cancelled=lambda:F
             if cancelled():raise InterruptedError('cancelled')
             if refused(transport):raise Stopped('Refusal/breaker while listing: nothing is published')
             listed={i:row for i,(row,_) in listing.listed.items()}
-            total=min(PLANNED_ATTEMPTS,limits['attempts'],budget or PLANNED_ATTEMPTS)
-            planned,deferred=plan_matches(baseline,listed,now,budget=total-len(rounds),detail_rounds=detail_rounds)
-            for p in planned:scope.admit(p['id'],p['keys'])
-            items=[WorkItem(Ref.event(p['id']),'refill',tuple((k,'') for k in p['keys']),'football',p['reason']) for p in planned]
+            attempt_limit=min(PLANNED_ATTEMPTS,limits['attempts'],
+                              budget if budget is not None else PLANNED_ATTEMPTS)
+            attempt_limit=max(0,attempt_limit)
+            remaining_attempts=max(0,attempt_limit-len(transport.state['attempts']))
+            remaining_sends=max(0,transport.remaining_sends()-SEND_RESERVE)
+            essential_budget=min(remaining_attempts,remaining_sends)
+            essential,deferred=plan_matches(
+                baseline,listed,now,budget=essential_budget,detail_rounds=detail_rounds,
+                reasons=('pending','finished','changed'))
+            for p in essential:scope.admit(p['id'],p['keys'])
+            items=[WorkItem(Ref.event(p['id']),'refill',tuple((k,'') for k in p['keys']),'football',p['reason']) for p in essential]
             if items:await pipeline.run(items,cancelled=cancelled)
             if cancelled():raise InterruptedError('cancelled')
             if refused(transport):raise Stopped('Refusal/breaker while consulting: nothing is published')
+
             comments_summary,comments_evidence=await _collect_group_comments(
-                store,transport,scope,baseline,output,listing=listing,planned=planned,limits=limits)
+                store,transport,scope,baseline,output,listing=listing,planned=essential,
+                attempt_limit=attempt_limit,detail_rounds=detail_rounds)
+            if cancelled():raise InterruptedError('cancelled')
+
+            # Routine refreshes are deliberately last: comments for new finals and the historical backlog use the
+            # shared remaining budget first. If a comments refusal stopped the adapter, preserve the valid sporting
+            # work already completed and defer every routine refresh without making another request.
+            refresh_candidates,refresh_capped=plan_matches(
+                baseline,listed,now,budget=PLANNED_ATTEMPTS,detail_rounds=detail_rounds,reasons=('refresh',))
+            deferred.update(refresh_capped)
+            refresh=[]
+            logical_left=max(0,attempt_limit-len(transport.state['attempts']))
+            sends_left=max(0,transport.remaining_sends()-SEND_RESERVE)
+            if transport.comments_stop_after_sport:
+                deferred.update({p['id']:'budget' for p in refresh_candidates})
+            else:
+                for candidate in refresh_candidates:
+                    if candidate['cost']>logical_left or candidate['cost']>sends_left:
+                        deferred[candidate['id']]='budget'
+                        continue
+                    logical_left-=candidate['cost'];sends_left-=candidate['cost']
+                    refresh.append(candidate)
+                for p in refresh:scope.admit(p['id'],p['keys'])
+                refresh_items=[WorkItem(Ref.event(p['id']),'refill',tuple((k,'') for k in p['keys']),'football',p['reason'])
+                               for p in refresh]
+                if refresh_items:await pipeline.run(refresh_items,cancelled=cancelled)
+                if cancelled():raise InterruptedError('cancelled')
+                if refused(transport):raise Stopped('Refusal/breaker while refreshing: nothing is published')
+
+            planned=essential+refresh
             state.update(listing=listing,planned=planned,deferred=deferred,near=near,far=far,limits=limits,
                          detail_rounds=detail_rounds,comments_summary=comments_summary,
                          comments_evidence=comments_evidence)

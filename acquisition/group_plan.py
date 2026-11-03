@@ -153,12 +153,13 @@ def round_of(match_or_row):
     return (match_or_row.get('roundInfo') or {}).get('round')
 
 
-def plan_matches(baseline, listed, now, *, budget=PLANNED_ATTEMPTS, detail_rounds=None):
+def plan_matches(baseline, listed, now, *, budget=PLANNED_ATTEMPTS, detail_rounds=None, reasons=None):
     """Matches to consult. `listed`: {match id: row of a round page just listed}. Returns (planned, deferred):
     planned is a list of dict(id, reason, keys, cost) in consultation order; deferred the ones left for the next
     update ({id: 'budget' | 'restricted'}). keys: the sections to ask besides the event (empty: event only).
     detail_rounds: an explicit restriction of this installation; a candidate of another round (or of an unknown one)
-    is never consulted, only deferred as 'restricted', whatever the date."""
+    is never consulted, only deferred as 'restricted', whatever the date. `reasons` lets the caller schedule essential
+    work separately from routine refreshes while preserving this function's priority and due-date rules."""
     known = matches(baseline)
     candidates = []
     for ident, m in known.items():
@@ -180,6 +181,11 @@ def plan_matches(baseline, listed, now, *, budget=PLANNED_ATTEMPTS, detail_round
             candidates.append(('refresh', m['start'] or 0, ident, SECTIONS))
     # New provider IDs are reported separately by new_matches(). They are not eligible for detail requests or
     # publication; a possible replacement is a local operator decision, never a source-side inference.
+    if reasons is not None:
+        selected_reasons = set(reasons)
+        if not selected_reasons <= set(PRIORITY):
+            raise ValueError('Unknown planning reason')
+        candidates = [candidate for candidate in candidates if candidate[0] in selected_reasons]
     candidates.sort(key=lambda c: (PRIORITY.index(c[0]), c[1], c[2]))
     planned, deferred, used = [], {}, 0
     for reason, _start, ident, keys in candidates:

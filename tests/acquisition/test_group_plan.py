@@ -179,6 +179,26 @@ class Matches(unittest.TestCase):
         planned, _ = g.plan_matches(w.baseline(), listed, NOW, budget=7)
         self.assertEqual(planned[0]['reason'], 'pending')
 
+    def test_reason_filter_reserves_routine_refresh_for_a_later_pass(self):
+        w = World()
+        w.add(event(1, 5, NOW - 40 * 86400, 'finished', score=(1, 0)), fetched=NOW - 39 * 86400,
+              sections=('lineups',))
+        nine = w.add(event(2, 9, NOW - 4 * 86400, home=90001, away=90002), fetched=NOW - 5 * 86400)
+        far = w.add(event(3, 20, NOW + 60 * 86400, home=90003, away=90004), fetched=NOW - 5 * 86400)
+        w.add(event(4, 9, NOW - 30 * H, 'finished', score=(2, 2), home=90005, away=90006),
+              fetched=NOW - 20 * H, sections=g.SECTIONS)
+        listed = self.listed(dict(nine, status=dict(type='finished'), homeScore=dict(current=1), awayScore=dict(current=0)),
+                             dict(far, startTimestamp=far['startTimestamp'] + 3600))
+
+        essential, deferred = g.plan_matches(w.baseline(), listed, NOW, budget=8,
+                                             reasons=('pending', 'finished', 'changed'))
+        self.assertEqual([(item['id'], item['reason']) for item in essential],
+                         [(1, 'pending'), (2, 'finished'), (3, 'changed')])
+        self.assertEqual(deferred, {})
+        refresh, deferred = g.plan_matches(w.baseline(), listed, NOW, budget=4, reasons=('refresh',))
+        self.assertEqual([(item['id'], item['reason']) for item in refresh], [(4, 'refresh')])
+        self.assertEqual(deferred, {})
+
     def test_new_match_is_reported_for_review_but_never_planned(self):
         w = season()
         postponed = w.add(event(2000, 12, NOW - 10 * 86400, 'postponed', home=90007, away=90008), fetched=NOW - 9 * 86400)
