@@ -57,6 +57,7 @@ class Transport:
         self.retry=parse(self.retry_path.read_bytes()) if self.retry_path.exists() else {}
         self.opener=urllib.request.build_opener(urllib.request.ProxyHandler({}),NoRedirect())
         self.memo={};self.owner=None;self.serial=None
+        self.comments_stop_after_sport=False;self.comments_stop_reason=None
         if breaker is None:
             from sofascore_scraper.breaker import CircuitBreaker
             breaker=CircuitBreaker(consecutive=20,ratio=.9,server_errors=3,bridge_blocked=lambda *a:False)

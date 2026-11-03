@@ -97,9 +97,9 @@ class Cliente:
         self.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
         self.guard = threading.Lock()
 
-    def _http(self, method, suffix='', data=None, *, limit=MAX_STATUS, timeout=10):
+    def _http(self, method, suffix='', data=None, *, limit=MAX_STATUS, timeout=10, base=None):
         body = encode(data) if data is not None else (b'' if method == 'POST' else None)
-        request = urllib.request.Request(self.url + suffix, data=body, method=method, headers={
+        request = urllib.request.Request((base or self.url) + suffix, data=body, method=method, headers={
             'Authorization': 'Bearer ' + self._secret.decode('ascii'), 'Content-Type': 'application/json'})
         try:
             with self.opener.open(request, timeout=timeout) as response:
@@ -237,13 +237,16 @@ class Cliente:
             if avance is not None:
                 avance('publishing')
             exports = []
+            comments = []
             for name, raw in files.items():
                 _immutable(folder / name, raw)
                 if name.startswith('team_'):
                     exports.append((folder / name, int(name[5:-6])))
+                elif name == 'comments.jsonl':
+                    comments.append(folder / name)
             try:
                 coordinador.solicitar(exportaciones=exports, calendarios=[folder / 'calendar.jsonl'], identificador=last,
-                                      generacion_esperada=baseline['generation_id'])
+                                      generacion_esperada=baseline['generation_id'],comentarios=comments)
             except CoordinacionRechazada as e:
                 raise Rejected(f'Coordinador: {e}') from None
         result = coordinador.esperar(last, timeout=300)
@@ -258,6 +261,27 @@ class Cliente:
                                          deferred=sorted(int(i) for i, why in plan['deferred'].items() if why == 'budget'),
                                          restricted=sorted(int(i) for i, why in plan['deferred'].items() if why == 'restricted'),
                                          limits=plan['limits'], detail_rounds=plan['detail_rounds'])
+        elif manifest['contract'] == 'group-v2':
+            plan=manifest['plan']
+            coverage=dict(coverage_summary(manifest),new_matches=plan['new_matches'],rounds=plan['rounds'],
+                          deferred=sorted(int(i) for i,why in plan['deferred'].items() if why=='budget'),
+                          restricted=sorted(int(i) for i,why in plan['deferred'].items() if why=='restricted'),
+                          limits=plan['limits'],detail_rounds=plan['detail_rounds'])
+            persisted=(result.get('resultado') or {}).get('comments_persisted') or {}
+            failed_persisted=set(persisted.get('failed_ids',[]))
+            if failed_persisted:
+                comments_coverage=coverage['comments']
+                failed_ids={entry['id'] for entry in comments_coverage['failed']}
+                retained=[]
+                for event_id in comments_coverage['new']:
+                    if event_id in failed_persisted:
+                        if event_id not in failed_ids:
+                            comments_coverage['failed'].append(dict(id=event_id,reason='persistence_error'))
+                    else:
+                        retained.append(event_id)
+                comments_coverage['new']=retained
+                comments_coverage['failed'].sort(key=lambda entry:entry['id'])
+            published['coverage']=coverage
         return published
 
 

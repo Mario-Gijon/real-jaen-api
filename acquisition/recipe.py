@@ -10,6 +10,7 @@ import base64
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 
 from .transport import Stopped, iso
@@ -19,8 +20,9 @@ from persistencia.bundle import PATHS, PILOT, SECTIONS, check_inventory, encode,
 REVISION='611e436a1528b0f487aa56a045f023e8ae8ae098'
 
 def producer_rules():
-    names=('recipe.py','group_plan.py','transport.py','sdk_adapter.py','job.py')
-    sources={n:sha(Path(__file__).with_name(n).read_bytes()) for n in names}
+    names=('recipe.py','group_plan.py','transport.py','sdk_adapter.py','job.py',
+           '../persistencia/bundle.py','../persistencia/comentarios.py')
+    sources={n:sha((Path(__file__).parent/n).resolve().read_bytes()) for n in names}
     return fingerprint(dict(sources=sources,scraper=REVISION,policy=dict(window_s=259200,interval_s=21600)))
 
 def seed_cache(store,baseline):
@@ -194,6 +196,10 @@ class GroupScope:
     def admit(self,ident,keys):
         from persistencia.bundle import event_path
         self.paths.update(event_path(ident,k) for k in ('event',*keys))
+    def admit_comments(self, ident, known_ids):
+        if type(ident) is not int or ident not in known_ids:
+            raise Stopped('Comments route outside the published Group 2 inventory')
+        self.paths.add(f'/event/{ident}/comments/es-la')
     def permits(self,path):
         return path in self.paths
 
@@ -222,6 +228,107 @@ class GroupListing:
 
 def refused(transport):
     return bool(transport.retry.get('_blocked')) or transport.breaker.tripped
+
+
+def _group_cached_events(store, ids, workspace):
+    """Read the current SDK event cache for known inventory IDs; no provider request is made here."""
+    import tempfile
+    from sofascore_scraper.store import EventQuery, Scope
+    with tempfile.TemporaryDirectory(prefix='group-comments-state-', dir=workspace) as tmp:
+        path=Path(tmp)/'events.jsonl'
+        report=store.export.raw(EventQuery(scope=Scope(event_ids=tuple(ids))),path,keys=('event',),fmt='jsonl')
+        if report.skipped:raise Stopped('Could not determine final-match comment scope from the local cache')
+        return {row['event_id']:row['payload'] for row in
+                (json.loads(line) for line in path.read_bytes().splitlines()) if row.get('key')=='event'}
+
+
+async def _collect_group_comments(store,transport,scope,baseline,output,*,listing,planned,limits):
+    """Backfill one request at a time inside the existing Group 2 job and its remaining shared budget."""
+    from persistencia.bundle import sha
+    from sofascore_scraper.status import classify_status
+    from sofascore_scraper.services.planning import phase_of
+    from .group_plan import SEND_RESERVE
+
+    expected=check_inventory(baseline)
+    ids={ident for ident,event in expected.items() if event['current']}
+    cached=_group_cached_events(store,ids,output.parent)
+    prior={item['event_id']:item for item in baseline.get('comments',[])}
+    planned_by_id={item['id']:item for item in planned}
+    planned_ids=set(planned_by_id)
+    review_due={ident for ident,item in planned_by_id.items() if item['reason'] in ('finished','changed')}
+    final=set()
+    for ident in ids:
+        payload=cached.get(ident)
+        listed_row=listing.listed.get(ident)
+        if ident in planned_ids and payload is not None:
+            is_final=phase_of(classify_status(payload).value)=='post'
+        elif listed_row is not None:
+            is_final=phase_of(classify_status(listed_row[0]).value)=='post'
+        elif payload is not None:
+            is_final=phase_of(classify_status(payload).value)=='post'
+        else:
+            is_final=expected[ident]['status']=='finished'
+        if is_final:final.add(ident)
+    complete={ident for ident in final if ident in prior and prior[ident]['spanish_complete'] is True}
+    candidates=(final-complete)|(final&review_due)
+    newly_finished={ident for ident in candidates if ident in planned_by_id
+                    and planned_by_id[ident]['reason']=='finished' and expected[ident]['status']!='finished'}
+    candidates=sorted(candidates,key=lambda ident:(0 if ident in newly_finished else 1 if ident not in complete else 2,
+                                                    expected[ident].get('start') or float('inf'),ident))
+    if baseline.get('comments_enabled') is not True:
+        return dict(new=[],kept=sorted(complete-review_due),pending=sorted(candidates),failed=[]),[]
+    attempts_by_event={};captured={};failed={};evidence=[]
+    for ident in candidates:
+        if len(transport.state['attempts'])>=limits['attempts'] or transport.remaining_sends()<SEND_RESERVE:
+            break
+        route=f'/event/{ident}/comments/es-la'
+        scope.admit_comments(ident,ids)
+        prior_numbers={a['number'] for a in transport.state['attempts']}
+        sends_mark=len(transport.adapter.sends)
+        try:
+            outcome=await transport.get(route)
+        except Stopped:
+            outcome=None
+        new_attempts=[a for a in transport.state['attempts'] if a['number'] not in prior_numbers]
+        if not new_attempts:
+            # A durable backoff or exhausted budget costs nothing in this update; keep the match for a later one.
+            continue
+        attempts_by_event[ident]=new_attempts
+        latest=new_attempts[-1]
+        response_path=transport.root/(transport.context['job_id']+'-responses')/(str(latest['number'])+'.body')
+        raw=response_path.read_bytes() if response_path.is_file() else None
+        valid=False;reason=None
+        if latest['status']==200 and raw is not None:
+            try:
+                from persistencia.comentarios import validar_respuesta
+                validar_respuesta(raw)
+                valid=True
+            except (ValueError,UnicodeError):
+                reason='parse'
+        if valid:
+            captured[ident]=True
+        else:
+            stored_reason=(transport.retry.get(route) or {}).get('reason')
+            reason=reason or {'404':'not_found','empty':'empty','parse':'parse','budget':'budget'}.get(stored_reason,'error')
+            failed[ident]=reason
+        physical=transport.adapter.sends[sends_mark:]
+        evidence.append(dict(event_id=ident,status=latest['status'],
+                             attempt_numbers=[item['number'] for item in new_attempts],
+                             raw_b64=base64.b64encode(raw).decode('ascii') if raw is not None else None,
+                             raw_sha256=sha(raw) if raw is not None else None,
+                             captured_at=latest['finished_at'],reason=None if valid else reason,
+                             transport_report=dict(path=route,attempt_numbers=[item['number'] for item in new_attempts],
+                                                   logical_requests=1,physical_sends=sum(1 for item in physical if item.get('sent')))))
+        if outcome is None:
+            # The sporting work is complete. Preserve the adapter's refusal, stop every further send, and seal its
+            # valid sporting evidence with this comments request marked failed.
+            transport.comments_stop_after_sport=True
+            transport.comments_stop_reason=transport.adapter.stopped
+            break
+    pending=sorted(candidates-set(attempts_by_event))
+    summary=dict(new=sorted(captured),kept=sorted(complete-review_due),pending=pending,
+                 failed=[dict(id=ident,reason=reason) for ident,reason in sorted(failed.items())])
+    return summary,evidence
 
 def collect_group(store,transport,scope,baseline,output,*,now,cancelled=lambda:False,budget=None,listed_at=None,
                   limits=None,detail_rounds=None):
@@ -265,8 +372,11 @@ def collect_group(store,transport,scope,baseline,output,*,now,cancelled=lambda:F
             if items:await pipeline.run(items,cancelled=cancelled)
             if cancelled():raise InterruptedError('cancelled')
             if refused(transport):raise Stopped('Refusal/breaker while consulting: nothing is published')
+            comments_summary,comments_evidence=await _collect_group_comments(
+                store,transport,scope,baseline,output,listing=listing,planned=planned,limits=limits)
             state.update(listing=listing,planned=planned,deferred=deferred,near=near,far=far,limits=limits,
-                         detail_rounds=detail_rounds)
+                         detail_rounds=detail_rounds,comments_summary=comments_summary,
+                         comments_evidence=comments_evidence)
         import asyncio
         try:
             asyncio.run(run())
@@ -283,7 +393,8 @@ def collect_group(store,transport,scope,baseline,output,*,now,cancelled=lambda:F
         output.chmod(0o400);sync_dir(output.parent)
         return descriptor
 
-def assemble_group(store,baseline,transport,workspace,*,now,listing,planned,deferred,near,far,limits,detail_rounds):
+def assemble_group(store,baseline,transport,workspace,*,now,listing,planned,deferred,near,far,limits,detail_rounds,
+                   comments_summary,comments_evidence):
     """The bundle of a group job. Per resource: new data (a successful attempt with data), the previous original kept
     (not consulted, or consulted without data), pending (no data, with its reason) or not applicable (match not
     played yet). Never an empty answer as data, never a previous original dropped."""
@@ -364,8 +475,10 @@ def assemble_group(store,baseline,transport,workspace,*,now,listing,planned,defe
                         why='not_requested'  # not due in this update, or its event failed so its sections were not asked
                     drafts.append(dict(event_id=ident,resource=key,status='pending',origin='none',checked_at=None,reason=why))
     files={}
-    successful=[a for a in attempts if a['status']==200]
+    successful=[a for a in attempts if a['status']==200 and
+                not re.fullmatch(r'/event/[1-9][0-9]{0,11}/comments/es-la',a['path'])]
     files['provenance.jsonl']=b''.join(encode(dict(number=a['number'],path=a['path'],received_at=a['finished_at'],body_b64=base64.b64encode((transport.root/(transport.context['job_id']+'-responses')/(str(a['number'])+'.body')).read_bytes()).decode()))+b'\n' for a in successful)
+    files['comments.jsonl']=b''.join(encode(row)+b'\n' for row in comments_evidence)
     files['calendar.jsonl']=b''.join(encode(calendar[i])+b'\n' for i in ids)
     lines={i:n for n,i in enumerate(ids,1)}
     refs={}
@@ -384,11 +497,11 @@ def assemble_group(store,baseline,transport,workspace,*,now,listing,planned,defe
               planned=[dict(id=p['id'],reason=p['reason'],keys=list(p['keys'])) for p in planned],
               deferred={str(k):v for k,v in sorted(deferred.items())},
               new_matches=new_matches(baseline,{i:row for i,(row,_) in listed.items()}),
-              limits=dict(limits),detail_rounds=detail_rounds)
-    m=dict(schema=2,contract='group-v1',**{k:transport.context[k] for k in ('job_id','request_id','inventory_sha256')},
+              limits=dict(limits),detail_rounds=detail_rounds,comments=comments_summary)
+    m=dict(schema=2,contract='group-v2',**{k:transport.context[k] for k in ('job_id','request_id','inventory_sha256')},
            recipe_id='sofascore-group2-2627-v1',provider_revision=REVISION,transport=transport.mode,
            generation_id=baseline['generation_id'],rules_sha256=producer_rules(),policy=dict(window_s=259200,interval_s=21600),
            started_at=transport.state['started_at'],finished_at=iso(transport.clock()),
            retained=sorted(i for i,e in expected.items() if not e['current']),attempts=attempts,errors=[],coverage=coverage,plan=plan,
-           files=[dict(name=n,kind=('calendar' if n=='calendar.jsonl' else 'provenance') if not n.startswith('team_') else 'own_export',team_external_id=int(n[5:-6]) if n.startswith('team_') else None,bytes=len(raw),sha256=sha(raw)) for n,raw in sorted(files.items())])
+           files=[dict(name=n,kind=('calendar' if n=='calendar.jsonl' else 'provenance' if n=='provenance.jsonl' else 'comments') if not n.startswith('team_') else 'own_export',team_external_id=int(n[5:-6]) if n.startswith('team_') else None,bytes=len(raw),sha256=sha(raw)) for n,raw in sorted(files.items())])
     return encode(dict(manifest=m,files={n:base64.b64encode(raw).decode() for n,raw in files.items()}))

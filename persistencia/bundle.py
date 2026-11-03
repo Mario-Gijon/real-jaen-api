@@ -9,6 +9,7 @@ import base64
 from datetime import datetime
 import hashlib
 import json
+import re
 import uuid
 import api
 import importar
@@ -51,10 +52,20 @@ def inventory(generation):
         if ident in matches and key in ('event','listing',*SECTIONS):
             source=value['registro']
             rows.append(dict(record=record(source),source={k:source.get(k) for k in ('export','line','content_hash','fetched_at_valid')}))
+    comments_enabled=bool(getattr(generation,'comments_enabled',True))
+    comments=[]
+    if comments_enabled:
+        for public_id,snapshot in sorted(generation._comentarios.items()):
+            match=next((m for m in matches.values() if f"sofascore-match-{m['match_id']}"==public_id),None)
+            if match is not None and api.vigente(match):
+                comments.append(dict(event_id=match['match_id'],availability=snapshot.get('availability'),
+                                     source_path=snapshot.get('sourcePath'),response_sha256=snapshot.get('responseSha256'),
+                                     spanish_complete=snapshot.get('spanishComplete') is True))
     result=dict(schema=1,generation_id=generation.id,teams=teams,
                 events=[dict(id=i,current=api.vigente(m),replaced_by=(m.get('replaced_by') or {}).get('match_id'),
                              home=m['home_team_id'],away=m['away_team_id'],status=m['status'],
-                             tournament_id=m['tournament_id'],season_id=m['season_id']) for i,m in sorted(matches.items())],records=rows)
+                             tournament_id=m['tournament_id'],season_id=m['season_id']) for i,m in sorted(matches.items())],
+                records=rows,comments=comments,comments_enabled=comments_enabled)
     return dict(result,sha256=fingerprint(result))
 
 def check_inventory(value):
@@ -65,6 +76,24 @@ def check_inventory(value):
         if e['current'] is not (e['replaced_by'] is None):raise Rejected('Invalid lifecycle')
         if not e['current'] and (e['replaced_by'] not in events or not events[e['replaced_by']]['current']):raise Rejected('Invalid replacement')
         if (e['tournament_id'],e['season_id'])!=(94191,97382):raise Rejected('Inventory outside pilot scope')
+    comments=value.get('comments',[])
+    if 'comments_enabled' in value and type(value['comments_enabled']) is not bool:
+        raise Rejected('Invalid comments capability')
+    if value.get('comments_enabled') is False and comments:
+        raise Rejected('Comments inventory supplied without migrated storage')
+    if not isinstance(comments,list):raise Rejected('Invalid comments inventory')
+    seen_comments=set()
+    for item in comments:
+        if (not isinstance(item,dict) or set(item)!={'event_id','availability','source_path','response_sha256','spanish_complete'}
+                or type(item['event_id']) is not int or item['event_id'] not in events or not events[item['event_id']]['current']
+                or item['event_id'] in seen_comments or item['availability'] not in ('available','empty','not_collected','error')
+                or type(item['spanish_complete']) is not bool
+                or item['source_path'] is not None and not isinstance(item['source_path'],str)
+                or item['response_sha256'] is not None and (not isinstance(item['response_sha256'],str)
+                                                             or len(item['response_sha256'])!=64
+                                                             or any(c not in '0123456789abcdef' for c in item['response_sha256']))):
+            raise Rejected('Invalid comments inventory row')
+        seen_comments.add(item['event_id'])
     return events
 
 def verify(body,descriptor,baseline,*,context,expected_rules,test_transport=False):
@@ -72,7 +101,7 @@ def verify(body,descriptor,baseline,*,context,expected_rules,test_transport=Fals
     recipe with partial coverage). Returns (manifest, files)."""
     try:
         contract=parse(body).get('manifest',{}).get('contract') if len(body)<=MAX_WIRE else None
-        check=_verify_group if contract=='group-v1' else _verify
+        check=_verify_group if contract in ('group-v1','group-v2') else _verify
         return check(body,descriptor,baseline,context=context,expected_rules=expected_rules,test_transport=test_transport)
     except Rejected:raise
     except (ValueError,TypeError,KeyError,AttributeError,IndexError,UnicodeError,OverflowError):raise Rejected('Malformed v2 bundle') from None
@@ -207,6 +236,7 @@ MAX_GROUP_LOGICAL=MAX_GROUP_ATTEMPTS-4
 MAX_PROVENANCE=24*1024*1024
 PENDING_REASONS=frozenset({'empty','not_found','parse','error','budget','not_requested','restricted'})
 PLAN_FIELDS=frozenset({'now','rounds','planned','deferred','new_matches','limits','detail_rounds'})
+GROUP_V2_PLAN_FIELDS=PLAN_FIELDS|{'comments'}
 GROUP_FIELDS=frozenset({'schema','contract','job_id','request_id','recipe_id','provider_revision','transport','inventory_sha256',
                         'generation_id','rules_sha256','policy','started_at','finished_at','files','coverage','retained',
                         'attempts','errors','plan'})
@@ -229,11 +259,14 @@ def coverage_summary(manifest):
             else:kept+=1
         elif c['status']=='pending':
             pending.setdefault(c['event_id'],[]).append(dict(resource=c['resource'],reason=c['reason'],kept=c['origin']=='inventory'))
-    return dict(new=new,kept=kept,pending=[dict(event_id=i,resources=r) for i,r in sorted(pending.items())])
+    comments=(manifest.get('plan') or {}).get('comments') or dict(new=[],kept=[],pending=[],failed=[])
+    return dict(new=new,kept=kept,pending=[dict(event_id=i,resources=r) for i,r in sorted(pending.items())],
+                comments=comments)
 
-def check_plan(plan,attempts):
+def check_plan(plan,attempts,*,with_comments=False):
     """The job's declared limits and restriction: never above the production maxima, and what it did fits them."""
-    if not isinstance(plan,dict) or set(plan)!=PLAN_FIELDS:raise Rejected('Invalid plan')
+    fields=GROUP_V2_PLAN_FIELDS if with_comments else PLAN_FIELDS
+    if not isinstance(plan,dict) or set(plan)!=fields:raise Rejected('Invalid plan')
     limits,rounds=plan['limits'],plan['detail_rounds']
     if not isinstance(limits,dict) or set(limits)!={'attempts','sends'} or any(type(v) is not int for v in limits.values()):raise Rejected('Invalid limits')
     if not 1<=limits['attempts']<=min(MAX_GROUP_LOGICAL,limits['sends']) or not limits['sends']<=MAX_GROUP_ATTEMPTS:raise Rejected('Limits above production')
@@ -242,6 +275,11 @@ def check_plan(plan,attempts):
                                or any(type(r) is not int or r not in ROUND_NUMBERS for r in rounds)):raise Rejected('Invalid detail rounds')
     if not isinstance(plan['deferred'],dict) or any(v not in ('budget','restricted') for v in plan['deferred'].values()):raise Rejected('Invalid deferral')
     if rounds is None and 'restricted' in plan['deferred'].values():raise Rejected('Restriction without declared rounds')
+    if with_comments:
+        comments=plan['comments']
+        if not isinstance(comments,dict) or set(comments)!={'new','kept','pending','failed'}:
+            raise Rejected('Invalid comments coverage')
+        if any(not isinstance(comments[k],list) for k in comments):raise Rejected('Invalid comments coverage')
     return limits,rounds
 
 def listed_candidate(row,teams):
@@ -263,7 +301,8 @@ def _verify_group(body,descriptor,baseline,*,context,expected_rules,test_transpo
     obj=parse(body)
     if set(obj)!={'manifest','files'}:raise Rejected('Unknown envelope')
     m=obj['manifest']
-    if set(m)!=GROUP_FIELDS or type(m['schema']) is not int or m['schema']!=2 or m['contract']!='group-v1':raise Rejected('Incompatible contract')
+    if set(m)!=GROUP_FIELDS or type(m['schema']) is not int or m['schema']!=2 or m['contract'] not in ('group-v1','group-v2'):raise Rejected('Incompatible contract')
+    with_comments=m['contract']=='group-v2'
     if any(str(uuid.UUID(m[k]))!=m[k] for k in ('job_id','request_id')) or tuple(m[k] for k in ('job_id','request_id'))!=tuple(context):raise Rejected('Wrong job context')
     if m['recipe_id']!=GROUP_RECIPE or m['provider_revision']!='611e436a1528b0f487aa56a045f023e8ae8ae098':raise Rejected('Wrong recipe/revision')
     if m['transport']!=('loopback-fixture' if test_transport else 'sofascore-https'):raise Rejected('Wrong transport provenance')
@@ -276,7 +315,7 @@ def _verify_group(body,descriptor,baseline,*,context,expected_rules,test_transpo
     if m['retained']!=retained:raise Rejected('Local history changed')
     attempts=m['attempts'];latest={};counts={}
     if not 1<=len(attempts)<=MAX_GROUP_ATTEMPTS:raise Rejected('Attempt budget mismatch')
-    _,detail_rounds=check_plan(m['plan'],attempts)
+    _,detail_rounds=check_plan(m['plan'],attempts,with_comments=with_comments)
     for n,a in enumerate(attempts,1):
         if set(a)!={'number','path','sent_at','finished_at','status','payload_sha256'} or a['number']!=n:raise Rejected('Unplanned attempt')
         counts[a['path']]=counts.get(a['path'],0)+1
@@ -284,31 +323,39 @@ def _verify_group(body,descriptor,baseline,*,context,expected_rules,test_transpo
         if not begin<=instant(a['sent_at'])<=instant(a['finished_at'])<=end:raise Rejected('Invalid attempt clock')
         latest[a['path']]=a
     wanted={f'team_{i}.jsonl':i for i in baseline['teams']};wanted['calendar.jsonl']=None;wanted['provenance.jsonl']=None
+    if with_comments:wanted['comments.jsonl']=None
     if set(obj['files'])!=set(wanted) or len(m['files'])!=len(wanted):raise Rejected('Own exports/calendar missing')
     entries={e['name']:e for e in m['files']}
     if len(entries)!=len(wanted) or set(entries)!=set(wanted):raise Rejected('Duplicate file descriptor')
     rows={};total=0;decoded={}
     for name,owner in wanted.items():
         d=entries[name]
-        if set(d)!={'name','kind','team_external_id','bytes','sha256'} or d['team_external_id']!=owner or d['kind']!=(('calendar' if name=='calendar.jsonl' else 'provenance') if owner is None else 'own_export'):raise Rejected('Invalid file owner')
+        kind=('calendar' if name=='calendar.jsonl' else 'provenance' if name=='provenance.jsonl' else 'comments') if owner is None else 'own_export'
+        if set(d)!={'name','kind','team_external_id','bytes','sha256'} or d['team_external_id']!=owner or d['kind']!=kind:raise Rejected('Invalid file owner')
         raw=base64.b64decode(obj['files'][name],validate=True);total+=len(raw)
         limit=MAX_PROVENANCE if name=='provenance.jsonl' else MAX_FILE
         if len(raw)>limit or total>MAX_TOTAL or type(d['bytes']) is not int or d['bytes']!=len(raw) or sha(raw)!=d['sha256']:raise Rejected('Invalid file size/hash')
         lines=raw.splitlines()
         if any(not l or len(l)>MAX_LINE for l in lines):raise Rejected('Invalid JSONL')
         decoded[name]=raw;rows[name]=[parse(l) for l in lines]
-    # Original answers: every successful attempt, byte for byte; the rounds actually listed and what they listed.
+    # Original sporting answers: every successful attempt, byte for byte. Comment responses have a separate
+    # evidence record so an invalid comment payload can remain a comment failure without rejecting valid sports data.
     provenance={};listed={}
     for e in rows['provenance.jsonl']:
         if set(e)!={'number','path','received_at','body_b64'} or type(e['number']) is not int or e['number'] in provenance or not 1<=e['number']<=len(attempts):raise Rejected('Invalid original response')
-        a=attempts[e['number']-1];payload=parse(base64.b64decode(e['body_b64'],validate=True))
+        a=attempts[e['number']-1]
+        if with_comments and re.fullmatch(r'/event/[1-9][0-9]{0,11}/comments/es-la',a['path']):
+            raise Rejected('Comment response belongs in comments evidence')
+        payload=parse(base64.b64decode(e['body_b64'],validate=True))
         selected=importar.evento_de(payload) if a['path'] not in ROUND_PATHS and a['path'].count('/')==2 else payload
         if a['status']!=200 or e['path']!=a['path'] or e['received_at']!=a['finished_at'] or fingerprint(selected)!=a['payload_sha256']:raise Rejected('Original response/attempt mismatch')
         provenance[e['number']]=payload
         if a['path'] in ROUND_PATHS and latest[a['path']] is a:
             for row in payload.get('events') or []:
                 if isinstance(row,dict) and (row.get('tournament') or {}).get('id')==TOURNAMENT:listed[row.get('id')]=(row,a)
-    if not {a['number'] for a in latest.values() if a['status']==200}<=set(provenance):raise Rejected('Original successful responses missing')
+    required_provenance={a['number'] for a in attempts if a['status']==200 and not (
+        with_comments and re.fullmatch(r'/event/[1-9][0-9]{0,11}/comments/es-la',a['path']))}
+    if not required_provenance<=set(provenance):raise Rejected('Original successful responses missing')
     reported=[]
     for ident,(row,_attempt) in sorted(listed.items()):
         if ident in expected or type(ident) is not int or not listed_candidate(row,baseline['teams']):continue
@@ -334,6 +381,9 @@ def _verify_group(body,descriptor,baseline,*,context,expected_rules,test_transpo
     participants={i:((expected[i]['home'],expected[i]['away']) if i in expected else (p['home_team_id'],p['away_team_id'])) for i,(_,p) in calendar.items()}
     for path in latest:
         if path in ROUND_PATHS:continue
+        if with_comments and re.fullmatch(r'/event/[1-9][0-9]{0,11}/comments/es-la',path):
+            if int(path.split('/')[2]) not in current:raise Rejected('Comments event outside inventory')
+            continue
         parts=path.split('/')
         if len(parts) not in (3,4) or parts[1]!='event' or not parts[2].isdigit() or int(parts[2]) not in current or (len(parts)==4 and parts[3] not in SECTIONS):raise Rejected('Unplanned attempt')
         if detail_rounds is not None and calendar[int(parts[2])][1]['round'] not in detail_rounds:raise Rejected('Detail outside the declared rounds')
@@ -405,4 +455,89 @@ def _verify_group(body,descriptor,baseline,*,context,expected_rules,test_transpo
     # Nothing outside the coverage: every raw row is covered by a data or a kept pending entry.
     covered={(c['event_id'],c['resource']) for c in coverage if c['evidence'] is not None and c['resource']!='calendar'}
     if set(raw_records)!=covered:raise Rejected('Raw resource outside coverage')
+    if with_comments:
+        _verify_group_comments(m['plan']['comments'],rows['comments.jsonl'],baseline,expected,current,calendar,
+                               attempts,latest,m['plan']['planned'])
     return m,decoded
+
+
+def _verify_group_comments(summary,records,baseline,expected,current,calendar,attempts,latest,planned):
+    """Verify the optional Spanish narrative backfill against the same job's scope and budget."""
+    from persistencia.comentarios import validar_respuesta
+    previous={item['event_id']:item for item in baseline.get('comments',[])}
+    finished={ident for ident in current if calendar[ident][1]['status']=='finished'}
+    valid_prior={ident for ident in finished if ident in previous and previous[ident]['spanish_complete'] is True}
+    review_due={item['id'] for item in planned if item['reason'] in ('finished','changed')}
+    eligible=(finished-valid_prior)|(finished&review_due)
+    by_event={}
+    attempts_by_path={}
+    for attempt in attempts:
+        if re.fullmatch(r'/event/[1-9][0-9]{0,11}/comments/es-la',attempt['path']):
+            attempts_by_path.setdefault(attempt['path'],[]).append(attempt)
+    for row in records:
+        if (not isinstance(row,dict) or set(row)!={'event_id','status','attempt_numbers','raw_b64','raw_sha256',
+                                                   'captured_at','reason','transport_report'}
+                or type(row['event_id']) is not int or row['event_id'] in by_event):
+            raise Rejected('Invalid comments evidence row')
+        by_event[row['event_id']]=row
+    if set(by_event)!={int(path.split('/')[2]) for path in attempts_by_path}:
+        raise Rejected('Comments attempts/evidence mismatch')
+    if baseline.get('comments_enabled') is not True and by_event:
+        raise Rejected('Comments requested without migrated storage')
+    captured=[];failed=[]
+    for ident,row in sorted(by_event.items()):
+        path=f'/event/{ident}/comments/es-la'
+        attempts_for_event=attempts_by_path[path]
+        if ident not in eligible:raise Rejected('Comments attempt is not due or outside finished Group 2')
+        if ident not in expected or not expected[ident]['current'] or ident not in finished:
+            raise Rejected('Comments event outside current finished inventory')
+        if row['attempt_numbers']!=[item['number'] for item in attempts_for_event]:
+            raise Rejected('Comments attempt numbers mismatch')
+        last=attempts_for_event[-1]
+        if row['status']!=last['status'] or row['captured_at']!=last['finished_at']:
+            raise Rejected('Comments last attempt mismatch')
+        report=row['transport_report']
+        if (not isinstance(report,dict) or set(report)!={'path','attempt_numbers','logical_requests','physical_sends'}
+                or report['path']!=path or report['attempt_numbers']!=row['attempt_numbers']
+                or type(report['logical_requests']) is not int or report['logical_requests']!=1
+                or type(report['physical_sends']) is not int or report['physical_sends']<0):
+            raise Rejected('Comments transport report mismatch')
+        raw=None
+        if row['raw_b64'] is not None:
+            raw=base64.b64decode(row['raw_b64'],validate=True)
+            if sha(raw)!=row['raw_sha256']:
+                raise Rejected('Comments response hash mismatch')
+        elif row['raw_sha256'] is not None:
+            raise Rejected('Comments response hash without body')
+        valid=False;reason=row['reason']
+        if last['status']==200 and raw is not None:
+            try:
+                payload=parse(raw)
+            except (Rejected,ValueError,UnicodeError):
+                if last['payload_sha256'] is not None:
+                    raise Rejected('Comments response/attempt mismatch')
+                reason='parse'
+            else:
+                if not isinstance(payload,(dict,list)):
+                    if last['payload_sha256'] is not None:
+                        raise Rejected('Comments response/attempt mismatch')
+                    reason='parse'
+                elif fingerprint(payload)!=last['payload_sha256']:
+                    raise Rejected('Comments response/attempt mismatch')
+                else:
+                    try:
+                        validar_respuesta(raw)
+                        valid=True
+                    except (ValueError,UnicodeError):
+                        reason='parse'
+        if valid:
+            if reason is not None:raise Rejected('Valid comments response marked failed')
+            captured.append(ident)
+        else:
+            if not isinstance(reason,str) or reason not in ('empty','not_found','parse','error','budget'):
+                raise Rejected('Invalid comments failure reason')
+            failed.append(dict(id=ident,reason=reason))
+    expected_summary=dict(new=sorted(captured),kept=sorted(valid_prior-review_due),
+                          pending=sorted(eligible-set(by_event)),failed=sorted(failed,key=lambda item:item['id']))
+    if summary!=expected_summary:
+        raise Rejected('Comments coverage does not match attempts and inventory')

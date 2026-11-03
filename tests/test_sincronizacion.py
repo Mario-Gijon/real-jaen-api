@@ -532,7 +532,7 @@ class Migraciones(Base):
         command.downgrade(configuracion_alembic(self.base), '0002')
         self.assertEqual(sqlite.revision(self.base), '0002')
         informe = sincronizacion.migrar(self.base)
-        self.assertEqual((informe['desde'], informe['revision']), ('0002', '0004'))
+        self.assertEqual((informe['desde'], informe['revision']), ('0002', '0006'))
         self.assertTrue(Path(informe['copia']).is_file())
         self.assertTrue(informe['verificacion']['ok'], informe['verificacion']['problemas'])
         self.assertEqual(respuestas(self.sql()), respuestas_antes)
@@ -542,7 +542,7 @@ class Migraciones(Base):
         self.importa([(sin_2, None)])
         with self.assertRaisesRegex(RuntimeError, 'convocatorias retiradas'):
             command.downgrade(configuracion_alembic(self.base), '0003')
-        self.assertEqual(sqlite.revision(self.base), '0004')
+        self.assertEqual(sqlite.revision(self.base), '0006')
 
     def test_no_migra_una_base_en_uso_y_la_marcha_atras_restaura_la_copia_previa(self):
         command.downgrade(configuracion_alembic(self.base), '0002')

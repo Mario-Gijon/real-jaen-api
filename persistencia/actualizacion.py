@@ -18,6 +18,7 @@ import uuid
 import api
 from persistencia import carga, lectura, sincronizacion, sqlite
 from persistencia.bloqueo import bloquear, ruta_normalizada
+from persistencia.comentarios import load_current_comments, match_comments_response
 
 
 class CoordinacionRechazada(RuntimeError):
@@ -51,15 +52,23 @@ def comprobar(base):
 class Generacion:
     id: str
     _datos: dict
+    _comentarios: dict
+    comments_enabled: bool = True
 
     def consultar(self, ruta):
         # Devuelve una respuesta propia: los consumidores no pueden mutar la instantánea.
         estado, cuerpo = api.consultar(self._datos, ruta)
         return estado, json.loads(json.dumps(cuerpo, ensure_ascii=False, allow_nan=False))
 
+    def consultar_comentarios(self, public_match_id):
+        estado, cuerpo = match_comments_response(self._datos, self._comentarios, public_match_id)
+        return estado, json.loads(json.dumps(cuerpo, ensure_ascii=False, allow_nan=False))
+
 
 def preparar(base, ambito, ident):
-    generacion = Generacion(ident, lectura.cargar_desde_base(base, ambito))
+    from persistencia.comentarios import comments_schema_ready
+    generacion = Generacion(ident, lectura.cargar_desde_base(base, ambito), load_current_comments(base),
+                            comments_schema_ready(base))
     rutas = ['/health', '/api/v1/scope']
     for entidad, plural, clave, sufijos in (
         ('teams', 'equipos', 'team_id', ('', '/players', '/matches', '/performance', '/player-stats')),
@@ -70,6 +79,11 @@ def preparar(base, ambito, ident):
                      for fila in generacion._datos[plural] for sufijo in sufijos)
     for ruta in rutas:
         generacion.consultar(ruta)
+    for fila in generacion._datos['partidos']:
+        public_match_id = f"sofascore-match-{fila['match_id']}"
+        status, _ = generacion.consultar_comentarios(public_match_id)
+        if status != 200:
+            raise CoordinacionRechazada(f'No se pudo preparar la instantánea de comentarios de {public_match_id}')
     return generacion
 
 
@@ -198,11 +212,11 @@ class Coordinador:
                 self._abrir()
                 self._listo.set()
                 while True:
-                    ident = self._cola.get()
-                    if ident is None:
+                    item = self._cola.get()
+                    if item is None:
                         return
                     if not self._bloqueado:
-                        self._ejecutar(ident)
+                        self._ejecutar(item)
         except BaseException as e:
             self._inicio_error = e
         finally:
@@ -214,10 +228,12 @@ class Coordinador:
                 raise CoordinacionRechazada(str(self._bloqueado or 'Coordinador cerrado o propietario no disponible'))
             return self._actual
 
-    def solicitar(self, *, exportaciones=(), calendarios=(), fichas=(), identificador=None, generacion_esperada=None):
+    def solicitar(self, *, exportaciones=(), calendarios=(), fichas=(), comentarios=(), identificador=None,
+                  generacion_esperada=None):
         entradas = dict(exportaciones=[(str(Path(p).resolve()), e) for p, e in exportaciones],
                         calendarios=[str(Path(p).resolve()) for p in calendarios],
-                        fichas=[str(Path(p).resolve()) for p in fichas])
+                        fichas=[str(Path(p).resolve()) for p in fichas],
+                        comentarios=[str(Path(p).resolve()) for p in comentarios])
         if identificador is not None and str(uuid.UUID(identificador)) != identificador:
             raise CoordinacionRechazada('Identificador de solicitud invalido')
         with self._puerta:
@@ -257,7 +273,7 @@ class Coordinador:
 
     def _espacio(self, trabajo):
         rutas = [Path(p) for p, _ in trabajo['entradas']['exportaciones']]
-        rutas += [Path(p) for grupo in ('calendarios', 'fichas') for p in trabajo['entradas'][grupo]]
+        rutas += [Path(p) for grupo in ('calendarios', 'fichas', 'comentarios') for p in trabajo['entradas'][grupo]]
         volumen = self.base.stat().st_dev
         if self.directorio.stat().st_dev != volumen:
             raise CoordinacionRechazada('Candidata y principal necesitan el mismo almacenamiento')
@@ -311,7 +327,13 @@ class Coordinador:
             trabajo.update(candidata=str(candidata))
             self._guardar(trabajo)
             self._frontera('before_import')
+            comentarios = entradas.pop('comentarios', [])
             informe = sincronizacion.importar_evidencia(candidata, **entradas)
+            if comentarios:
+                from persistencia.comentarios import import_group_bundle
+                comentario = import_group_bundle(candidata, comentarios[0])
+                if isinstance(informe, dict):
+                    informe['comments_persisted'] = comentario
             self._frontera('candidate_committed')
             descripcion = comprobar(candidata)
             self._exigir_reglas(meta)

@@ -6,6 +6,7 @@ the cooperative lock is kept until the ASGI app shuts down.
 """
 from contextlib import ExitStack, asynccontextmanager
 import hmac
+import json
 import os
 from pathlib import Path
 import re
@@ -54,6 +55,11 @@ def _load_data(resources):
         return cargar_desde_base(database_path, scope)
 
     raise ValueError(f'SPORTS_DATA_STORAGE debe ser json o sql, no {storage!r}')
+
+
+def _load_comments(database):
+    from persistencia.comentarios import load_current_comments
+    return load_current_comments(database)
 
 
 def _control_enabled():
@@ -127,6 +133,26 @@ def _data_response(request: Request):
         status_code=status,
         headers={'Cache-Control': 'no-store'},
     )
+
+
+def _comments_response(request: Request, public_match_id: str):
+    from persistencia.comentarios import match_comments_response
+
+    query = request.scope.get('query_string', b'')
+    if query:
+        status, body = 400, {'error': 'Esta versión no admite filtros de consulta.'}
+    elif getattr(request.app.state, 'control_mode', False):
+        try:
+            generation = request.app.state.coordinator.capturar()
+        except Exception as error:
+            print(f'[control] capture comments: {error}', file=sys.stderr, flush=True)
+            status, body = 503, {'error': 'Datos no disponibles'}
+        else:
+            # Match and comments come from one captured published generation.
+            status, body = generation.consultar_comentarios(public_match_id)
+    else:
+        status, body = match_comments_response(request.app.state.data, request.app.state.comments, public_match_id)
+    return APIJSONResponse(content=body, status_code=status, headers={'Cache-Control': 'no-store'})
 
 
 updates_router = APIRouter()
@@ -248,6 +274,11 @@ def match(request: Request, ident: str):
     return _data_response(request)
 
 
+@router.get('/api/v1/matches/{ident}/comments')
+def match_comments(request: Request, ident: str):
+    return _comments_response(request, ident)
+
+
 @router.get('/api/v1/matches/{ident}/{section}')
 def match_section(request: Request, ident: str, section: str):
     return _data_response(request)
@@ -275,6 +306,8 @@ def create_app(data=None, *, control_mode=None) -> FastAPI:
                  application.state.control_token) = _load_control(resources)
             else:
                 application.state.data = data if data is not None else _load_data(resources)
+                database = os.environ.get('SPORTS_DATA_DB') if os.environ.get('SPORTS_DATA_STORAGE', 'json') == 'sql' else None
+                application.state.comments = _load_comments(Path(database)) if database and data is None else {}
             yield
 
     application = FastAPI(title='Sports Data API', lifespan=lifespan)

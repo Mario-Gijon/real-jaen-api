@@ -14,7 +14,6 @@ from contextlib import closing
 from datetime import datetime, timezone
 import json
 from pathlib import Path
-import re
 import sqlite3
 import sys
 import threading
@@ -254,6 +253,9 @@ class Actualizaciones:
             return coverage
         ids = {p['event_id'] for p in coverage['pending']} | set(coverage['deferred']) | set(coverage.get('restricted', ()))
         ids |= {m['id'] for m in coverage['new_matches']} | {r for m in coverage['new_matches'] for r in m['replaces']}
+        comments=coverage.get('comments') or {}
+        ids |= set(comments.get('new',())) | set(comments.get('kept',())) | set(comments.get('pending',()))
+        ids |= {item['id'] for item in comments.get('failed',())}
         data = self.c.capturar()._datos
         teams = {e['team_id']: e['name'] for e in data['equipos']}
         names = {}
@@ -288,3 +290,5 @@ class Actualizaciones:
     def close(self, timeout=5):
         for thread in self.threads:
             thread.join(timeout)
+
+

@@ -35,6 +35,7 @@ TABLAS = {
     'rule_set', 'section_selection', 'section_selection_history', 'discrepancy', 'discrepancy_reason',
     'discrepancy_observation', 'discrepancy_value', 'match_state', 'match_version_issue', 'team_name', 'call_up',
     'call_up_stat', 'call_up_change', 'player_attribute_observation', 'local_replacement',
+    'narrative_comment_capture', 'narrative_comment', 'narrative_comment_selection',
 }
 H1, H2 = 'a' * 64, 'b' * 64
 
@@ -85,7 +86,7 @@ class Migraciones(unittest.TestCase):
         self.assertEqual({n for t, n, *_ in primero if t == 'table'}, TABLAS)
         motor = sqlite.crear_motor(base)
         with motor.connect() as c:
-            self.assertEqual(c.exec_driver_sql('SELECT version_num FROM alembic_version').scalar(), '0004')
+            self.assertEqual(c.exec_driver_sql('SELECT version_num FROM alembic_version').scalar(), '0006')
         motor.dispose()
         command.downgrade(configuracion(base), 'base')
         self.assertEqual(esquema(base), set())
@@ -99,7 +100,9 @@ class Migraciones(unittest.TestCase):
         modelos.Base.metadata.create_all(motor)
         motor.dispose()
         # Mismo DDL, restricciones CHECK incluidas (autogenerate no las compara).
-        self.assertEqual(esquema(migrada), esquema(modelada))
+        # SQLite immutability triggers are deliberate migration-level protections, not ORM metadata objects.
+        migrada_sin_triggers = {item for item in esquema(migrada) if item[0] != 'trigger'}
+        self.assertEqual(migrada_sin_triggers, esquema(modelada))
         motor = sqlite.crear_motor(migrada)
         with motor.connect() as c:
             diferencias = compare_metadata(MigrationContext.configure(c, opts={'compare_type': True,
@@ -107,6 +110,21 @@ class Migraciones(unittest.TestCase):
                                            modelos.Base.metadata)
         motor.dispose()
         self.assertEqual(diferencias, [])
+
+    def test_migracion_protege_las_capturas_y_comentarios_con_triggers_inmutables(self):
+        base = self.carpeta / 'immutable.sqlite'
+        command.upgrade(configuracion(base), 'head')
+        motor = sqlite.crear_motor(base, solo_lectura=True)
+        try:
+            with motor.connect() as c:
+                triggers = {row[0] for row in c.exec_driver_sql(
+                    "SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'narrative_comment_%'")}
+        finally:
+            motor.dispose()
+        self.assertEqual(triggers, {
+            'narrative_comment_capture_immutable_update', 'narrative_comment_capture_immutable_delete',
+            'narrative_comment_immutable_update', 'narrative_comment_immutable_delete',
+        })
 
     def test_sin_base_indicada_no_migra(self):
         c = Config(str(RAIZ / 'alembic.ini'))

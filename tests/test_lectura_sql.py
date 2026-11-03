@@ -104,7 +104,7 @@ class ErroresDeCargaSql(BaseCarga):
         shutil.copy(self.tmp / 'valid.sqlite', self.tmp / 'old.sqlite')
         with closing(sqlite3.connect(self.tmp / 'old.sqlite')) as connection, connection:
             connection.execute("UPDATE alembic_version SET version_num = '0001'")
-        with self.assertRaisesRegex(BaseNoUtilizable, 'revisión de esquema 0001; este código necesita 0004'):
+        with self.assertRaisesRegex(BaseNoUtilizable, 'revisión de esquema 0001; este código necesita 0006'):
             cargar_desde_base(self.tmp / 'old.sqlite', AMBITO)
 
     def test_base_sin_carga_inicial(self):

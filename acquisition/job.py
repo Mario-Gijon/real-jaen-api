@@ -194,6 +194,7 @@ def run(folder):
     summary = dict(provider=provider, started_at=spec['started_at'], finished_at=now(), error=error,
                    cancelled=cancel.exists(), stopped=report['stopped'], descriptor=descriptor, attempts=attempts,
                    recipe=spec['recipe_id'],
+                   comments_stop_after_sport=bool(group and transport.comments_stop_after_sport),
                    limits=dict(sends=sends, job_s=seconds, attempts=limits['max_attempts'],
                                detail_rounds=spec.get('detail_rounds') if group else None),
                    sends=report['sends'], requests=report['requests'], sandbox=report['sandbox'],
@@ -203,7 +204,10 @@ def run(folder):
         f.write(encode(summary))
         f.flush()
         os.fsync(f.fileno())
-    if error is not None or report['stopped'] is not None or descriptor is None:
+    safe_comments_stop=(group and descriptor is not None and error is None and transport.comments_stop_after_sport
+                        and report['stopped']==transport.comments_stop_reason
+                        and not report.get('processes_remaining'))
+    if error is not None or (report['stopped'] is not None and not safe_comments_stop) or descriptor is None:
         return 1
     return 0
 

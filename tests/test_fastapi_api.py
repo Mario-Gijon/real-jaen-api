@@ -139,6 +139,21 @@ class FastAPIContract(unittest.TestCase):
         self.assertEqual((status, headers['cache-control'], body),
                          (400, 'no-store', {'error': 'Esta versión no admite filtros de consulta.'}))
 
+    def test_comments_use_public_match_ids_and_distinguish_not_collected(self):
+        source_id = self.data['partidos'][0]['match_id']
+        status, headers, body = _get(self.url, f'/api/v1/matches/sofascore-match-{source_id}/comments')
+        self.assertEqual(status, 200)
+        self.assertEqual(headers['cache-control'], 'no-store')
+        self.assertEqual(body['matchId'], f'sofascore-match-{source_id}')
+        self.assertEqual(body['availability'], 'not_collected')
+        self.assertEqual(body['comments'], [])
+
+        status, _headers, body = _get(self.url, '/api/v1/matches/sofascore-match-999999999/comments')
+        self.assertEqual((status, body), (404, {'error': 'Partido no encontrado'}))
+
+        status, _headers, body = _get(self.url, f'/api/v1/matches/sofascore-match-{source_id}/comments?x=1')
+        self.assertEqual((status, body), (400, {'error': 'Esta versión no admite filtros de consulta.'}))
+
 
 class FastAPISQLLifecycle(BaseCarga):
     """The ASGI lifespan loads one SQL snapshot and holds/releases its cooperative lock."""

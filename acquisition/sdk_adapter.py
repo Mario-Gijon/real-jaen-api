@@ -104,6 +104,9 @@ class SdkAdapter:
         self.lock = threading.Lock()
         self.stopped = None
         self.sends, self.requests, self.browser, self.events, self.sessions = [], [], [], [], []
+        # Exact bodies are kept only for the current logical SDK request, then persisted by SdkTransport.
+        self._captured_responses = []
+        self.processes_remaining = []
         self.launches = 0
         self.page_challenges = 0
         self.sandbox = None
@@ -136,7 +139,8 @@ class SdkAdapter:
                         browser=dict(total=len(self.browser), by_host=hosts,
                                      api=sum(1 for b in self.browser if b['api']),
                                      documents=[(b['host'], b['path'], b.get('status'), b.get('failed'))
-                                                for b in self.browser if b['navigation']]))
+                                                for b in self.browser if b['navigation']]),
+                        processes_remaining=list(self.processes_remaining))
 
     # --- envíos físicos ------------------------------------------------------------------------------------
     def relative(self, url):
@@ -181,6 +185,13 @@ class SdkAdapter:
         elif status == 0:
             self.stop(f'fallo de fetch() en el navegador: {entry["path"]}')
 
+    def capture_response(self, url, status, body):
+        rel = self.relative(url)
+        if rel is None:
+            return
+        with self.lock:
+            self._captured_responses.append((rel, status, bytes(body)))
+
     # --- instalación -------------------------------------------------------------------------------------
     def install(self):
         """Ajusta el SDK de este proceso. Una sola vez por proceso."""
@@ -217,6 +228,7 @@ class SdkAdapter:
             except Exception as e:
                 adapter.after_send(entry, None, error=f'{type(e).__name__}: {str(e)[:160]}')
                 raise
+            adapter.capture_response(url, response.status_code, response.content)
             adapter.after_send(entry, response.status_code, text=response.text if response.status_code >= 400 else None)
             return response
         cffi_requests.get = guarded_get
@@ -232,6 +244,9 @@ class SdkAdapter:
             except Exception as e:
                 adapter.after_send(entry, None, error=f'{type(e).__name__}: {str(e)[:160]}')
                 raise
+            text = res.get('text')
+            if isinstance(text, str):
+                adapter.capture_response(url, res.get('status'), text.encode('utf-8'))
             adapter.after_send(entry, res.get('status'), text=res.get('text'))
             return res
         bridge.BrowserBridge._api_fetch = guarded_fetch
@@ -365,6 +380,7 @@ class SdkAdapter:
             self.stop(f'ruta no permitida: {path}')
             return 403, {}, b''
         mark, started = len(self.sends), time.monotonic()
+        response_mark = len(self._captured_responses)
         trace = transport.RequestTrace()
         body, error = b'', None
         try:
@@ -382,6 +398,9 @@ class SdkAdapter:
         except SofaScoreScraperError as e:
             status, error = None, f'{type(e).__name__}: {str(e)[:160]}'
         physical = self.sends[mark:]
+        exact = [(code, raw) for captured_path, code, raw in self._captured_responses[response_mark:]
+                 if captured_path == path]
+        self._captured_responses[response_mark:] = []
         # Un 429/503 en cualquier envío físico (también el del navegador) prevalece sobre el resumen del SDK. Si el SDK
         # intentó salir por otro camino y el adaptador detenido lo rechazó, no es un fallo de red que reintentar.
         refusal = next((s['status'] for s in physical if s.get('status') in (429, 503)), None)
@@ -395,6 +414,9 @@ class SdkAdapter:
             server = next((s['status'] for s in physical if isinstance(s.get('status'), int) and s['status'] >= 500), None)
             if server is not None:
                 status = server
+        exact_body = next((raw for code, raw in reversed(exact) if code == status), None)
+        if exact_body is not None:
+            body = exact_body
         with self.lock:
             self.requests.append(dict(path=path, status=status, via=trace.via, sends=len(physical), error=error,
                                       seconds=round(time.monotonic() - started, 3)))
@@ -417,5 +439,6 @@ class SdkAdapter:
             from .browser import processes
             left = [pid for pid, (values, args) in processes().items()
                     if any(a == ('--user-data-dir=' + str(self.profile)).encode() for a in args)]
+            self.processes_remaining = left
             if left:
                 self.stop(f'procesos del navegador sin cerrar: {left}')

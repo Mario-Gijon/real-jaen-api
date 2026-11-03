@@ -701,3 +701,84 @@ class LocalReplacement(Base):
                         "AND reverted_on IS NOT NULL AND revert_reason IS NOT NULL)", name='reverted'),
         Index('uq_local_replacement_active', 'replaced_match_id', unique=True, **indice_parcial("status = 'active'")),
     )
+
+
+# ─── Capturas narrativas independientes del estado deportivo ───────────────────────────────────────────────────
+
+class NarrativeCommentCapture(Base):
+    """Respuesta de comentarios capturada tal cual. Una misma respuesta por partido se conserva una sola vez."""
+    __tablename__ = 'narrative_comment_capture'
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    match_id: Mapped[int] = mapped_column(ForeignKey('match.id'))
+    provider: Mapped[str] = mapped_column(String)
+    source_event_id: Mapped[str] = mapped_column(String)
+    source_path: Mapped[str | None] = mapped_column(String)
+    captured_at: Mapped[str] = mapped_column(String)
+    http_status: Mapped[int] = mapped_column(Integer)
+    availability: Mapped[str] = mapped_column(String)
+    comment_count: Mapped[int] = mapped_column(Integer)
+    response_sha256: Mapped[str] = mapped_column(String(64))
+    response_json: Mapped[str] = mapped_column(Text)
+    transport_report_json: Mapped[str | None] = mapped_column(Text)
+    __table_args__ = (
+        UniqueConstraint('match_id', 'response_sha256'),
+        UniqueConstraint('id', 'match_id'),
+        CheckConstraint("provider = 'sofascore'", name='provider'),
+        CheckConstraint("http_status = 200", name='http_status'),
+        CheckConstraint(en('availability', ('available', 'empty')), name='availability'),
+        CheckConstraint('comment_count >= 0', name='comment_count'),
+        CheckConstraint("(availability = 'empty') = (comment_count = 0)", name='empty'),
+        CheckConstraint(hexadecimal('response_sha256', 64), name='response_sha256'),
+        *json('response_json', nulo=False),
+        Index('ix_narrative_comment_capture_match_id', 'match_id'),
+    )
+
+
+class NarrativeComment(Base):
+    """Comentario normalizado; participantes conservan sus IDs de SofaScore sin resolverlos a identidad local."""
+    __tablename__ = 'narrative_comment'
+    capture_id: Mapped[int] = mapped_column(ForeignKey('narrative_comment_capture.id'), primary_key=True)
+    source_comment_id: Mapped[str] = mapped_column(String, primary_key=True)
+    source_position: Mapped[int] = mapped_column(Integer)
+    text: Mapped[str] = mapped_column(Text)
+    type: Mapped[str] = mapped_column(String)
+    minute: Mapped[int | None] = mapped_column(Integer)
+    period_name: Mapped[str | None] = mapped_column(String)
+    is_home: Mapped[bool | None] = booleano('is_home', nullable=True)
+    home_score: Mapped[int | None] = mapped_column(Integer)
+    away_score: Mapped[int | None] = mapped_column(Integer)
+    incident_id: Mapped[str | None] = mapped_column(String)
+    participants_json: Mapped[str] = mapped_column(Text)
+    context_json: Mapped[str] = mapped_column(Text)
+    __table_args__ = (
+        UniqueConstraint('capture_id', 'source_position'),
+        CheckConstraint('source_position >= 0', name='source_position'),
+        CheckConstraint("length(trim(text)) > 0", name='text'),
+        CheckConstraint("length(trim(type)) > 0", name='type'),
+        CheckConstraint('minute IS NULL OR minute >= 0', name='minute'),
+        CheckConstraint('home_score IS NULL OR home_score >= 0', name='home_score'),
+        CheckConstraint('away_score IS NULL OR away_score >= 0', name='away_score'),
+        *json('participants_json', 'context_json', nulo=False),
+        Index('ix_narrative_comment_order', 'capture_id', 'source_position'),
+    )
+
+
+class NarrativeCommentSelection(Base):
+    """Captura narrativa vigente y último intento. Un fallo/0 comentarios no reemplaza datos ya seleccionados."""
+    __tablename__ = 'narrative_comment_selection'
+    match_id: Mapped[int] = mapped_column(ForeignKey('match.id'), primary_key=True)
+    capture_id: Mapped[int | None] = mapped_column(Integer)
+    last_successful_source_path: Mapped[str | None] = mapped_column(String)
+    last_attempt_state: Mapped[str] = mapped_column(String)
+    last_attempt_at: Mapped[str] = mapped_column(String)
+    last_http_status: Mapped[int | None] = mapped_column(Integer)
+    last_error_code: Mapped[str | None] = mapped_column(String)
+    __table_args__ = (
+        ForeignKeyConstraint(['capture_id', 'match_id'],
+                             ['narrative_comment_capture.id', 'narrative_comment_capture.match_id']),
+        CheckConstraint(en('last_attempt_state', ('available', 'empty', 'not_collected', 'error')),
+                        name='last_attempt_state'),
+        CheckConstraint('last_http_status IS NULL OR last_http_status BETWEEN 100 AND 599', name='last_http_status'),
+        CheckConstraint("last_error_code IS NULL OR length(trim(last_error_code)) > 0", name='last_error_code'),
+        Index('ix_narrative_comment_selection_capture_id', 'capture_id'),
+    )
