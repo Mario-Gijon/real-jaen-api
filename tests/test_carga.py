@@ -165,7 +165,7 @@ class CargaValida(Base):
         informe = cargar(self.importacion(), self.base, 'prueba')
         self.assertTrue(self.base.is_file())
         self.assertFalse(carga.parcial_de(self.base).exists())
-        self.assertEqual(informe['revision'], '0006')
+        self.assertEqual(informe['revision'], '0007')
         self.assertEqual(informe['comparados'], sorted(['discrepancias', 'equipos', 'exportaciones', 'jugador_partido', 'jugadores',
                                                         'originales', 'partidos', 'resumen']))
         # Referencia verificable del código: commit completo y, con cambios sin confirmar, sus huellas recalculables.

@@ -764,11 +764,12 @@ class NarrativeComment(Base):
 
 
 class NarrativeCommentSelection(Base):
-    """Captura narrativa vigente y último intento. Un fallo/0 comentarios no reemplaza datos ya seleccionados."""
+    """Captura española vigente, su hash de procedencia y el último intento."""
     __tablename__ = 'narrative_comment_selection'
     match_id: Mapped[int] = mapped_column(ForeignKey('match.id'), primary_key=True)
     capture_id: Mapped[int | None] = mapped_column(Integer)
     last_successful_source_path: Mapped[str | None] = mapped_column(String)
+    selected_spanish_sha256: Mapped[str | None] = mapped_column(String(64))
     last_attempt_state: Mapped[str] = mapped_column(String)
     last_attempt_at: Mapped[str] = mapped_column(String)
     last_http_status: Mapped[int | None] = mapped_column(Integer)
@@ -778,6 +779,8 @@ class NarrativeCommentSelection(Base):
                              ['narrative_comment_capture.id', 'narrative_comment_capture.match_id']),
         CheckConstraint(en('last_attempt_state', ('available', 'empty', 'not_collected', 'error')),
                         name='last_attempt_state'),
+        CheckConstraint("selected_spanish_sha256 IS NULL OR " + hexadecimal('selected_spanish_sha256', 64),
+                        name='selected_spanish_sha256'),
         CheckConstraint('last_http_status IS NULL OR last_http_status BETWEEN 100 AND 599', name='last_http_status'),
         CheckConstraint("last_error_code IS NULL OR length(trim(last_error_code)) > 0", name='last_error_code'),
         Index('ix_narrative_comment_selection_capture_id', 'capture_id'),

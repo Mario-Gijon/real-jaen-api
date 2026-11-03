@@ -254,9 +254,9 @@ with bloquear(sys.argv[1]):
         with self.assertRaises(BaseEnUso):
             command.downgrade(configuracion_alembic(self.base), '0002')
         self.soltar(p)
-        self.assertEqual(sqlite.revision(self.base), '0006')
+        self.assertEqual(sqlite.revision(self.base), '0007')
         command.downgrade(configuracion_alembic(self.base), '0002')
-        self.assertEqual(sincronizacion.migrar(self.base)['revision'], '0006')
+        self.assertEqual(sincronizacion.migrar(self.base)['revision'], '0007')
 
     def test_restauracion_fallida_preserva_destino_y_libera_bloqueo(self):
         copia = sincronizacion.copiar(self.base)

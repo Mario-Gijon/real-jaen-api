@@ -156,19 +156,56 @@ def _scoped_event_match(connection, event_id: str, scope_pairs: set[tuple[str, s
     return rows[0][0]
 
 
+def _capture_is_spanish(capture, event_id: str, expected_path: str, *, selected_sha256=None,
+                        last_successful_source_path=None) -> bool:
+    """Trust only the Spanish endpoint recorded on the capture or bound to its selected response hash."""
+    if capture is None:
+        return False
+    if capture['provider'] != PROVIDER or capture['source_event_id'] != str(event_id):
+        return False
+    if capture.get('source_path') == expected_path:
+        return True
+    return (selected_sha256 is not None and selected_sha256 == capture['response_sha256']
+            and last_successful_source_path == expected_path)
+
+
 def record_http_attempt(connection, *, event_id: str, scope_pairs: set[tuple[str, str]], http_status: int | None,
                         response: bytes | None, source_path: str, captured_at: str,
                         transport_report: dict | None = None, error_code: str | None = None) -> dict:
     """Record one completed comment request in an existing SQLite transaction.
 
-    Only a structurally valid HTTP 200 creates an immutable capture. Empty, missing or failed responses update the
-    last-attempt fields while retaining the selected non-empty capture.
+    Only a structurally valid HTTP 200 creates or deduplicates an immutable capture. An empty response replaces an
+    unverified selection but retains a proven Spanish capture with comments; errors retain only proven Spanish data.
     """
     match_id = _scoped_event_match(connection, event_id, scope_pairs)
     timestamp = _validated_timestamp(captured_at)
     expected_path = f'/event/{event_id}/comments/es-la'
     if source_path != expected_path:
         raise NarrativeCommentImportRejected('Ruta de origen distinta del endpoint español autorizado')
+    selection_columns = {row[1] for row in connection.execute(
+        'PRAGMA table_info(narrative_comment_selection)')}
+    if 'selected_spanish_sha256' not in selection_columns:
+        raise NarrativeCommentImportRejected('La persistencia de comentarios necesita la migración 0007')
+
+    def prior_selection():
+        row = connection.execute("""
+            SELECT selection.capture_id, selection.selected_spanish_sha256,
+                   selection.last_successful_source_path, capture.provider, capture.source_event_id,
+                   capture.source_path, capture.availability, capture.response_sha256
+            FROM narrative_comment_selection AS selection
+            LEFT JOIN narrative_comment_capture AS capture
+              ON capture.id = selection.capture_id AND capture.match_id = selection.match_id
+            WHERE selection.match_id = ?
+        """, (match_id,)).fetchone()
+        if row is None or row[0] is None or row[3] is None:
+            return None, False
+        capture = dict(provider=row[3], source_event_id=row[4], source_path=row[5], availability=row[6],
+                       response_sha256=row[7])
+        trusted = _capture_is_spanish(capture, event_id, expected_path, selected_sha256=row[1],
+                                      last_successful_source_path=row[2])
+        return dict(capture_id=row[0], selected_sha256=row[1], last_successful_source_path=row[2],
+                    availability=row[6], response_sha256=row[7]), trusted
+
     if http_status == 200 and response is not None:
         digest = hashlib.sha256(response).hexdigest()
         try:
@@ -205,27 +242,19 @@ def record_http_attempt(connection, *, event_id: str, scope_pairs: set[tuple[str
             """, [(capture_id, *row) for row in rows])
             inserted_capture = True
 
-        prior = connection.execute(
-            'SELECT capture_id FROM narrative_comment_selection WHERE match_id = ?', (match_id,)
-        ).fetchone()
-        prior_capture_id = prior[0] if prior else None
-        prior_has_comments = False
-        if prior_capture_id is not None:
-            prior_has_comments = connection.execute(
-                "SELECT availability = 'available' FROM narrative_comment_capture WHERE id = ?",
-                (prior_capture_id,),
-            ).fetchone()[0]
-        selected_capture_id = prior_capture_id if not rows and prior_has_comments else capture_id
+        prior, prior_is_spanish = prior_selection()
+        retain_prior = bool(not rows and prior_is_spanish and prior['availability'] == 'available')
+        selected_capture_id = prior['capture_id'] if retain_prior else capture_id
+        selected_spanish_sha256 = prior['response_sha256'] if retain_prior else digest
         attempt_state, saved_status, saved_error = availability, 200, None
         successful_source_path = source_path
         result = dict(match_id=match_id, capture_id=capture_id, captured_new_response=inserted_capture,
                       availability=availability, comments=len(rows), response_sha256=digest,
                       captured_at=timestamp, selected_capture_id=selected_capture_id)
     else:
-        prior = connection.execute(
-            'SELECT capture_id FROM narrative_comment_selection WHERE match_id = ?', (match_id,)
-        ).fetchone()
-        selected_capture_id = prior[0] if prior else None
+        prior, prior_is_spanish = prior_selection()
+        selected_capture_id = prior['capture_id'] if prior_is_spanish else None
+        selected_spanish_sha256 = prior['response_sha256'] if prior_is_spanish else None
         attempt_state = 'error'
         saved_status = http_status
         saved_error = (error_code or ('http_error' if http_status is not None else 'transport_error'))[:80]
@@ -236,18 +265,20 @@ def record_http_attempt(connection, *, event_id: str, scope_pairs: set[tuple[str
 
     connection.execute("""
         INSERT INTO narrative_comment_selection
-            (match_id, capture_id, last_successful_source_path, last_attempt_state, last_attempt_at,
-             last_http_status, last_error_code)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+            (match_id, capture_id, last_successful_source_path, selected_spanish_sha256, last_attempt_state,
+             last_attempt_at, last_http_status, last_error_code)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(match_id) DO UPDATE SET
             capture_id = excluded.capture_id,
+            selected_spanish_sha256 = excluded.selected_spanish_sha256,
             last_successful_source_path = COALESCE(excluded.last_successful_source_path,
                                                    narrative_comment_selection.last_successful_source_path),
             last_attempt_state = excluded.last_attempt_state,
             last_attempt_at = excluded.last_attempt_at,
             last_http_status = excluded.last_http_status,
             last_error_code = excluded.last_error_code
-    """, (match_id, selected_capture_id, successful_source_path, attempt_state, timestamp, saved_status, saved_error))
+    """, (match_id, selected_capture_id, successful_source_path, selected_spanish_sha256,
+          attempt_state, timestamp, saved_status, saved_error))
     return result
 
 
@@ -263,7 +294,7 @@ def _validated_timestamp(timestamp: str) -> str:
 
 def import_saved_response(base: Path, response_path: Path, expected_sha256: str,
                           *, captured_at: str | None = None) -> dict:
-    """Import one checked local HTTP 200 response into an already migrated isolated database."""
+    """Preserve the pinned historical `/comments` response without selecting it as Spanish commentary."""
     base, response_path = Path(base).resolve(), Path(response_path).resolve()
     raw = response_path.read_bytes()
     digest = hashlib.sha256(raw).hexdigest()
@@ -284,6 +315,9 @@ def import_saved_response(base: Path, response_path: Path, expected_sha256: str,
         raise NarrativeCommentImportRejected('captured_at debe incluir zona horaria')
 
     with bloquear(base), closing(sqlite3.connect(base, timeout=10)) as connection:
+        capture_columns = {row[1] for row in connection.execute('PRAGMA table_info(narrative_comment_capture)')}
+        if 'source_path' not in capture_columns:
+            raise NarrativeCommentImportRejected('La persistencia de comentarios necesita la migración 0006')
         connection.execute('PRAGMA foreign_keys = ON')
         if connection.execute('PRAGMA foreign_keys').fetchone()[0] != 1:
             raise NarrativeCommentImportRejected('La conexión de escritura no activa claves foráneas')
@@ -303,10 +337,11 @@ def import_saved_response(base: Path, response_path: Path, expected_sha256: str,
             else:
                 cursor = connection.execute("""
                     INSERT INTO narrative_comment_capture
-                        (match_id, provider, source_event_id, captured_at, http_status, availability,
+                        (match_id, provider, source_event_id, source_path, captured_at, http_status, availability,
                          comment_count, response_sha256, response_json)
-                    VALUES (?, ?, ?, ?, 200, ?, ?, ?, ?)
-                """, (match_id, PROVIDER, EVENT_ID, timestamp, availability, len(rows), digest, original_json))
+                    VALUES (?, ?, ?, ?, ?, 200, ?, ?, ?, ?)
+                """, (match_id, PROVIDER, EVENT_ID, f'/event/{EVENT_ID}/comments', timestamp,
+                      availability, len(rows), digest, original_json))
                 capture_id = cursor.lastrowid
                 connection.executemany("""
                     INSERT INTO narrative_comment
@@ -316,29 +351,12 @@ def import_saved_response(base: Path, response_path: Path, expected_sha256: str,
                 """, [(capture_id, *row) for row in rows])
                 inserted_capture = True
 
+            # This pinned historical response came from `/comments` with an Accept-Language header, not from
+            # `/comments/es-la`. Preserve it as evidence without selecting it or changing Spanish availability.
             prior = connection.execute(
                 'SELECT capture_id FROM narrative_comment_selection WHERE match_id = ?', (match_id,)
             ).fetchone()
-            prior_capture_id = prior[0] if prior else None
-            prior_has_comments = False
-            if prior_capture_id is not None:
-                prior_has_comments = connection.execute(
-                    'SELECT availability = \'available\' FROM narrative_comment_capture WHERE id = ?',
-                    (prior_capture_id,),
-                ).fetchone()[0]
-            # An empty response is retained, but cannot replace an already selected non-empty capture.
-            selected_capture_id = (prior_capture_id if not rows and prior_has_comments else capture_id)
-            connection.execute("""
-                INSERT INTO narrative_comment_selection
-                    (match_id, capture_id, last_attempt_state, last_attempt_at, last_http_status, last_error_code)
-                VALUES (?, ?, ?, ?, 200, NULL)
-                ON CONFLICT(match_id) DO UPDATE SET
-                    capture_id = excluded.capture_id,
-                    last_attempt_state = excluded.last_attempt_state,
-                    last_attempt_at = excluded.last_attempt_at,
-                    last_http_status = excluded.last_http_status,
-                    last_error_code = NULL
-            """, (match_id, selected_capture_id, availability, timestamp))
+            selected_capture_id = prior[0] if prior else None
             connection.commit()
         except BaseException:
             connection.rollback()
@@ -358,21 +376,17 @@ def load_current_comments(base: Path) -> dict[str, dict]:
         selection_columns = {row[1] for row in connection.execute('PRAGMA table_info(narrative_comment_selection)')}
         if not capture_columns or not selection_columns:
             return output
-        # The selected capture can intentionally remain an older non-empty response after an empty Spanish
-        # response. Keep its provenance separate from the most recent successful request path.
-        source_path_sql = ('capture.source_path' if 'source_path' in capture_columns else
-                           ('selection.last_successful_source_path'
-                            if 'last_successful_source_path' in selection_columns else 'NULL'))
-        spanish_capture_sql = ("EXISTS (SELECT 1 FROM narrative_comment_capture AS spanish "
-                               "WHERE spanish.match_id = selection.match_id "
-                               "AND spanish.source_path = '/event/' || external.external_id || '/comments/es-la' "
-                               "AND spanish.availability IN ('available', 'empty'))"
-                               if 'source_path' in capture_columns else '0')
+        source_path_sql = 'capture.source_path' if 'source_path' in capture_columns else 'NULL'
+        selected_sha_sql = ('selection.selected_spanish_sha256' if 'selected_spanish_sha256' in selection_columns
+                            else 'NULL')
+        successful_path_sql = ('selection.last_successful_source_path'
+                               if 'last_successful_source_path' in selection_columns else 'NULL')
         rows = connection.execute(f"""
-            SELECT external.external_id, selection.capture_id, selection.last_attempt_state,
+            SELECT selection.match_id, external.external_id, selection.capture_id, {selected_sha_sql} AS selected_sha256,
+                   {successful_path_sql} AS last_successful_source_path, selection.last_attempt_state,
                    selection.last_attempt_at, selection.last_http_status, selection.last_error_code,
-                   capture.availability, capture.captured_at, capture.response_sha256, {source_path_sql} AS source_path,
-                   {spanish_capture_sql} AS spanish_complete
+                   capture.provider, capture.source_event_id, capture.availability, capture.captured_at,
+                   capture.response_sha256, {source_path_sql} AS source_path
             FROM narrative_comment_selection AS selection
             JOIN match_external_id AS external ON external.entity_id = selection.match_id
             LEFT JOIN narrative_comment_capture AS capture
@@ -381,13 +395,69 @@ def load_current_comments(base: Path) -> dict[str, dict]:
               AND external.status IN ('origin', 'verified')
         """).fetchall()
         for row in rows:
+            event_id = str(row['external_id'])
+            expected_path = f'/event/{event_id}/comments/es-la'
+            capture = (dict(provider=row['provider'], source_event_id=row['source_event_id'],
+                            source_path=row['source_path'], availability=row['availability'],
+                            captured_at=row['captured_at'], response_sha256=row['response_sha256'],
+                            id=row['capture_id']) if row['capture_id'] is not None else None)
+            selected_is_spanish = _capture_is_spanish(
+                capture, event_id, expected_path, selected_sha256=row['selected_sha256'],
+                last_successful_source_path=row['last_successful_source_path'])
+
+            # Recover a previously captured Spanish version if an older writer left an unverified capture selected.
+            # Never use text language or the historical Accept-Language response as evidence.
+            if not selected_is_spanish and 'source_path' in capture_columns:
+                spanish_rows = connection.execute("""
+                    SELECT id, provider, source_event_id, source_path, availability, captured_at, response_sha256
+                    FROM narrative_comment_capture
+                    WHERE match_id = ? AND provider = 'sofascore' AND source_event_id = ?
+                      AND source_path = ?
+                    ORDER BY captured_at DESC, id DESC LIMIT 1
+                """, (row['match_id'], event_id, expected_path)).fetchone()
+                if spanish_rows is not None:
+                    capture = dict(id=spanish_rows['id'], provider=spanish_rows['provider'],
+                                   source_event_id=spanish_rows['source_event_id'],
+                                   source_path=spanish_rows['source_path'], availability=spanish_rows['availability'],
+                                   captured_at=spanish_rows['captured_at'],
+                                   response_sha256=spanish_rows['response_sha256'])
+                    selected_is_spanish = True
+
+            last_attempt_state = row['last_attempt_state']
+            last_successful_source_path = row['last_successful_source_path']
+            if selected_is_spanish:
+                current_availability = capture['availability']
+                captured_at = capture['captured_at']
+                response_sha256 = capture['response_sha256']
+                source_path = capture['source_path'] or expected_path
+                selected_capture_id = capture['id']
+            elif last_attempt_state == 'empty' and last_successful_source_path == expected_path:
+                # A valid empty Spanish attempt may have deduplicated against an immutable, unproven empty capture.
+                # Its verified request state is safe to expose because no comments are returned.
+                current_availability = 'empty'
+                captured_at = row['last_attempt_at']
+                response_sha256 = None
+                source_path = expected_path
+                selected_capture_id = None
+                selected_is_spanish = True
+            else:
+                current_availability = 'not_collected'
+                captured_at = None
+                response_sha256 = None
+                source_path = None
+                selected_capture_id = None
+
+            public_last_attempt_state = last_attempt_state
+            if public_last_attempt_state in ('available', 'empty') and last_successful_source_path != expected_path:
+                public_last_attempt_state = 'not_collected'
+
             comments = []
-            if row['capture_id'] is not None:
+            if selected_is_spanish and selected_capture_id is not None and current_availability == 'available':
                 comment_rows = connection.execute("""
                     SELECT source_comment_id, source_position, text, type, minute, period_name, is_home,
                            home_score, away_score, incident_id, participants_json
                     FROM narrative_comment WHERE capture_id = ? ORDER BY source_position
-                """, (row['capture_id'],)).fetchall()
+                """, (selected_capture_id,)).fetchall()
                 for comment in comment_rows:
                     home_score, away_score = comment['home_score'], comment['away_score']
                     score = ({'home': home_score, 'away': away_score}
@@ -400,15 +470,14 @@ def load_current_comments(base: Path) -> dict[str, dict]:
                         'score': score, 'incidentId': comment['incident_id'],
                         'participants': _public_participants(json.loads(comment['participants_json'])),
                     })
-            current_availability = row['availability'] or row['last_attempt_state'] or 'not_collected'
-            output[PUBLIC_MATCH_PREFIX + row['external_id']] = {
+            output[PUBLIC_MATCH_PREFIX + event_id] = {
                 'availability': current_availability,
-                'sourcePath': row['source_path'],  # internal selection hint; removed from the REST response below
-                'spanishComplete': bool(row['spanish_complete']),  # internal acquisition hint, not public API data
-                'capturedAt': row['captured_at'],
-                'responseSha256': row['response_sha256'],
+                'sourcePath': source_path,  # internal selection hint; removed from the REST response below
+                'spanishComplete': bool(selected_is_spanish),  # internal acquisition hint, not public API data
+                'capturedAt': captured_at,
+                'responseSha256': response_sha256,
                 'lastAttempt': {
-                    'availability': row['last_attempt_state'], 'occurredAt': row['last_attempt_at'],
+                    'availability': public_last_attempt_state, 'occurredAt': row['last_attempt_at'],
                     'httpStatus': row['last_http_status'], 'errorCode': row['last_error_code'],
                 },
                 'comments': comments,
@@ -417,13 +486,13 @@ def load_current_comments(base: Path) -> dict[str, dict]:
 
 
 def comments_schema_ready(base: Path) -> bool:
-    """True only when the existing narrative-capture and provenance migrations are both present."""
+    """True only when capture provenance and selected-capture Spanish proof are present."""
     base = Path(base).resolve()
     with bloquear(base), closing(sqlite3.connect(base.as_uri() + '?mode=ro', uri=True, timeout=10)) as connection:
         capture = {row[1] for row in connection.execute('PRAGMA table_info(narrative_comment_capture)')}
         selection = {row[1] for row in connection.execute('PRAGMA table_info(narrative_comment_selection)')}
     return ({'source_path', 'transport_report_json'} <= capture
-            and 'last_successful_source_path' in selection)
+            and {'last_successful_source_path', 'selected_spanish_sha256'} <= selection)
 
 
 def _public_participants(values: dict) -> dict:
@@ -456,6 +525,16 @@ def match_comments_response(data: dict, snapshots: dict[str, dict], public_match
         snapshot = {'availability': 'not_collected', 'capturedAt': None, 'responseSha256': None,
                     'lastAttempt': {'availability': 'not_collected', 'occurredAt': None,
                                     'httpStatus': None, 'errorCode': None}, 'comments': []}
+    elif snapshot.get('spanishComplete') is not True:
+        # Keep the REST contract fail-closed if a legacy or incomplete snapshot contains an unproven capture.
+        prior_attempt = snapshot.get('lastAttempt')
+        if not isinstance(prior_attempt, dict):
+            prior_attempt = {'availability': 'not_collected', 'occurredAt': None,
+                             'httpStatus': None, 'errorCode': None}
+        elif prior_attempt.get('availability') in ('available', 'empty'):
+            prior_attempt = {**prior_attempt, 'availability': 'not_collected'}
+        snapshot = {'availability': 'not_collected', 'capturedAt': None, 'responseSha256': None,
+                    'lastAttempt': prior_attempt, 'comments': [], 'spanishComplete': False}
     public_snapshot = {key: value for key, value in snapshot.items()
                        if key not in ('sourcePath', 'spanishComplete')}
     return 200, {'matchId': public_match_id, **json.loads(json.dumps(public_snapshot, ensure_ascii=False, allow_nan=False))}

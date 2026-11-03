@@ -86,7 +86,7 @@ class Migraciones(unittest.TestCase):
         self.assertEqual({n for t, n, *_ in primero if t == 'table'}, TABLAS)
         motor = sqlite.crear_motor(base)
         with motor.connect() as c:
-            self.assertEqual(c.exec_driver_sql('SELECT version_num FROM alembic_version').scalar(), '0006')
+            self.assertEqual(c.exec_driver_sql('SELECT version_num FROM alembic_version').scalar(), '0007')
         motor.dispose()
         command.downgrade(configuracion(base), 'base')
         self.assertEqual(esquema(base), set())
