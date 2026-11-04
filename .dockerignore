@@ -19,6 +19,7 @@
 !persistencia/**
 !scripts/initialize_snapshot.py
 !scripts/check_container.py
+!scripts/adopt_coordinator_fingerprint.py
 **/__pycache__
 **/*.pyc
 **/.env*

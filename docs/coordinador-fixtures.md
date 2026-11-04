@@ -81,8 +81,10 @@ carga.referencia_del_codigo: api.py, queries.py, importar.py, configuracion de c
 de persistencia. Persistir tambien SHA256 del ambito. Comparar al abrir, preparar y justo antes
 de confirmar; no depender solo de Git o rule_set.version. Esto detecta cambios de normalizacion
 y agregados y tambien rechaza conservadoramente cambios sin efecto deportivo.
-Primera apertura exige huella archivada en una ejecucion confirmada. La adopcion de otra huella
-tras mantenimiento no esta implementada: no editar el journal para saltar esta comprobacion.
+Primera apertura exige huella archivada en una ejecucion confirmada. La única transición de huella
+autorizada para el despliegue de comentarios es el procedimiento acotado de
+[mantenimiento de huella del coordinador](mantenimiento-huella-coordinador.md). No editar el journal
+manualmente ni añadir huellas a `REFERENCIAS_CODIGO_COMPATIBLES` para saltar esta comprobación.
 Los fixtures se cargan con el codigo de esta entrega; no se usa la base habitual como prueba.
 
 Exigir mismo sistema de archivos para candidata y principal. Preflight conservador: libre >=
