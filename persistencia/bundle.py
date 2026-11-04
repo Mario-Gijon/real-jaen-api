@@ -20,6 +20,7 @@ PATHS=('/unique-tournament/17073/season/97382/events/round/1',
        '/event/16599363','/event/16599363/lineups','/event/16599363/statistics','/event/16599363/incidents')
 MAX_WIRE=96*1024*1024
 MAX_FILE=4*1024*1024
+MAX_COMMENTS_FILE=8*1024*1024
 MAX_TOTAL=64*1024*1024
 MAX_LINE=2*1024*1024
 
@@ -282,6 +283,21 @@ def check_plan(plan,attempts,*,with_comments=False):
         if any(not isinstance(comments[k],list) for k in comments):raise Rejected('Invalid comments coverage')
     return limits,rounds
 
+def _verify_group_file(name, descriptor, raw, total, *, with_comments):
+    """Verify one Group bundle file at its trust boundary, preserving its per-kind and aggregate limits."""
+    limit = MAX_PROVENANCE if name == 'provenance.jsonl' else (
+        MAX_COMMENTS_FILE if with_comments and name == 'comments.jsonl' else MAX_FILE)
+    if (len(raw) > limit or total + len(raw) > MAX_TOTAL or type(descriptor.get('bytes')) is not int
+            or descriptor['bytes'] != len(raw) or sha(raw) != descriptor.get('sha256')):
+        raise Rejected('Invalid file size/hash')
+    lines=raw.splitlines()
+    if any(not line or len(line)>MAX_LINE for line in lines):raise Rejected('Invalid JSONL')
+    try:
+        rows = [parse(line) for line in lines]
+    except (ValueError, TypeError, KeyError, UnicodeError, OverflowError):
+        raise Rejected('Invalid JSONL') from None
+    return rows, total + len(raw)
+
 def listed_candidate(row,teams):
     """Same fixed-scope predicate as the producer, repeated at the receiving trust boundary."""
     tournament=row.get('tournament') or {}
@@ -332,12 +348,9 @@ def _verify_group(body,descriptor,baseline,*,context,expected_rules,test_transpo
         d=entries[name]
         kind=('calendar' if name=='calendar.jsonl' else 'provenance' if name=='provenance.jsonl' else 'comments') if owner is None else 'own_export'
         if set(d)!={'name','kind','team_external_id','bytes','sha256'} or d['team_external_id']!=owner or d['kind']!=kind:raise Rejected('Invalid file owner')
-        raw=base64.b64decode(obj['files'][name],validate=True);total+=len(raw)
-        limit=MAX_PROVENANCE if name=='provenance.jsonl' else MAX_FILE
-        if len(raw)>limit or total>MAX_TOTAL or type(d['bytes']) is not int or d['bytes']!=len(raw) or sha(raw)!=d['sha256']:raise Rejected('Invalid file size/hash')
-        lines=raw.splitlines()
-        if any(not l or len(l)>MAX_LINE for l in lines):raise Rejected('Invalid JSONL')
-        decoded[name]=raw;rows[name]=[parse(l) for l in lines]
+        raw=base64.b64decode(obj['files'][name],validate=True)
+        rows[name],total=_verify_group_file(name,d,raw,total,with_comments=with_comments)
+        decoded[name]=raw
     # Original sporting answers: every successful attempt, byte for byte. Comment responses have a separate
     # evidence record so an invalid comment payload can remain a comment failure without rejecting valid sports data.
     provenance={};listed={}

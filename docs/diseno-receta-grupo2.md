@@ -60,6 +60,17 @@ lógicos y 52 envíos físicos, con el margen existente de 4 envíos. No se crea
 se amplían los máximos aprobados. Los intentos que no quepan quedan **aplazados** para la siguiente pulsación y sus
 datos publicados se conservan.
 
+Además, `comments.jsonl` tiene un límite específico de 8 MiB, sin cambiar el máximo de 4 MiB de los demás archivos ni
+los topes de 64 MiB total, 96 MiB de bundle y 2 MiB por línea. Antes de cada consulta de comentarios se reserva una
+línea máxima y su newline según el espacio ya utilizado; cuando no queda esa capacidad, las siguientes consultas no
+se cobran y permanecen pendientes para la pulsación siguiente. Así, los intentos completados no hacen crecer el
+archivo por encima del límite.
+
+Como cada respuesta original se incluye en Base64 en su propia línea, una respuesta individual cuya línea codificada
+supere 2 MiB no cabe en el contrato actual. El transporte conserva el cuerpo en el volumen persistente de Acquisition,
+pero no se puede sellar ese bundle; no se elimina ni se trunca la evidencia. Esta es una limitación distinta del
+límite acumulado de 8 MiB.
+
 ### Comentarios narrativos y jornadas permitidas
 
 La misma restricción `detail_rounds` se aplica a las solicitudes deportivas de detalle y a `/comments/es-la`.

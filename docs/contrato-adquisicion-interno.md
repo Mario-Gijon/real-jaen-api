@@ -77,6 +77,21 @@ evidencia sellada siga siendo verificable.
 6. **Generación esperada**: el receptor compara el inventario actual con el de la solicitud y entrega al coordinador
    `generacion_esperada`; si cambió, se rechaza sin publicar.
 
+### Capacidad de `comments.jsonl` en Grupo 2
+
+`group-v2` admite hasta **8 MiB** para `comments.jsonl`. `MAX_FILE` continúa en **4 MiB** para los demás archivos;
+`MAX_TOTAL` (64 MiB), `MAX_WIRE` (96 MiB), `MAX_LINE` (2 MiB), tamaños declarados, SHA-256, JSONL y procedencia
+siguen siendo obligatorios y no cambian.
+
+Antes de cada consulta de comentarios, Acquisition comprueba el tamaño ya serializado y reserva una línea completa
+de `MAX_LINE` más su salto de línea. Si la reserva no cabe, no registra otro intento y deja los partidos restantes
+pendientes para la siguiente actualización. La respuesta de cada consulta ya iniciada queda guardada en el volumen
+durable del trabajo y se incluye en el bundle si cabe.
+
+La respuesta original va en Base64 dentro de una única línea JSONL. Si una respuesta individual supera `MAX_LINE`
+después de codificar su evidencia, el contrato actual no puede transportarla: el cuerpo original permanece en el
+almacenamiento persistente de Acquisition y el bundle no se sella. No se trunca ni se omite silenciosamente.
+
 ## Recepción en el backend e idempotencia
 
 `Cliente.publicar(coordinador, request_id, receta)` (`persistencia/adquisicion.py`), llamado por el control de

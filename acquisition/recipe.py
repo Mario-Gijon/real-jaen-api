@@ -15,7 +15,8 @@ import shutil
 
 from .transport import Stopped, iso
 from .profile import sync_dir
-from persistencia.bundle import PATHS, PILOT, SECTIONS, check_inventory, encode, fingerprint, record, sha, verify
+from persistencia.bundle import (MAX_COMMENTS_FILE, MAX_LINE, PATHS, PILOT, SECTIONS, check_inventory, encode,
+                                 fingerprint, record, sha, verify)
 
 REVISION='611e436a1528b0f487aa56a045f023e8ae8ae098'
 
@@ -230,6 +231,25 @@ def refused(transport):
     return bool(transport.retry.get('_blocked')) or transport.breaker.tripped
 
 
+def comments_file_bytes(evidence):
+    """Serialized comments JSONL size, including the newline required for every record."""
+    return sum(len(encode(row)) + 1 for row in evidence)
+
+
+def comments_capacity_for_next(evidence):
+    """Reserve one full verifier-allowed line before sending, so a later response cannot overflow the file cap.
+
+    A single response whose encoded evidence line exceeds MAX_LINE cannot be represented by the current bundle
+    contract; its transport body remains in the durable Acquisition response store and that job must stop unsealed.
+    """
+    return comments_file_bytes(evidence) + MAX_LINE + 1 <= MAX_COMMENTS_FILE
+
+
+def pending_comments(candidates, attempted):
+    """Comment candidates not yet charged to the durable transport ledger."""
+    return sorted(set(candidates) - set(attempted))
+
+
 def _group_cached_events(store, ids, workspace):
     """Read the current SDK event cache for known inventory IDs; no provider request is made here."""
     import tempfile
@@ -289,6 +309,9 @@ async def _collect_group_comments(store,transport,scope,baseline,output,*,listin
         round_number=round_of(match_plan[ident])
         if detail_rounds is not None and round_number not in detail_rounds:
             continue
+        if not comments_capacity_for_next(evidence):
+            # No request is charged. Remaining candidates stay pending in the sealed coverage for a later update.
+            break
         if len(transport.state['attempts'])>=attempt_limit or transport.remaining_sends()<SEND_RESERVE:
             break
         route=f'/event/{ident}/comments/es-la'
@@ -328,20 +351,25 @@ async def _collect_group_comments(store,transport,scope,baseline,output,*,listin
             reason=reason or {'404':'not_found','empty':'empty','parse':'parse','budget':'budget'}.get(stored_reason,'error')
             failed[ident]=reason
         physical=transport.adapter.sends[sends_mark:]
-        evidence.append(dict(event_id=ident,status=latest['status'],
-                             attempt_numbers=[item['number'] for item in new_attempts],
-                             raw_b64=base64.b64encode(raw).decode('ascii') if raw is not None else None,
-                             raw_sha256=sha(raw) if raw is not None else None,
-                             captured_at=latest['finished_at'],reason=None if valid else reason,
-                             transport_report=dict(path=route,attempt_numbers=[item['number'] for item in new_attempts],
-                                                   logical_requests=1,physical_sends=sum(1 for item in physical if item.get('sent')))))
+        evidence_row=dict(event_id=ident,status=latest['status'],
+                          attempt_numbers=[item['number'] for item in new_attempts],
+                          raw_b64=base64.b64encode(raw).decode('ascii') if raw is not None else None,
+                          raw_sha256=sha(raw) if raw is not None else None,
+                          captured_at=latest['finished_at'],reason=None if valid else reason,
+                          transport_report=dict(path=route,attempt_numbers=[item['number'] for item in new_attempts],
+                                               logical_requests=1,physical_sends=sum(1 for item in physical if item.get('sent'))))
+        if len(encode(evidence_row)) > MAX_LINE:
+            # The exact response is already durable under transport.root; don't discard it or emit a bundle that
+            # cannot carry its evidence under the existing JSONL line contract.
+            raise Stopped('A single comments response exceeds the Group JSONL line limit; durable evidence retained, bundle not sealed')
+        evidence.append(evidence_row)
         if outcome is None:
             # The sporting work is complete. Preserve the adapter's refusal, stop every further send, and seal its
             # valid sporting evidence with this comments request marked failed.
             transport.comments_stop_after_sport=True
             transport.comments_stop_reason=transport.adapter.stopped
             break
-    pending=sorted(set(candidates)-set(attempts_by_event))
+    pending=pending_comments(candidates,attempts_by_event)
     summary=dict(new=sorted(captured),kept=sorted(complete-review_due),pending=pending,
                  failed=[dict(id=ident,reason=reason) for ident,reason in sorted(failed.items())])
     return summary,evidence

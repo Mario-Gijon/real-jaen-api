@@ -109,3 +109,43 @@ No arranque la imagen actual con la base restaurada: la protección de huella la
 Esta instantánea interna cubre la base, el coordinador, el historial HTTP y sus artefactos del volumen deportivo.
 No sustituye el respaldo operativo separado de los volúmenes de acquisition y del perfil del navegador; el
 procedimiento no los modifica ni los restaura.
+
+## Transición separada: límite de bundle de comentarios en Alembic 0007
+
+El cambio del verificador `persistencia/bundle.py` modifica la huella que exige el coordinador, aunque no cambia el
+esquema ni las reglas deportivas. La huella confirmada de origen para esta transición es
+`37038df67dc1c5898a51ffd3efe216d88d43508e16dbede291f3be2c537d0720`; el destino revisado es
+`8ed0a15a88a399cfb78f0e20f240f5196ff10caead77532a48d2de5c654e8cd7`. No se incluye el origen en
+`REFERENCIAS_CODIGO_COMPATIBLES`: el arranque no adoptará la nueva huella automáticamente.
+
+Esta transición **no reutiliza** la herramienta anterior `adopt_coordinator_fingerprint.py`: esa herramienta trata
+una base en 0004 y aplica migraciones 0005–0007. La herramienta nueva
+`scripts/adopt_bundle_limit_fingerprint.py` exige una base ya en 0007, una huella de origen exacta y un ámbito exacto.
+Solo cambia `confirmado.detalle.codigo`; conserva `descripcion`, generación, SQLite, `trabajo`, `control/job`, los
+resúmenes de importación, evidencias y copias. Antes prepara y verifica un snapshot privado de la pareja base/journal,
+árbol de evidencias y `copias/`; luego abre y cierra el coordinador normal. No inicia acquisition ni accede a SofaScore.
+
+Validar exclusivamente sobre una copia aislada. En el futuro, la activación requiere servicios detenidos, volumen y
+directorio de respaldo exclusivos, ámbito montado de solo lectura y una confirmación explícita:
+
+```sh
+python -B /app/scripts/adopt_bundle_limit_fingerprint.py adopt \
+  --base /state/real-jaen.sqlite --scope /app/ambito.json \
+  --backup-dir /backups/bundle-limit-transition-<identificador> \
+  --confirm 'adopt coordinator fingerprint 37038df67dc1c5898a51ffd3efe216d88d43508e16dbede291f3be2c537d0720 -> 8ed0a15a88a399cfb78f0e20f240f5196ff10caead77532a48d2de5c654e8cd7'
+```
+
+La herramienta rechaza trabajos activos, estado deportivo incoherente, otra generación, otra huella o un respaldo que
+no coincida. Si hay que revertir antes de aceptar nuevos trabajos, mantener los servicios detenidos y usar el mismo
+respaldo con la confirmación inversa:
+
+```sh
+python -B /app/scripts/adopt_bundle_limit_fingerprint.py restore \
+  --base /state/real-jaen.sqlite --scope /app/ambito.json \
+  --backup-dir /backups/bundle-limit-transition-<identificador> \
+  --confirm 'restore coordinator fingerprint 8ed0a15a88a399cfb78f0e20f240f5196ff10caead77532a48d2de5c654e8cd7 -> 37038df67dc1c5898a51ffd3efe216d88d43508e16dbede291f3be2c537d0720'
+```
+
+La reversión solo restablece la huella confirmada y no reemplaza datos; se rechaza si cambió la base, la generación o
+el historial de trabajos desde la adopción. No ejecutar ninguna de estas órdenes sobre el entorno habitual como parte
+de esta implementación.

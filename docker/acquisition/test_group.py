@@ -57,7 +57,6 @@ def main():
     ap.add_argument('--backend-image', required=True)
     ap.add_argument('--snapshot', type=Path, required=True)
     ap.add_argument('--evidence', type=Path, required=True)
-    ap.add_argument('--control-port', type=int, default=18002)
     ap.add_argument('--frontend', type=Path, help='rj-analyst with a production build: checks the match page')
     ap.add_argument('--frontend-port', type=int, default=3311)
     a = ap.parse_args()
@@ -150,6 +149,16 @@ def main():
             donor = donors[k % len(donors)]['id']
             for key in SECTIONS:
                 routes[f'/event/{p["id"]}/{key}'] = json.dumps(originals[(donor, key)]['payload']).encode()
+        comment_response = json.dumps({'comments': [
+            {'id': 77, 'text': 'Gol de prueba', 'type': 'scoreChange', 'time': 42, 'periodName': '1ST',
+             'isHome': True, 'homeScore': 1, 'awayScore': 0,
+             'player': {'id': 900001, 'name': 'Jugador de prueba'}}
+        ]}, ensure_ascii=False).encode()
+        # A single fixed candidate may not be reached in stage 1: the shared 120-request budget backfills earlier
+        # finals first. Give every already-listed event the local response so the test follows the real planner's
+        # order without expanding its scope or budget.
+        for ident in events:
+            routes[f'/event/{ident}/comments/es-la'] = comment_response
         if stage == 1:
             routes[f'/event/{empty_stats["id"]}/statistics'] = b'{"statistics":[]}'
             routes.pop(f'/event/{missing_lineups["id"]}/lineups')  # 404
@@ -166,12 +175,12 @@ def main():
     env = os.environ.copy()
     env.update(RJ_TEST_ACQUISITION_IMAGE=a.acquisition_image, RJ_TEST_BACKEND_IMAGE=a.backend_image, RJ_TEST_MODE='1',
                RJ_TEST_SECRET_FILE=str(files['acquisition']), RJ_TEST_CONTROL_SECRET_FILE=str(files['control']),
-               RJ_TEST_SNAPSHOT=str(snapshot), RJ_TEST_CONTROL_PORT=str(a.control_port),
+               RJ_TEST_SNAPSHOT=str(snapshot),
                RJ_TEST_RECIPE='sofascore-group2-2627-v1', RJ_TEST_ROUTES=str(Path(tmp.name) / 'routes-1.json'),
                RJ_TEST_PROFILE_VOLUME=project + '-profiles', RJ_TEST_JOBS_VOLUME=project + '-jobs',
                RJ_TEST_STATE_VOLUME=project + '-state', RJ_TEST_EVIDENCE_DIR=str(evidence))
     base = ['docker', 'compose', '-p', project, '-f', str(ROOT / 'docker/acquisition/compose.test.yaml'), '--profile', 'updates']
-    control_url = f'http://127.0.0.1:{a.control_port}'
+    control_url = None
 
     def save():
         (out / 'results.json').write_text(json.dumps(results, indent=2, ensure_ascii=False) + '\n', encoding='utf-8')
@@ -266,6 +275,15 @@ def main():
         command(base + ['run', '--rm', '--no-deps', 'profile-admin', 'initialize-profile', '--confirm-new-profile'], name='initialize-profile')
         command(base + ['run', '--rm', '--no-deps', 'backend-client', 'prepare'], name='prepare-isolated-copy')
         command(base + ['up', '-d', '--no-deps', 'backend-control'], name='start-control')
+        control_id = command(base + ['ps', '-q', 'backend-control']).decode().strip()
+        assert control_id, 'missing backend-control container'
+        control_inspect = json.loads(command(['docker', 'inspect', control_id]))[0]
+        control_networks = control_inspect['NetworkSettings']['Networks']
+        control_network = project + '_control'
+        assert set(control_networks) == {control_network}, control_networks
+        control_ip = control_networks[control_network]['IPAddress']
+        assert control_ip, control_networks
+        control_url = f'http://{control_ip}:8002'
         wait_health(control_url + '/health')
         if a.frontend is not None:
             node_env = dict(env, DATA_MODE='real', LOCAL_DATA_API_URL=control_url, NODE_ENV='production')
@@ -280,6 +298,18 @@ def main():
 
         # 1. T1: eight new results, two sections pending without data, a match without result, a far change.
         c1 = press(1)
+        assert c1['comments']['new'], c1
+        comment_match_id = c1['comments']['new'][0]
+        comments_status, comments_body = http(f'/api/v1/matches/sofascore-match-{comment_match_id}/comments', token=False)
+        assert comments_status == 200 and comments_body['availability'] == 'available', comments_body
+        assert comments_body['comments'] == [dict(
+            id='77', position=0, text='Gol de prueba', type='scoreChange', minute=42, periodName='1ST',
+            isHome=True, score={'home': 1, 'away': 0}, incidentId=None,
+            participants={'player': {'name': 'Jugador de prueba', 'shortName': None,
+                                     'position': None, 'jerseyNumber': None}})], comments_body
+        results['check-comments'] = dict(match=comment_match_id, availability=comments_body['availability'],
+                                         comments=len(comments_body['comments']),
+                                         text=comments_body['comments'][0]['text'], minute=comments_body['comments'][0]['minute'])
         pending1 = {(p['event_id'], r['resource']): r for p in c1['pending'] for r in p['resources']}
         assert pending1.get((ids['empty_stats'], 'statistics'), {}).get('reason') == 'empty', c1
         assert pending1.get((ids['missing_lineups'], 'lineups'), {}).get('reason') == 'not_found', c1

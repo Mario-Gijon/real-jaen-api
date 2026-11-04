@@ -16,6 +16,11 @@
       "rules_sha256": "195a4931adc292872647a6c3c3571a5c1da9f4dd3899abc3ac83796935f3c915",
       "productor": "Acquisition Grupo 2 con importación explícita de SEND_RESERVE y deduplicación de pendientes mediante conjuntos",
       "uso": "Huella revisada de la implementación de comentarios españoles tras corregir errores de ejecución; sin cambios en rutas, alcance, límites ni reglas deportivas"
+    },
+    {
+      "rules_sha256": "325fbbb5ccb18b48b0009f70fd4b9ddf46e14ff6cbfb3dbbb70f6288cabd6254",
+      "productor": "Acquisition Grupo 2: comments.jsonl con límite 8 MiB y reserva de capacidad por línea antes de cada consulta",
+      "uso": "Receta sofascore-group2-2627-v1, sin cambios en alcance, presupuesto de solicitudes ni reglas deportivas"
     }
   ]
 }

@@ -21,7 +21,10 @@ if CON_SQL:
     from scripts import adopt_coordinator_fingerprint as maintenance
 
 
-@unittest.skipUnless(CON_SQL, 'requiere requirements-sql.txt')
+@unittest.skipUnless(
+    CON_SQL and actualizacion.codigo() == maintenance.CURRENT_COORDINATOR_CODE,
+    'La transición histórica 0004 → 0007 solo aplica a su huella de destino fijada',
+)
 class CoordinatorFingerprintMaintenance(CargaBase):
     def setUp(self):
         super().setUp()
