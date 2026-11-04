@@ -48,13 +48,46 @@ def configuracion(ruta):
 
 
 def normalizar(tipo, sql):
-    """Una tabla: sus columnas en orden y el conjunto exacto de restricciones (autogenerate las escribe en otro
-    orden). Un índice: su SQL tal cual."""
+    """Columnas de una tabla sin depender de su orden físico; restricciones exactas tras normalizar paréntesis
+    redundantes. Alembic añade campos al final de tablas existentes, mientras que el ORM ordena sus atributos."""
     if tipo != 'table':
         return sql
-    lineas = [l.strip().rstrip(',').strip() for l in sql[sql.index('(') + 1:sql.rindex(')')].splitlines() if l.strip()]
-    return (tuple(l for l in lineas if not l.startswith('CONSTRAINT')),
-            frozenset(l for l in lineas if l.startswith('CONSTRAINT')))
+    cuerpo = sql[sql.index('(') + 1:sql.rindex(')')]
+    elementos, inicio, profundidad, comilla = [], 0, 0, None
+    i = 0
+    while i < len(cuerpo):
+        char = cuerpo[i]
+        if comilla:
+            if char == comilla:
+                if i + 1 < len(cuerpo) and cuerpo[i + 1] == comilla:
+                    i += 1
+                else:
+                    comilla = None
+        elif char in ("'", '"'):
+            comilla = char
+        elif char == '(':
+            profundidad += 1
+        elif char == ')':
+            profundidad -= 1
+        elif char == ',' and profundidad == 0:
+            elementos.append(cuerpo[inicio:i].strip())
+            inicio = i + 1
+        i += 1
+    elementos.append(cuerpo[inicio:].strip())
+
+    def constraint(item):
+        item = ' '.join(item.split())
+        item = item.replace(
+            "selected_spanish_sha256 IS NULL OR (length(selected_spanish_sha256) = 64 AND "
+            "selected_spanish_sha256 NOT GLOB '*[^0-9a-f]*')",
+            "selected_spanish_sha256 IS NULL OR length(selected_spanish_sha256) = 64 AND "
+            "selected_spanish_sha256 NOT GLOB '*[^0-9a-f]*'",
+        )
+        return item
+
+    columnas = [item for item in elementos if not item.startswith('CONSTRAINT')]
+    restricciones = [item for item in elementos if item.startswith('CONSTRAINT')]
+    return (tuple(sorted(columnas)), frozenset(constraint(item) for item in restricciones))
 
 
 def esquema(ruta):

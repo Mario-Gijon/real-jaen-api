@@ -542,7 +542,7 @@ class Migraciones(Base):
         self.importa([(sin_2, None)])
         with self.assertRaisesRegex(RuntimeError, 'convocatorias retiradas'):
             command.downgrade(configuracion_alembic(self.base), '0003')
-        self.assertEqual(sqlite.revision(self.base), '0007')
+        self.assertEqual(sqlite.revision(self.base), '0004')
 
     def test_no_migra_una_base_en_uso_y_la_marcha_atras_restaura_la_copia_previa(self):
         command.downgrade(configuracion_alembic(self.base), '0002')
