@@ -11,6 +11,11 @@
       "rules_sha256": "1e0df6bd30aa1a4a9db510e86e334e83ae220116f2f2f56dbfcd6ff787f815be",
       "productor": "acquisition/{recipe,group_plan,transport,sdk_adapter,job}.py; reintento de recursos incompletos y IDs nuevos solo para revisión",
       "uso": "Servicio de adquisición: recetas del piloto y del Grupo 2 sin importar eventos nuevos"
+    },
+    {
+      "rules_sha256": "195a4931adc292872647a6c3c3571a5c1da9f4dd3899abc3ac83796935f3c915",
+      "productor": "Acquisition Grupo 2 con importación explícita de SEND_RESERVE y deduplicación de pendientes mediante conjuntos",
+      "uso": "Huella revisada de la implementación de comentarios españoles tras corregir errores de ejecución; sin cambios en rutas, alcance, límites ni reglas deportivas"
     }
   ]
 }

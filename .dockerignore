@@ -13,6 +13,8 @@
 !requirements-fastapi.txt
 !requirements-acquisition.txt
 !requirements-dev.txt
+!acquisition/
+!acquisition/group_plan.py
 !persistencia/
 !persistencia/**
 !scripts/initialize_snapshot.py

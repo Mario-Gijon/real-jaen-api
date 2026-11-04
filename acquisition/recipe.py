@@ -341,7 +341,7 @@ async def _collect_group_comments(store,transport,scope,baseline,output,*,listin
             transport.comments_stop_after_sport=True
             transport.comments_stop_reason=transport.adapter.stopped
             break
-    pending=sorted(candidates-set(attempts_by_event))
+    pending=sorted(set(candidates)-set(attempts_by_event))
     summary=dict(new=sorted(captured),kept=sorted(complete-review_due),pending=pending,
                  failed=[dict(id=ident,reason=reason) for ident,reason in sorted(failed.items())])
     return summary,evidence
@@ -356,7 +356,7 @@ def collect_group(store,transport,scope,baseline,output,*,now,cancelled=lambda:F
     from sofascore_scraper.services.planning import WorkItem
     from sofascore_scraper.store import Ref
     from persistencia.bundle import verify as verify_bundle
-    from .group_plan import MAX_ATTEMPTS, MAX_SENDS, PLANNED_ATTEMPTS, plan_matches, rounds_to_list
+    from .group_plan import MAX_ATTEMPTS, MAX_SENDS, PLANNED_ATTEMPTS, SEND_RESERVE, plan_matches, rounds_to_list
     check_inventory(baseline)
     limits=dict(limits or dict(attempts=MAX_ATTEMPTS,sends=MAX_SENDS))
     output=Path(output)
