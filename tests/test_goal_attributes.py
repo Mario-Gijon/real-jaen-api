@@ -20,6 +20,7 @@ class GoalAttributeTests(unittest.TestCase):
             "GOL CANCELADO POR EL VAR: Davo anotó pero el gol fue anulado luego de la revisión del VAR.",
         )
         self.assertEqual(scored["goal_status"], "valid")
+        self.assertEqual(scored["goal_kind"], "ordinary")
         self.assertEqual(scored["goal_origin"], "penalty")
         self.assertEqual(cancelled["goal_status"], "disallowed")
         self.assertIn("var_cancellation", cancelled["contexts"])
@@ -84,10 +85,42 @@ class GoalAttributeTests(unittest.TestCase):
         unsupported = extract_goal_attributes("shotSaved", "Disparo con la derecha.")
         invalid_type = extract_goal_attributes(None, "Gol con un pase en profundidad.")
         self.assertIsNone(conflict["goal_status"])
+        self.assertIsNone(conflict["goal_kind"])
         self.assertIsNone(origin_conflict["goal_origin"])
         self.assertIsNone(unsupported["goal_status"])
+        self.assertIsNone(unsupported["goal_kind"])
         self.assertEqual(unsupported["contexts"], [])
         self.assertEqual(invalid_type["contexts"], [])
+
+    def test_identifies_real_corpus_own_goal_without_changing_other_attributes(self):
+        result = extract_goal_attributes(
+            "scoreChange",
+            "Autogol de Juan Durán, Rayo Majadahonda. CE Europa 1, Rayo Majadahonda 0.",
+        )
+        self.assertEqual(result["goal_kind"], "own_goal")
+        self.assertEqual(result["goal_status"], "valid")
+        self.assertIsNone(result["goal_origin"])
+        self.assertEqual(result["contexts"], [])
+
+    def test_recognizes_explicit_own_goal_phrasing_variants(self):
+        for wording in (
+            "Gol en propia puerta de Alex Cano.",
+            "Jorge Cestero introdujo el balón en su propia portería.",
+            "Autogol de Dani Merchán.",
+        ):
+            with self.subTest(wording=wording):
+                self.assertEqual(
+                    extract_goal_attributes("scoreChange", wording)["goal_kind"],
+                    "own_goal",
+                )
+
+    def test_ordinary_goal_heading_and_insufficient_or_conflicting_evidence(self):
+        ordinary = extract_goal_attributes("scoreChange", "¡Gol! Real Jaén 1, Ibiza 0.")
+        unknown = extract_goal_attributes("scoreChange", "Real Jaén 1, Ibiza 0.")
+        conflicting = extract_goal_attributes("scoreChange", "¡Gol! Autogol de Alex Cano.")
+        self.assertEqual(ordinary["goal_kind"], "ordinary")
+        self.assertIsNone(unknown["goal_kind"])
+        self.assertIsNone(conflicting["goal_kind"])
 
 
 if __name__ == "__main__":

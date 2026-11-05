@@ -12,6 +12,14 @@ _SUPPORTED_TYPES = {"scoreChange", "penaltyScored", "varCancelledGoal"}
 _DISALLOWED_TEXT = re.compile(r"\b(?:gol\s+cancelado|gol\s+(?:fue\s+)?anulado)\b", re.IGNORECASE)
 _VALID_REVIEW_TEXT = re.compile(r"\bgol\s+(?:confirmado|otorgado)\b", re.IGNORECASE)
 _PENALTY_TEXT = re.compile(r"\bpenalt[ií]\b", re.IGNORECASE)
+_OWN_GOAL_TEXT = re.compile(
+    r"\b(?:autogol|auto[\s-]+gol)\b|"
+    r"\bgol\s+en\s+propia\s+(?:puerta|meta)\b|"
+    r"\b(?:introduce|introdujo|mete|metió)\s+(?:el\s+bal[oó]n\s+)?"
+    r"en\s+su\s+propia\s+porter[ií]a\b",
+    re.IGNORECASE,
+)
+_ORDINARY_GOAL_HEADING = re.compile(r"^\s*¡gol!\s", re.IGNORECASE)
 
 _AFTER_CORNER = re.compile(
     r"\b(?:tras|después\s+de)\s+(?:un\s+)?(?:saque\s+de\s+esquina|córner)\b",
@@ -33,6 +41,16 @@ def _status(original_type: str, text: str) -> str | None:
     if (expected == "valid" and says_disallowed) or (expected == "disallowed" and says_valid):
         return None
     return expected
+
+
+def _goal_kind(original_type: str, text: str) -> str | None:
+    """Return a goal kind only when the source type or wording is explicit."""
+    own_goal = bool(_OWN_GOAL_TEXT.search(text))
+    ordinary_goal = original_type == "penaltyScored" or bool(_ORDINARY_GOAL_HEADING.search(text))
+    if own_goal == ordinary_goal:
+        # Both signals conflict, or neither is strong enough to classify it.
+        return None
+    return "own_goal" if own_goal else "ordinary"
 
 
 def _origin(original_type: str, text: str, shot: dict[str, str | None]) -> str | None:
@@ -79,7 +97,7 @@ def _contexts(original_type: str, text: str, shot: dict[str, str | None]) -> lis
 
 
 def extract_goal_attributes(original_type: Any, text: Any) -> dict[str, Any]:
-    """Extract goal state, source, shot detail, context, and a textual assistant.
+    """Extract goal state, kind, source, shot detail, context, and assistant text.
 
     Goal status follows the original SofaScore type, unless the text explicitly
     contradicts it, in which case it remains unknown. Shot details and assistant
@@ -88,9 +106,16 @@ def extract_goal_attributes(original_type: Any, text: Any) -> dict[str, Any]:
     official-assist assertion or a participant ID (especially for annulled goals).
     Origin is emitted only for explicit penalty, set-piece, counterattack, or
     through-ball evidence. A cross or long pass alone does not determine origin.
+    ``goal_kind`` is ``own_goal`` only for explicit own-goal wording, and
+    ``ordinary`` only for the observed ordinary-goal heading or ``penaltyScored``;
+    otherwise it is unknown. The normalizer's ``player=scorer`` role is unchanged:
+    downstream goal totals must not credit that player's team when this field is
+    ``own_goal``; the score is credited to the opponent while the participant is
+    recorded as the own-goal player.
     """
     result: dict[str, Any] = {
         "goal_status": None,
+        "goal_kind": None,
         "goal_origin": None,
         "surface": None,
         "area_zone": None,
@@ -108,6 +133,7 @@ def extract_goal_attributes(original_type: Any, text: Any) -> dict[str, Any]:
 
     shot = extract_shot_attributes(text)
     result["goal_status"] = _status(original_type, text)
+    result["goal_kind"] = _goal_kind(original_type, text)
     result["goal_origin"] = _origin(original_type, text, shot)
     result["surface"] = shot["surface"]
     result["area_zone"] = shot["area_zone"]
