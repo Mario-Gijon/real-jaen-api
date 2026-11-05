@@ -36,6 +36,7 @@ TABLAS = {
     'discrepancy_observation', 'discrepancy_value', 'match_state', 'match_version_issue', 'team_name', 'call_up',
     'call_up_stat', 'call_up_change', 'player_attribute_observation', 'local_replacement',
     'narrative_comment_capture', 'narrative_comment', 'narrative_comment_selection',
+    'narrative_comment_enrichment', 'narrative_comment_enrichment_participant',
 }
 H1, H2 = 'a' * 64, 'b' * 64
 
@@ -119,7 +120,7 @@ class Migraciones(unittest.TestCase):
         self.assertEqual({n for t, n, *_ in primero if t == 'table'}, TABLAS)
         motor = sqlite.crear_motor(base)
         with motor.connect() as c:
-            self.assertEqual(c.exec_driver_sql('SELECT version_num FROM alembic_version').scalar(), '0007')
+            self.assertEqual(c.exec_driver_sql('SELECT version_num FROM alembic_version').scalar(), '0008')
         motor.dispose()
         command.downgrade(configuracion(base), 'base')
         self.assertEqual(esquema(base), set())

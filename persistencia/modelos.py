@@ -785,3 +785,56 @@ class NarrativeCommentSelection(Base):
         CheckConstraint("last_error_code IS NULL OR length(trim(last_error_code)) > 0", name='last_error_code'),
         Index('ix_narrative_comment_selection_capture_id', 'capture_id'),
     )
+
+
+class NarrativeCommentEnrichment(Base):
+    """Resultado derivado y versionado de un comentario narrativo inmutable.
+
+    Una nueva versión del enriquecedor crea una fila paralela para el mismo comentario; no reemplaza la anotación
+    previa ni modifica el texto o los participantes originales.
+    """
+    __tablename__ = 'narrative_comment_enrichment'
+    capture_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    source_comment_id: Mapped[str] = mapped_column(String, primary_key=True)
+    enrichment_version: Mapped[str] = mapped_column(String, primary_key=True)
+    category: Mapped[str | None] = mapped_column(String)
+    attributes_json: Mapped[str] = mapped_column(Text)
+    __table_args__ = (
+        ForeignKeyConstraint(['capture_id', 'source_comment_id'],
+                             ['narrative_comment.capture_id', 'narrative_comment.source_comment_id']),
+        CheckConstraint(texto_no_vacio('enrichment_version'), name='enrichment_version'),
+        CheckConstraint('category IS NULL OR ' + texto_no_vacio('category'), name='category'),
+        CheckConstraint("json_valid(attributes_json) AND json_type(attributes_json) = 'object'",
+                        name='attributes_object_json'),
+        Index('ix_narrative_comment_enrichment_category_version', 'category', 'enrichment_version'),
+        Index('ix_narrative_comment_enrichment_version', 'enrichment_version'),
+    )
+
+
+class NarrativeCommentEnrichmentParticipant(Base):
+    """Participante derivado; el nombre original se conserva en narrative_comment.participants_json."""
+    __tablename__ = 'narrative_comment_enrichment_participant'
+    capture_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    source_comment_id: Mapped[str] = mapped_column(String, primary_key=True)
+    enrichment_version: Mapped[str] = mapped_column(String, primary_key=True)
+    participant_position: Mapped[int] = mapped_column(Integer, primary_key=True)
+    source_role: Mapped[str] = mapped_column(String)
+    role: Mapped[str | None] = mapped_column(String)
+    source_id_json: Mapped[str | None] = mapped_column(Text)
+    normalizer_role: Mapped[str | None] = mapped_column(String)
+    __table_args__ = (
+        ForeignKeyConstraint(['capture_id', 'source_comment_id', 'enrichment_version'],
+                             ['narrative_comment_enrichment.capture_id',
+                              'narrative_comment_enrichment.source_comment_id',
+                              'narrative_comment_enrichment.enrichment_version']),
+        CheckConstraint('participant_position >= 0', name='participant_position'),
+        CheckConstraint(texto_no_vacio('source_role'), name='source_role'),
+        CheckConstraint('role IS NULL OR ' + texto_no_vacio('role'), name='role'),
+        CheckConstraint('normalizer_role IS NULL OR ' + texto_no_vacio('normalizer_role'),
+                        name='normalizer_role'),
+        CheckConstraint("source_id_json IS NULL OR (json_valid(source_id_json) AND "
+                        "json_type(source_id_json) IN ('integer', 'text'))", name='source_id_json'),
+        UniqueConstraint('capture_id', 'source_comment_id', 'enrichment_version', 'source_role'),
+        Index('ix_narrative_comment_enrichment_participant_player_version', 'source_id_json', 'enrichment_version'),
+        Index('ix_narrative_comment_enrichment_participant_role_version', 'role', 'enrichment_version'),
+    )
