@@ -6,6 +6,7 @@ participant slots. Text extraction can be added as a separate layer later.
 """
 
 from .normalizer import enrich_comment
+from .corner_attributes import extract_corner_attributes
 from .foul_attributes import extract_foul_attributes
 from .goal_attributes import extract_goal_attributes
 from .shot_attributes import extract_shot_attributes
@@ -16,6 +17,7 @@ __all__ = [
     "ROLE_BY_TYPE",
     "SUPPORTED_TYPES",
     "enrich_comment",
+    "extract_corner_attributes",
     "extract_foul_attributes",
     "extract_goal_attributes",
     "extract_shot_attributes",

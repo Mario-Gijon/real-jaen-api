@@ -114,13 +114,16 @@ class GoalAttributeTests(unittest.TestCase):
                     "own_goal",
                 )
 
-    def test_ordinary_goal_heading_and_insufficient_or_conflicting_evidence(self):
+    def test_ordinary_goal_heading_and_insufficient_evidence(self):
         ordinary = extract_goal_attributes("scoreChange", "¡Gol! Real Jaén 1, Ibiza 0.")
         unknown = extract_goal_attributes("scoreChange", "Real Jaén 1, Ibiza 0.")
-        conflicting = extract_goal_attributes("scoreChange", "¡Gol! Autogol de Alex Cano.")
         self.assertEqual(ordinary["goal_kind"], "ordinary")
         self.assertIsNone(unknown["goal_kind"])
-        self.assertIsNone(conflicting["goal_kind"])
+
+    def test_explicit_own_goal_overrides_generic_goal_heading(self):
+        result = extract_goal_attributes("scoreChange", "¡Gol! Autogol de Alex Cano.")
+        self.assertEqual(result["goal_kind"], "own_goal")
+        self.assertEqual(result["goal_status"], "valid")
 
 
 if __name__ == "__main__":

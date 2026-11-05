@@ -47,10 +47,12 @@ def _goal_kind(original_type: str, text: str) -> str | None:
     """Return a goal kind only when the source type or wording is explicit."""
     own_goal = bool(_OWN_GOAL_TEXT.search(text))
     ordinary_goal = original_type == "penaltyScored" or bool(_ORDINARY_GOAL_HEADING.search(text))
-    if own_goal == ordinary_goal:
-        # Both signals conflict, or neither is strong enough to classify it.
+    if own_goal:
+        # An explicit own-goal statement overrides the generic "¡Gol!" heading.
+        return "own_goal"
+    if not ordinary_goal:
         return None
-    return "own_goal" if own_goal else "ordinary"
+    return "ordinary"
 
 
 def _origin(original_type: str, text: str, shot: dict[str, str | None]) -> str | None:
@@ -106,9 +108,10 @@ def extract_goal_attributes(original_type: Any, text: Any) -> dict[str, Any]:
     official-assist assertion or a participant ID (especially for annulled goals).
     Origin is emitted only for explicit penalty, set-piece, counterattack, or
     through-ball evidence. A cross or long pass alone does not determine origin.
-    ``goal_kind`` is ``own_goal`` only for explicit own-goal wording, and
-    ``ordinary`` only for the observed ordinary-goal heading or ``penaltyScored``;
-    otherwise it is unknown. The normalizer's ``player=scorer`` role is unchanged:
+    ``goal_kind`` is ``own_goal`` only for explicit own-goal wording (which
+    overrides the generic ``¡Gol!`` heading), and ``ordinary`` only for the
+    observed ordinary-goal heading or ``penaltyScored``; otherwise it is unknown.
+    The normalizer's ``player=scorer`` role is unchanged:
     downstream goal totals must not credit that player's team when this field is
     ``own_goal``; the score is credited to the opponent while the participant is
     recorded as the own-goal player.
