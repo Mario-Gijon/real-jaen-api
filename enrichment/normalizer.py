@@ -31,8 +31,15 @@ def _participant_source(comment: Mapping[str, Any]) -> Mapping[str, Any]:
 
 
 def _valid_source_id(value: Any) -> bool:
-    return ((isinstance(value, int) and not isinstance(value, bool))
-            or (isinstance(value, str) and bool(value.strip())))
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value > 0
+    if isinstance(value, str):
+        return (
+            value.isascii()
+            and value.isdecimal()
+            and any(character != "0" for character in value)
+        )
+    return False
 
 
 def enrich_comment(comment: Mapping[str, Any]) -> dict[str, Any]:

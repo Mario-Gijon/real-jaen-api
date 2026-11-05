@@ -74,6 +74,29 @@ class CommentEnrichmentTests(unittest.TestCase):
         self.assertIsNone(no_id["participants"][0]["role"])
         self.assertIsNone(no_id["participants"][0]["source_id"])
 
+    def test_source_ids_accept_only_positive_integers_or_ascii_decimal_strings(self):
+        for source_id in (123, "123", "00123"):
+            with self.subTest(source_id=source_id):
+                result = enrich_comment({
+                    "type": "scoreChange",
+                    "player": {"id": source_id, "name": "Jugador"},
+                })
+                self.assertEqual(result["participants"][0]["source_id"], source_id)
+                self.assertEqual(result["participants"][0]["role"], "scorer")
+
+        invalid_ids = (
+            None, True, False, 0, -1, 1.5, "", "   ", "123abc", " 123", "123 ",
+            "１２３", "000",
+        )
+        for source_id in invalid_ids:
+            with self.subTest(source_id=source_id):
+                result = enrich_comment({
+                    "type": "scoreChange",
+                    "player": {"id": source_id, "name": "Jugador"},
+                })
+                self.assertIsNone(result["participants"][0]["source_id"])
+                self.assertIsNone(result["participants"][0]["role"])
+
 
 if __name__ == "__main__":
     unittest.main()
