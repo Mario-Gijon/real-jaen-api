@@ -29,8 +29,17 @@ class EnrichmentPipelineTests(unittest.TestCase):
             "text": "Javi Antón se ha ido al suelo, pero ha simulado una falta.",
             "player": {"id": 18, "name": "Javi Antón"},
         })
-        self.assertEqual(result["participants"][0]["role"], "foul_recipient")
+        self.assertIsNone(result["participants"][0]["role"])
+        self.assertEqual(result["participants"][0]["normalizer_role"], "foul_recipient")
         self.assertIsNone(result["attributes"]["infraction_type"])
+
+        confirmed = enrich_comment_pipeline({
+            "type": "freeKickLost",
+            "text": "Falta de Cristian Rodríguez (Juventud Torremolinos).",
+            "player": {"id": 975170, "name": "Cristian Rodríguez"},
+        })
+        self.assertEqual(confirmed["participants"][0]["role"], "foul_committer")
+        self.assertEqual(confirmed["attributes"]["infraction_type"], "foul")
 
     def test_own_goal_author_is_distinct_and_original_participant_reference_is_kept(self):
         result = enrich_comment_pipeline({

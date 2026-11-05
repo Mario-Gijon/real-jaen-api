@@ -31,7 +31,9 @@ def enrich_comment_pipeline(comment: Mapping[str, Any]) -> dict[str, Any]:
     ``own_goal_author``. Its original normalizer role is retained in
     ``normalizer_role`` for traceability, preventing it from being treated as an
     ordinary scorer downstream. Text-only assistant names remain attributes and
-    are never added as participants or assigned IDs.
+    are never added as participants or assigned IDs. Foul roles are similarly
+    withheld when the text extractor cannot confirm an infringement; the
+    normalizer's type-based role is retained in ``normalizer_role``.
     """
     if not isinstance(comment, Mapping):
         raise TypeError("comment must be a mapping")
@@ -57,6 +59,11 @@ def enrich_comment_pipeline(comment: Mapping[str, Any]) -> dict[str, Any]:
             if participant["source_role"] == "player" and participant["role"] == "scorer":
                 participant["normalizer_role"] = participant["role"]
                 participant["role"] = "own_goal_author"
+    elif original_type in _FOUL_TYPES and attributes.get("infraction_type") is None:
+        for participant in participants:
+            if participant["role"] in {"foul_committer", "foul_recipient"}:
+                participant["normalizer_role"] = participant["role"]
+                participant["role"] = None
 
     return {
         "category": normalized["category"],
