@@ -206,7 +206,17 @@ class Cliente:
                 _record(path, record)
             else:
                 avance('verifying')
-            return self.recibir(coordinador, folder, record, baseline, avance)
+            published = self.recibir(coordinador, folder, record, baseline, avance)
+            if recipe_id == 'sofascore-group2-2627-v1' and published.get('coverage') is not None:
+                # A stopped transport (403/429, repeated challenge, browser or transport refusal) must not
+                # trigger another batch. If the internal report cannot be read, fail closed and leave coverage
+                # published for the next manual update.
+                try:
+                    report = self.informe(record['acquisition_id'])
+                    published['_continuation_allowed'] = isinstance(report, dict) and report.get('stopped') is None
+                except Exception:
+                    published['_continuation_allowed'] = False
+            return published
 
     def recibir(self, coordinador, folder, record, baseline, avance=None):
         """Verify the private copy and hand it to the coordinator. Records each coordinator attempt before it starts."""
@@ -282,6 +292,23 @@ class Cliente:
                 comments_coverage['new']=retained
                 comments_coverage['failed'].sort(key=lambda entry:entry['id'])
             published['coverage']=coverage
+            # Internal continuation accounting only; it is not part of the REST bundle or dashboard contract.
+            attempted, new, kept = set(), set(), set()
+            for row in manifest['coverage']:
+                if row['resource'] == 'calendar':
+                    continue
+                key = f"{row['event_id']}:{row['resource']}"
+                if row['status'] == 'data' and row['origin'] == 'attempt':
+                    attempted.add(key)
+                    new.add(key)
+                elif row['status'] == 'data' and row['origin'] == 'inventory':
+                    kept.add(key)
+                elif row['status'] == 'pending' and row['checked_at'] is not None:
+                    attempted.add(key)
+            comments=coverage.get('comments') or {}
+            attempted.update(f"{ident}:comments" for ident in comments.get('new', ()))
+            attempted.update(f"{row['id']}:comments" for row in comments.get('failed', ()))
+            published['_batch_resources'] = dict(attempted=sorted(attempted), new=sorted(new), kept=sorted(kept))
         return published
 
 

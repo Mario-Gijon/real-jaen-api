@@ -17,6 +17,7 @@ class FakeCliente:
     def __init__(self, fixture):
         self.fixture, self.mode, self.calls, self.cancelled = fixture, 'ok', [], []
         self.coverage = None
+        self.batch_results = []
         self.gate = threading.Event()
         self.gate.set()
 
@@ -50,7 +51,12 @@ class FakeCliente:
         result = coord.esperar(ident)
         if result['estado'] != 'completed':
             raise AdquisicionRechazada('Publicacion fallida: se conserva la generacion valida')
-        return dict(generation_id=result['generacion'], coverage=self.coverage)
+        batch = self.batch_results.pop(0) if self.batch_results else None
+        value = dict(generation_id=result['generacion'], coverage=batch['coverage'] if batch else self.coverage)
+        if batch:
+            value.update(_batch_resources=batch.get('resources', {}),
+                         _continuation_allowed=batch.get('continuation_allowed', False))
+        return value
 
 
 def wait(control, ident, timeout=30):
@@ -187,6 +193,52 @@ class Control(unittest.TestCase):
             done = wait(control, job['id'])
             self.assertEqual((done['error']['code'], done['error']['retryable']), ('BUNDLE_REJECTED', False))
             self.assertEqual(coord.capturar().id, before)
+
+    def test_actualizacion_continua_en_lotes_y_agrega_cobertura_sin_duplicados(self):
+        def coverage(deferred, pending):
+            return dict(new=1, kept=2, pending=pending, deferred=deferred, restricted=[], detail_rounds=None,
+                        new_matches=[], rounds=dict(near=[9], far=[], failed=[]),
+                        comments=dict(new=[], kept=[], pending=[], failed=[]))
+
+        self.cliente.batch_results = [
+            dict(coverage=coverage([999], [dict(event_id=999, resources=[dict(resource='event', reason='budget', kept=False)])]),
+                 resources=dict(attempted=['999:event'], new=['999:event'], kept=['1000:event']),
+                 continuation_allowed=True),
+            dict(coverage=coverage([], []),
+                 resources=dict(attempted=['1001:event'], new=['1001:event'], kept=['999:event', '1000:event']),
+                 continuation_allowed=True),
+        ]
+        coord, control = self.open()
+        with coord:
+            job, _ = control.solicitar(str(uuid.uuid4()))
+            done = wait(control, job['id'])
+            self.assertEqual(done['status'], 'completed')
+            self.assertEqual(len(self.cliente.calls), 2)
+            self.assertEqual(len(done['batch_request_ids']), 2)
+            self.assertEqual(done['result']['coverage']['new'], 2)
+            self.assertEqual(done['result']['coverage']['kept'], 1)
+            self.assertEqual(done['result']['coverage']['deferred'], [])
+
+    def test_lote_sin_progreso_o_con_transporte_detenido_no_se_reintenta(self):
+        coverage = dict(new=0, kept=1, pending=[], deferred=[999], restricted=[], detail_rounds=None,
+                        new_matches=[], rounds=dict(near=[], far=[], failed=[]),
+                        comments=dict(new=[], kept=[], pending=[], failed=[]))
+        self.cliente.batch_results = [
+            dict(coverage=coverage, resources=dict(attempted=[]), continuation_allowed=True),
+            dict(coverage=coverage, resources=dict(attempted=['999:event']), continuation_allowed=False),
+        ]
+        coord, control = self.open()
+        with coord:
+            job, _ = control.solicitar(str(uuid.uuid4()))
+            done = wait(control, job['id'])
+            self.assertEqual(done['status'], 'completed')
+            self.assertEqual(len(self.cliente.calls), 1)
+            self.assertEqual(done['result']['coverage']['deferred'], [999])
+            stopped, _ = control.solicitar(str(uuid.uuid4()))
+            stopped = wait(control, stopped['id'])
+            self.assertEqual(stopped['status'], 'completed')
+            self.assertEqual(len(self.cliente.calls), 2)
+            self.assertEqual(stopped['result']['coverage']['deferred'], [999])
 
     def test_fallo_al_publicar_y_reintento_con_la_misma_solicitud(self):
         failures = []

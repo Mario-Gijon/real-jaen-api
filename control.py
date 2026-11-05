@@ -31,13 +31,16 @@ SCOPES = {
                 label='Actualización del Grupo 2 (Primera Federación 26/27)',
                 description='Consulta los partidos finalizados que faltan, los aplazados, los cambios de calendario de '
                             'las jornadas próximas y, por turnos, de las lejanas, y revisa las correcciones de las '
-                            'últimas 72 horas. Lo que no se obtenga queda pendiente: se conservan los datos anteriores, '
-                            'nunca se sustituyen por ceros.'),
+                            'últimas 72 horas. Continúa en lotes seguros mientras quede trabajo elegible y el proveedor '
+                            'lo permita. Si se detiene, lo pendiente conserva los datos anteriores; nunca se sustituye '
+                            'por ceros.'),
 }
 RECIPE = GROUP
 ACTIVE = ('queued', 'running')
 CANCELLABLE_PHASES = ('queued', 'acquiring')
 POLL_SECONDS = 3
+# A single click is finite even if an invalid coverage report keeps claiming that work remains.
+MAX_GROUP_BATCHES = 64
 # Safe public messages per error code; internal reasons stay in the backend log, keyed by job id.
 MESSAGES = {
     'ACQUISITION_FAILED': ('La consulta al proveedor no se completó o fue rechazada. No se reintenta sola.', True),
@@ -134,7 +137,17 @@ class Actualizaciones:
         """A job left active by a restart is never resumed: completed if its publication was confirmed, else interrupted."""
         for item in self._rows("WHERE state IN ('queued','running')"):
             attempt = self._attempt(item)
-            if attempt is not None and attempt['estado'] == 'completed':
+            if item.get('batch_mode'):
+                if (not item.get('continuation_pending') and attempt is not None
+                        and attempt['estado'] == 'completed'):
+                    item['published'] = True
+                    item['result'] = dict(published_at=now(), generation=attempt['generacion'],
+                                          reused_bundle=item.get('reused_bundle', False),
+                                          coverage=(item.get('result') or {}).get('coverage'))
+                    item.update(status='completed', phase='finished', finished_at=now())
+                else:
+                    self._fail(item, 'INTERRUPTED', resumable=False, status='interrupted')
+            elif attempt is not None and attempt['estado'] == 'completed':
                 item.update(status='completed', phase='finished', published=True, finished_at=now(),
                             result=dict(published_at=now(), generation=attempt['generacion'],
                                         reused_bundle=item.get('reused_bundle', False)))
@@ -168,10 +181,13 @@ class Actualizaciones:
             last = self._last_finished()
             # A failed publication with a verified bundle is retried with the same request: no new provider query.
             reuse = last is not None and last['status'] == 'failed' and last.get('resumable')
-            item = dict(id=str(uuid.uuid4()), idem=idem, request_id=last['request_id'] if reuse else str(uuid.uuid4()),
+            request_id = last['request_id'] if reuse else str(uuid.uuid4())
+            item = dict(id=str(uuid.uuid4()), idem=idem, request_id=request_id,
                         status='queued', phase='queued', published=False, requested_at=now(), finished_at=None,
                         acquisition_id=None, cancel_requested=False, reused_bundle=bool(reuse), resumable=False,
-                        error=None, result=None)
+                        error=None, result=None, batch_mode=self.recipe == GROUP, batch_count=0,
+                        batch_request_ids=[request_id], batch_progress=None,
+                        continuation_pending=self.recipe == GROUP)
             with closing(self.db()) as c, c:
                 c.execute('INSERT INTO job VALUES(?,?,?,?)', (item['id'], idem, item['status'], json.dumps(item)))
         worker = threading.Thread(target=self.run, args=(item['id'],), daemon=True)
@@ -218,12 +234,63 @@ class Actualizaciones:
         try:
             if self.get(ident)['cancel_requested']:
                 raise Cancelled()
-            result = self.cliente.publicar(self.c, self.get(ident)['request_id'], self.recipe, avance=avance)
+            batch_count = 0
+            previous_work = None
+            progress = None
+            result = None
+            while True:
+                item = self.get(ident)
+                if item['cancel_requested']:
+                    raise Cancelled()
+                result = self.cliente.publicar(self.c, item['request_id'], self.recipe, avance=avance)
+                batch_count += 1
+                coverage = result.get('coverage')
+                if self.recipe == GROUP and coverage is not None:
+                    progress = self._merge_batch(progress, coverage, result.get('_batch_resources'))
+                    combined = self._combine_coverage(coverage, progress)
+                    work = self._batch_work(combined)
+                else:
+                    combined, work = coverage, set()
+                with self.guard:
+                    item = self.get(ident)
+                    item.update(published=True, batch_count=batch_count)
+                    if progress is not None:
+                        item['batch_progress'] = progress
+                    item['result'] = dict(published_at=now(), generation=result['generation_id'],
+                                          reused_bundle=bool(item['reused_bundle'] and batch_count == 1),
+                                          coverage=self._named(combined))
+                    self.save(item)
+
+                # Continue only for budget-deferred work within the declared scope, after measurable progress, and
+                # while the acquisition adapter confirms that its protective transport breaker remains closed.
+                attempted = (result.get('_batch_resources') or {}).get('attempted') or ()
+                if (self.recipe != GROUP or not work or not attempted or
+                        not result.get('_continuation_allowed') or batch_count >= MAX_GROUP_BATCHES):
+                    with self.guard:
+                        item = self.get(ident)
+                        item['continuation_pending'] = False
+                        self.save(item)
+                    break
+                if previous_work is not None and not (previous_work - work):
+                    with self.guard:
+                        item = self.get(ident)
+                        item['continuation_pending'] = False
+                        self.save(item)
+                    break
+                previous_work = work
+                next_request = str(uuid.uuid4())
+                with self.guard:
+                    item = self.get(ident)
+                    if item['cancel_requested']:
+                        raise Cancelled()
+                    item.update(request_id=next_request, acquisition_id=None, phase='acquiring', reused_bundle=False,
+                                batch_request_ids=item['batch_request_ids'] + [next_request], continuation_pending=True)
+                    item['result']['reused_bundle'] = False
+                    self.save(item)
             with self.guard:
                 item = self.get(ident)
                 item.update(status='completed', phase='finished', published=True, finished_at=now(),
-                            result=dict(published_at=now(), generation=result['generation_id'],
-                                        reused_bundle=item['reused_bundle'], coverage=self._named(result.get('coverage'))))
+                            resumable=False)
                 self.save(item)
         except Exception as error:
             text = str(error)
@@ -264,6 +331,87 @@ class Actualizaciones:
                 names[str(m['match_id'])] = f"{teams.get(m['home_team_id']) or '?'} – {teams.get(m['away_team_id']) or '?'}"
         return dict(coverage, names=names)
 
+    @staticmethod
+    def _round_number(value):
+        if isinstance(value, int) and not isinstance(value, bool):
+            return value
+        if isinstance(value, dict):
+            return Actualizaciones._round_number(value.get('number'))
+        if isinstance(value, str):
+            try:
+                return Actualizaciones._round_number(json.loads(value))
+            except (ValueError, TypeError):
+                return None
+        return None
+
+    def _batch_work(self, coverage):
+        """Budget-deferred work only, filtered to the installation's configured detail rounds."""
+        if not coverage:
+            return set()
+        work = {f"deferred:{ident}" for ident in coverage.get('deferred', ())}
+        for match in coverage.get('pending', ()):
+            for resource in match.get('resources', ()):
+                if resource.get('reason') == 'budget':
+                    work.add(f"sport:{match['event_id']}:{resource['resource']}")
+        comments = coverage.get('comments') or {}
+        pending_comments = {int(ident) for ident in comments.get('pending', ())}
+        detail_rounds = coverage.get('detail_rounds')
+        if pending_comments:
+            matches = self.c.capturar()._datos.get('partidos', ())
+            round_by_id = {int(match['match_id']): self._round_number(match.get('round')) for match in matches}
+            for ident in pending_comments:
+                if ident not in round_by_id:
+                    continue
+                if detail_rounds is None or round_by_id[ident] in detail_rounds:
+                    work.add(f"comments:{ident}")
+        return work
+
+    @staticmethod
+    def _merge_batch(progress, coverage, resources):
+        """Accumulate unique changes while preserving the final pending/kept state of the published generation."""
+        progress = progress or dict(new_resources=[], latest_kept_resources=[], new_comments=[],
+                                   latest_kept_comments=[], failed_comments={}, new_matches={},
+                                   near_rounds=[], far_rounds=[], failed_rounds=[])
+        resources = resources or {}
+        progress['new_resources'] = sorted(set(progress['new_resources']) | set(resources.get('new', ())))
+        progress['latest_kept_resources'] = sorted(set(resources.get('kept', ())))
+        comments = coverage.get('comments') or {}
+        progress['new_comments'] = sorted(set(progress['new_comments']) | set(comments.get('new', ())))
+        progress['latest_kept_comments'] = sorted(set(comments.get('kept', ())))
+        failures = progress['failed_comments']
+        for row in comments.get('failed', ()):
+            failures[str(row['id'])] = row['reason']
+        for ident in set(progress['new_comments']) | set(progress['latest_kept_comments']):
+            failures.pop(str(ident), None)
+        for row in coverage.get('new_matches', ()):
+            progress['new_matches'][str(row['id'])] = row
+        rounds = coverage.get('rounds') or {}
+        for key, field in (('near', 'near_rounds'), ('far', 'far_rounds'), ('failed', 'failed_rounds')):
+            progress[field] = sorted(set(progress[field]) | set(rounds.get(key, ())))
+        return progress
+
+    @staticmethod
+    def _combine_coverage(latest, progress):
+        if latest is None or progress is None:
+            return latest
+        combined = dict(latest)
+        new_resources = set(progress['new_resources'])
+        kept_resources = set(progress['latest_kept_resources']) - new_resources
+        combined['new'] = len(new_resources)
+        combined['kept'] = len(kept_resources)
+        combined['new_matches'] = [progress['new_matches'][key] for key in sorted(progress['new_matches'])]
+        combined['rounds'] = dict(near=progress['near_rounds'], far=progress['far_rounds'],
+                                  failed=progress['failed_rounds'])
+        comments = dict(latest.get('comments') or {})
+        new_comments = set(progress['new_comments'])
+        kept_comments = set(progress['latest_kept_comments']) - new_comments
+        comments.update(new=sorted(new_comments), kept=sorted(kept_comments),
+                        failed=[dict(id=int(ident), reason=reason)
+                                for ident, reason in sorted(progress['failed_comments'].items())
+                                if int(ident) not in new_comments and int(ident) not in kept_comments])
+        combined['comments'] = comments
+        return combined
+
     def public(self, item):
         if item is None:
             return None
@@ -279,8 +427,8 @@ class Actualizaciones:
     def actual(self):
         active = self._rows("WHERE state IN ('queued','running')")
         last = self._last_finished()
-        published = [r for r in self._rows("WHERE state='completed'")]
-        latest = max(published, key=lambda r: r['finished_at']) if published else None
+        published = [r for r in self._rows() if r.get('published') and r.get('result')]
+        latest = max(published, key=lambda r: (r.get('result') or {}).get('published_at') or r.get('finished_at') or '') if published else None
         return dict(scope=SCOPES[self.recipe], active_job=self.public(active[0] if active else None), last_job=self.public(last),
                     # With the coverage of that publication: its pending resources and deferred refreshes stay visible
                     # while their previous data are served, even after a later update failed or was cancelled.
