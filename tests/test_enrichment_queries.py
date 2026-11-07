@@ -53,7 +53,7 @@ class EnrichmentQueryTests(unittest.TestCase):
                 "INSERT INTO match (id, uid, status, created_in_run) VALUES (?, ?, 'active', 1)",
                 (match_id, f"00000000-0000-4000-8000-{match_id:012d}"),
             )
-        self._capture(connection, 10, 1, "16600011", "/event/16600011/comments/es-la", "a" * 64, 5)
+        self._capture(connection, 10, 1, "16600011", "/event/16600011/comments/es-la", "a" * 64, 7)
         self._capture(connection, 11, 1, "16600011", "/event/16600011/comments", "b" * 64, 1)
         self._capture(connection, 20, 2, "16600012", "/event/16600012/comments/es-la", "c" * 64, 1)
         for match_id, capture_id, source_path, digest, attempt_state in (
@@ -86,6 +86,17 @@ class EnrichmentQueryTests(unittest.TestCase):
              {"player": {"id": "0042", "name": "Jugador con ID textual"}}, "shot",
              {"surface": None},
              [("player", "shooter", '"0042"', None)]),
+            (10, "substitution", "playerSubstitution", "Sustitución.",
+             {"playerIn": {"id": 88, "name": "Entrante"},
+              "playerOut": {"id": 89, "name": "Saliente"}}, "substitution", {},
+             [("playerIn", "incoming_player", "88", "substituted_in"),
+              ("playerOut", "outgoing_player", "89", "substituted_out")]),
+            (10, "goal-with-assist", "scoreChange", "¡Gol! Asiste otro jugador.",
+             {"player": {"id": 51, "name": "Goleador"},
+              "assist1": {"id": 50, "name": "Asistente"}}, "goal",
+             {"goal_status": "valid", "goal_kind": "ordinary_goal"},
+             [("player", "scorer", "51", "scorer"),
+              ("assist1", "assistant", "50", "assist")]),
             (10, "cancelled", "varCancelledGoal", "Gol anulado tras revisión del VAR.",
              {"player": {"id": 43, "name": "Jugador 43"}}, "goal_review",
              {"goal_status": "disallowed"},
@@ -139,8 +150,8 @@ class EnrichmentQueryTests(unittest.TestCase):
 
     def test_only_hash_matched_current_spanish_captures_are_returned(self):
         page = query_enriched_comments(self.connection, source_event_id="16600011", limit=10)
-        self.assertEqual(page["total"], 5)
-        self.assertEqual(len(page["items"]), 5)
+        self.assertEqual(page["total"], 7)
+        self.assertEqual(len(page["items"]), 7)
         self.assertNotIn("english-history", {item["comment"]["source_comment_id"] for item in page["items"]})
         first = page["items"][0]
         self.assertEqual(first["provenance"]["source_path"], "/event/16600011/comments/es-la")
@@ -160,6 +171,16 @@ class EnrichmentQueryTests(unittest.TestCase):
         leading_zero = query_enriched_comments(self.connection, match_id=1, player_id="0042")
         self.assertEqual([item["comment"]["source_comment_id"] for item in leading_zero["items"]],
                          ["shot-leading-zero"])
+        self.assertEqual(
+            query_enriched_comments(self.connection, match_id=1, player_id="0042",
+                                    role="shooter")["total"],
+            1,
+        )
+        self.assertEqual(
+            query_enriched_comments(self.connection, match_id=1, player_id="42",
+                                    role="shooter")["total"],
+            1,
+        )
         self.assertEqual(query_enriched_comments(self.connection, match_id=1, role="scorer")["total"], 0)
         own_goal = query_enriched_comments(self.connection, match_id=1, role="own_goal_author")
         self.assertEqual(own_goal["total"], 1)
@@ -190,12 +211,44 @@ class EnrichmentQueryTests(unittest.TestCase):
 
         first = query_enriched_comments(self.connection, match_id=1, limit=2, offset=0)
         second = query_enriched_comments(self.connection, match_id=1, limit=2, offset=2)
-        self.assertEqual(first["total"], 5)
+        self.assertEqual(first["total"], 7)
         self.assertEqual(len(first["items"]), 2)
         self.assertEqual(len(second["items"]), 2)
         self.assertFalse(
             {item["comment"]["source_comment_id"] for item in first["items"]}
             & {item["comment"]["source_comment_id"] for item in second["items"]}
+        )
+
+    def test_player_and_role_filters_must_match_the_same_participant(self):
+        self.assertEqual(
+            query_enriched_comments(self.connection, match_id=1, player_id=88,
+                                    role="outgoing_player")["total"],
+            0,
+        )
+        self.assertEqual(
+            query_enriched_comments(self.connection, match_id=1, player_id="88",
+                                    role="incoming_player")["total"],
+            1,
+        )
+        self.assertEqual(
+            query_enriched_comments(self.connection, match_id=1, player_id=89,
+                                    role="outgoing_player")["total"],
+            1,
+        )
+        self.assertEqual(
+            query_enriched_comments(self.connection, match_id=1, player_id=50,
+                                    role="scorer")["total"],
+            0,
+        )
+        self.assertEqual(
+            query_enriched_comments(self.connection, match_id=1, player_id="50",
+                                    role="assistant")["total"],
+            1,
+        )
+        self.assertEqual(
+            query_enriched_comments(self.connection, match_id=1, player_id=51,
+                                    role="scorer")["total"],
+            1,
         )
 
     def test_connection_and_filters_are_read_only_and_validated(self):

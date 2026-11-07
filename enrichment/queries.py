@@ -133,8 +133,22 @@ def _filters(
         clauses.append("capture.source_event_id = ?")
         parameters.append(_positive_id(source_event_id, "source_event_id"))
 
-    if player_id is not None:
-        id_literals = _player_id_literals(player_id)
+    id_literals = _player_id_literals(player_id) if player_id is not None else None
+    role_text = _required_text(role, "role") if role is not None else None
+
+    if id_literals is not None and role_text is not None:
+        placeholders = ", ".join("?" for _ in id_literals)
+        clauses.append(
+            "EXISTS (SELECT 1 FROM narrative_comment_enrichment_participant AS matched_participant "
+            "WHERE matched_participant.capture_id = comment.capture_id "
+            "AND matched_participant.source_comment_id = comment.source_comment_id "
+            "AND matched_participant.enrichment_version = enrichment.enrichment_version "
+            f"AND matched_participant.source_id_json IN ({placeholders}) "
+            "AND matched_participant.role = ?)"
+        )
+        parameters.extend(id_literals)
+        parameters.append(role_text)
+    elif id_literals is not None:
         placeholders = ", ".join("?" for _ in id_literals)
         clauses.append(
             "EXISTS (SELECT 1 FROM narrative_comment_enrichment_participant AS player_participant "
@@ -148,22 +162,22 @@ def _filters(
     for value, field, sql_field in (
         (category, "category", "enrichment.category"),
         (original_type, "original_type", "comment.type"),
-        (role, "role", None),
     ):
         if value is None:
             continue
         text = _required_text(value, field)
-        if field == "role":
-            clauses.append(
-                "EXISTS (SELECT 1 FROM narrative_comment_enrichment_participant AS role_participant "
-                "WHERE role_participant.capture_id = comment.capture_id "
-                "AND role_participant.source_comment_id = comment.source_comment_id "
-                "AND role_participant.enrichment_version = enrichment.enrichment_version "
-                "AND role_participant.role = ?)"
-            )
-        else:
-            clauses.append(f"{sql_field} = ?")
+        clauses.append(f"{sql_field} = ?")
         parameters.append(text)
+
+    if role_text is not None and id_literals is None:
+        clauses.append(
+            "EXISTS (SELECT 1 FROM narrative_comment_enrichment_participant AS role_participant "
+            "WHERE role_participant.capture_id = comment.capture_id "
+            "AND role_participant.source_comment_id = comment.source_comment_id "
+            "AND role_participant.enrichment_version = enrichment.enrichment_version "
+            "AND role_participant.role = ?)"
+        )
+        parameters.append(role_text)
 
     if attributes is not None:
         if not isinstance(attributes, Mapping):
@@ -212,9 +226,11 @@ def query_enriched_comments(
     ``match_id`` is the internal SQLite match key; ``source_event_id`` is the
     original SofaScore event ID. ``player_id`` matches both integer and
     canonical decimal-string storage while preserving leading-zero IDs exactly.
-    Role filters use only the effective enriched role: ambiguous foul roles and
-    own goals therefore do not appear as confirmed foul actions or ordinary
-    scorers. The original ``normalizer_role`` is still returned for traceability.
+    When both a player and role are requested, they must belong to the same
+    participant row. Role filters use only the effective enriched role:
+    ambiguous foul roles and own goals therefore do not appear as confirmed
+    foul actions or ordinary scorers. The original ``normalizer_role`` is
+    still returned for traceability.
     """
     if not isinstance(connection, sqlite3.Connection):
         raise TypeError("connection must be a sqlite3.Connection")
