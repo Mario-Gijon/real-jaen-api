@@ -17,7 +17,7 @@ from .queries import (
     open_readonly_connection,
     query_enriched_comments,
 )
-from .store import DEFAULT_ENRICHMENT_VERSION
+from .store import DEFAULT_ENRICHMENT_VERSION, SELECTED_SPANISH_CAPTURE_PREDICATE
 
 
 router = APIRouter(tags=["enrichment"])
@@ -84,6 +84,36 @@ def _validate_enrichment_database(connection: sqlite3.Connection) -> None:
         raise HTTPException(
             status_code=503,
             detail={"error": "enrichment_unavailable", "reason": "rules_v1_not_found"},
+        )
+
+    try:
+        pending = connection.execute(
+            f"""SELECT 1
+                FROM narrative_comment_selection AS selection
+                JOIN narrative_comment_capture AS capture
+                  ON capture.id = selection.capture_id AND capture.match_id = selection.match_id
+                JOIN narrative_comment AS comment
+                  ON comment.capture_id = selection.capture_id
+                WHERE {SELECTED_SPANISH_CAPTURE_PREDICATE}
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM narrative_comment_enrichment AS enrichment
+                      WHERE enrichment.capture_id = comment.capture_id
+                        AND enrichment.source_comment_id = comment.source_comment_id
+                        AND enrichment.enrichment_version = ?
+                  )
+                LIMIT 1""",
+            (DEFAULT_ENRICHMENT_VERSION,),
+        ).fetchone()
+    except sqlite3.Error as error:
+        raise HTTPException(
+            status_code=503,
+            detail={"error": "enrichment_unavailable", "reason": "database_unavailable"},
+        ) from error
+    if pending is not None:
+        raise HTTPException(
+            status_code=503,
+            detail={"error": "enrichment_unavailable", "reason": "enrichment_incomplete"},
         )
 
 

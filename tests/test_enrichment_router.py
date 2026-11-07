@@ -105,6 +105,132 @@ class EnrichmentRouterTests(unittest.TestCase):
         self.assertEqual((second["total"], second["limit"], second["offset"]), (7, 2, 2))
         self.assertEqual((len(first["items"]), len(second["items"])), (2, 2))
 
+    def test_missing_selected_annotation_returns_503_until_copy_is_completed(self):
+        with tempfile.TemporaryDirectory(prefix="rj-enrichment-incomplete-") as directory:
+            database = Path(directory) / "incomplete.sqlite"
+            shutil.copy2(self.database, database)
+            self.application.state.enrichment_database_path = database
+
+            with closing(sqlite3.connect(database)) as connection, connection:
+                annotation = connection.execute(
+                    """SELECT category, attributes_json FROM narrative_comment_enrichment
+                       WHERE capture_id = 10 AND source_comment_id = 'own-goal'
+                         AND enrichment_version = 'rules-v1'"""
+                ).fetchone()
+                participants = connection.execute(
+                    """SELECT participant_position, source_role, role, source_id_json, normalizer_role
+                       FROM narrative_comment_enrichment_participant
+                       WHERE capture_id = 10 AND source_comment_id = 'own-goal'
+                         AND enrichment_version = 'rules-v1'"""
+                ).fetchall()
+                connection.execute(
+                    """DELETE FROM narrative_comment_enrichment_participant
+                       WHERE capture_id = 10 AND source_comment_id = 'own-goal'
+                         AND enrichment_version = 'rules-v1'"""
+                )
+                connection.execute(
+                    """DELETE FROM narrative_comment_enrichment
+                       WHERE capture_id = 10 AND source_comment_id = 'own-goal'
+                         AND enrichment_version = 'rules-v1'"""
+                )
+
+            status, unavailable = self.request(match_id=1)
+            self.assertEqual(status, 503)
+            self.assertEqual(unavailable["detail"]["reason"], "enrichment_incomplete")
+
+            with closing(sqlite3.connect(database)) as connection, connection:
+                connection.execute(
+                    """INSERT INTO narrative_comment_enrichment
+                       (capture_id, source_comment_id, enrichment_version, category, attributes_json)
+                       VALUES (10, 'own-goal', 'rules-v1', ?, ?)""",
+                    annotation,
+                )
+                connection.executemany(
+                    """INSERT INTO narrative_comment_enrichment_participant
+                       (capture_id, source_comment_id, enrichment_version, participant_position,
+                        source_role, role, source_id_json, normalizer_role)
+                       VALUES (10, 'own-goal', 'rules-v1', ?, ?, ?, ?, ?)""",
+                    [(position, source_role, role, source_id, normalizer_role)
+                     for position, source_role, role, source_id, normalizer_role in participants],
+                )
+
+            status, complete = self.request(match_id=1)
+            self.assertEqual(status, 200)
+            self.assertEqual(complete["total"], 7)
+
+    def test_newly_selected_comment_requires_enrichment_but_empty_capture_does_not(self):
+        with tempfile.TemporaryDirectory(prefix="rj-enrichment-new-selection-") as directory:
+            database = Path(directory) / "new-selection.sqlite"
+            shutil.copy2(self.database, database)
+            self.application.state.enrichment_database_path = database
+            source_path = "/event/16600012/comments/es-la"
+            digest = "e" * 64
+
+            with closing(sqlite3.connect(database)) as connection, connection:
+                connection.execute(
+                    """INSERT INTO narrative_comment_capture
+                       (id, match_id, provider, source_event_id, captured_at, http_status, availability,
+                        comment_count, response_sha256, response_json, source_path)
+                       VALUES (30, 2, 'sofascore', '16600012', '2026-11-06T10:00:00+00:00', 200,
+                               'available', 1, ?, '{\"comments\":[{\"id\":\"new-comment\"}]}', ?)""",
+                    (digest, source_path),
+                )
+                connection.execute(
+                    """UPDATE narrative_comment_selection
+                       SET capture_id = 30, selected_spanish_sha256 = ?,
+                           last_successful_source_path = ?, last_attempt_state = 'available'
+                       WHERE match_id = 2""",
+                    (digest, source_path),
+                )
+                connection.execute(
+                    """INSERT INTO narrative_comment
+                       (capture_id, source_comment_id, source_position, text, type, minute, period_name,
+                        is_home, home_score, away_score, incident_id, participants_json, context_json)
+                       VALUES (30, 'new-comment', 0, 'Comentario nuevo', 'yellowCard', 12, '1st',
+                               1, 0, 0, NULL, '{}', '{}')"""
+                )
+
+            status, unavailable = self.request(match_id=2)
+            self.assertEqual(status, 503)
+            self.assertEqual(unavailable["detail"]["reason"], "enrichment_incomplete")
+
+            with closing(sqlite3.connect(database)) as connection, connection:
+                connection.execute(
+                    """INSERT INTO narrative_comment_enrichment
+                       (capture_id, source_comment_id, enrichment_version, category, attributes_json)
+                       VALUES (30, 'new-comment', 'rules-v1', 'discipline', '{}')"""
+                )
+
+            status, complete = self.request(match_id=2)
+            self.assertEqual(status, 200)
+            self.assertEqual(complete["total"], 1)
+            self.assertEqual(complete["items"][0]["comment"]["source_comment_id"], "new-comment")
+
+            empty_database = Path(directory) / "empty-selection.sqlite"
+            shutil.copy2(self.database, empty_database)
+            self.application.state.enrichment_database_path = empty_database
+            empty_digest = "f" * 64
+            with closing(sqlite3.connect(empty_database)) as connection, connection:
+                connection.execute(
+                    """INSERT INTO narrative_comment_capture
+                       (id, match_id, provider, source_event_id, captured_at, http_status, availability,
+                        comment_count, response_sha256, response_json, source_path)
+                       VALUES (30, 2, 'sofascore', '16600012', '2026-11-06T10:00:00+00:00', 200,
+                               'empty', 0, ?, '{\"comments\":[]}', ?)""",
+                    (empty_digest, source_path),
+                )
+                connection.execute(
+                    """UPDATE narrative_comment_selection
+                       SET capture_id = 30, selected_spanish_sha256 = ?,
+                           last_successful_source_path = ?, last_attempt_state = 'empty'
+                       WHERE match_id = 2""",
+                    (empty_digest, source_path),
+                )
+
+            status, empty = self.request(match_id=2)
+            self.assertEqual(status, 200)
+            self.assertEqual(empty["total"], 0)
+
     def test_filter_validation_and_missing_migration_or_rules_are_controlled(self):
         status, invalid = self.request(attributes="[1,2]")
         self.assertEqual(status, 422)

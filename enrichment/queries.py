@@ -15,7 +15,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from .store import DEFAULT_ENRICHMENT_VERSION
+from .store import DEFAULT_ENRICHMENT_VERSION, SELECTED_SPANISH_CAPTURE_PREDICATE
 
 
 DEFAULT_PAGE_SIZE = 50
@@ -38,7 +38,7 @@ _ATTRIBUTE_FIELDS = frozenset({
     "conceding_player_text",
 })
 
-_FROM_WHERE = """
+_FROM_WHERE = f"""
 FROM narrative_comment AS comment
 JOIN narrative_comment_enrichment AS enrichment
   ON enrichment.capture_id = comment.capture_id
@@ -48,13 +48,7 @@ JOIN narrative_comment_selection AS selection
 JOIN narrative_comment_capture AS capture
   ON capture.id = selection.capture_id
  AND capture.match_id = selection.match_id
-WHERE selection.capture_id IS NOT NULL
-  AND selection.selected_spanish_sha256 = capture.response_sha256
-  AND capture.provider = 'sofascore'
-  AND capture.availability IN ('available', 'empty')
-  AND (capture.source_path = '/event/' || capture.source_event_id || '/comments/es-la'
-       OR selection.last_successful_source_path =
-          '/event/' || capture.source_event_id || '/comments/es-la')
+WHERE {SELECTED_SPANISH_CAPTURE_PREDICATE}
   AND enrichment.enrichment_version = ?
 """
 

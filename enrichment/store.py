@@ -17,15 +17,18 @@ from .pipeline import enrich_comment_pipeline
 
 DEFAULT_ENRICHMENT_VERSION = "rules-v1"
 _SPANISH_PATH = "'/event/' || capture.source_event_id || '/comments/es-la'"
+SELECTED_SPANISH_CAPTURE_PREDICATE = f"""
+    selection.capture_id IS NOT NULL
+    AND selection.selected_spanish_sha256 = capture.response_sha256
+    AND capture.provider = 'sofascore'
+    AND capture.availability IN ('available', 'empty')
+    AND (capture.source_path = {_SPANISH_PATH}
+         OR selection.last_successful_source_path = {_SPANISH_PATH})
+"""
 _SELECTED_CAPTURE = f"""
     JOIN narrative_comment_capture AS capture
       ON capture.id = selection.capture_id AND capture.match_id = selection.match_id
-    WHERE selection.capture_id IS NOT NULL
-      AND selection.selected_spanish_sha256 = capture.response_sha256
-      AND capture.provider = 'sofascore'
-      AND capture.availability IN ('available', 'empty')
-      AND (capture.source_path = {_SPANISH_PATH}
-           OR selection.last_successful_source_path = {_SPANISH_PATH})
+    WHERE {SELECTED_SPANISH_CAPTURE_PREDICATE}
 """
 
 
@@ -246,5 +249,6 @@ __all__ = [
     "DEFAULT_ENRICHMENT_VERSION",
     "EnrichmentConflict",
     "EnrichmentPersistenceError",
+    "SELECTED_SPANISH_CAPTURE_PREDICATE",
     "persist_selected_enrichments",
 ]
