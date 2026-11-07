@@ -181,7 +181,17 @@ class EnrichmentQueryTests(unittest.TestCase):
                                     role="shooter")["total"],
             1,
         )
-        self.assertEqual(query_enriched_comments(self.connection, match_id=1, role="scorer")["total"], 0)
+        scorers = query_enriched_comments(self.connection, match_id=1, role="scorer")
+        self.assertEqual(scorers["total"], 1)
+        self.assertEqual(
+            [item["comment"]["source_comment_id"] for item in scorers["items"]],
+            ["goal-with-assist"],
+        )
+        self.assertEqual(
+            query_enriched_comments(self.connection, match_id=1, player_id=42,
+                                    role="scorer")["total"],
+            0,
+        )
         own_goal = query_enriched_comments(self.connection, match_id=1, role="own_goal_author")
         self.assertEqual(own_goal["total"], 1)
         self.assertEqual(own_goal["items"][0]["enrichment"]["participants"][0]["normalizer_role"], "scorer")
@@ -240,6 +250,10 @@ class EnrichmentQueryTests(unittest.TestCase):
                                     role="scorer")["total"],
             0,
         )
+        assistant = query_enriched_comments(self.connection, match_id=1, player_id=50,
+                                            role="assistant")
+        self.assertEqual(assistant["total"], 1)
+        self.assertEqual(assistant["items"][0]["comment"]["source_comment_id"], "goal-with-assist")
         self.assertEqual(
             query_enriched_comments(self.connection, match_id=1, player_id="50",
                                     role="assistant")["total"],

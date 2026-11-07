@@ -7,6 +7,7 @@ import sqlite3
 import sys
 import tempfile
 import unittest
+from contextlib import closing
 from pathlib import Path
 from urllib.parse import urlencode
 
@@ -112,7 +113,7 @@ class EnrichmentRouterTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="rj-enrichment-router-") as directory:
             old_revision_copy = Path(directory) / "old-revision.sqlite"
             shutil.copy2(self.database, old_revision_copy)
-            with sqlite3.connect(old_revision_copy) as connection:
+            with closing(sqlite3.connect(old_revision_copy)) as connection, connection:
                 connection.execute("UPDATE alembic_version SET version_num = '0007'")
             self.application.state.enrichment_database_path = old_revision_copy
             status, unavailable = self.request(match_id=1)
@@ -121,7 +122,7 @@ class EnrichmentRouterTests(unittest.TestCase):
 
             no_rules_copy = Path(directory) / "no-rules.sqlite"
             shutil.copy2(self.database, no_rules_copy)
-            with sqlite3.connect(no_rules_copy) as connection:
+            with closing(sqlite3.connect(no_rules_copy)) as connection, connection:
                 connection.execute("DELETE FROM narrative_comment_enrichment_participant")
                 connection.execute("DELETE FROM narrative_comment_enrichment")
             self.application.state.enrichment_database_path = no_rules_copy
