@@ -10,6 +10,7 @@ import json
 import sqlite3
 import uuid
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 
 from .pipeline import enrich_comment_pipeline
@@ -130,6 +131,15 @@ def _check_schema(connection: sqlite3.Connection) -> None:
             raise EnrichmentPersistenceError(f"schema for {table} is incomplete; migration 0008 is required")
 
 
+def _require_revision_0008(connection: sqlite3.Connection) -> None:
+    try:
+        revisions = {row[0] for row in connection.execute("SELECT version_num FROM alembic_version")}
+    except sqlite3.Error as error:
+        raise EnrichmentPersistenceError("Alembic revision 0008 is required for enrichment") from error
+    if revisions != {"0008"}:
+        raise EnrichmentPersistenceError("Alembic revision 0008 is required for enrichment")
+
+
 def _selected_annotation(connection: sqlite3.Connection, key: tuple[int, str, str]):
     capture_id, source_comment_id, version = key
     row = connection.execute(
@@ -245,10 +255,81 @@ def persist_selected_enrichments(
     }
 
 
+def ensure_selected_enrichments_complete(
+    connection: sqlite3.Connection,
+    enrichment_version: str = DEFAULT_ENRICHMENT_VERSION,
+) -> None:
+    """Reject a candidate if a selected Spanish comment lacks the requested annotation version.
+
+    Selected empty captures are complete: only existing comment rows participate in this check.
+    """
+    if not isinstance(connection, sqlite3.Connection):
+        raise TypeError("connection must be a sqlite3.Connection")
+    if not isinstance(enrichment_version, str) or not enrichment_version.strip():
+        raise ValueError("enrichment_version must be non-empty text")
+    _check_schema(connection)
+    pending = connection.execute(
+        """SELECT 1
+           FROM narrative_comment AS comment
+           JOIN narrative_comment_selection AS selection ON selection.capture_id = comment.capture_id
+           """ + _SELECTED_CAPTURE + " AND capture.availability = 'available' "
+        """AND NOT EXISTS (
+               SELECT 1
+               FROM narrative_comment_enrichment AS enrichment
+               WHERE enrichment.capture_id = comment.capture_id
+                 AND enrichment.source_comment_id = comment.source_comment_id
+                 AND enrichment.enrichment_version = ?
+           )
+           LIMIT 1""",
+        (enrichment_version,),
+    ).fetchone()
+    if pending is not None:
+        raise EnrichmentPersistenceError(
+            f"selected Spanish comments are missing {enrichment_version} annotations"
+        )
+
+
+def persist_candidate_enrichments(
+    database_path: str | Path,
+    enrichment_version: str = DEFAULT_ENRICHMENT_VERSION,
+) -> dict[str, int | str]:
+    """Persist and verify enrichment in an unpublished candidate database.
+
+    The caller must pass a coordinator candidate, never the active database. This boundary owns the SQLite
+    connection and transaction so the caller can calculate the candidate description only after a durable commit.
+    """
+    connection = None
+    try:
+        path = Path(database_path).expanduser().resolve()
+        connection = sqlite3.connect(f"{path.as_uri()}?mode=rw", uri=True, timeout=10)
+        connection.execute("PRAGMA foreign_keys = ON")
+        if connection.execute("PRAGMA foreign_keys").fetchone()[0] != 1:
+            raise EnrichmentPersistenceError("SQLite foreign keys are unavailable for enrichment")
+        _check_schema(connection)
+        _require_revision_0008(connection)
+        connection.execute("BEGIN IMMEDIATE")
+        report = persist_selected_enrichments(connection, enrichment_version)
+        ensure_selected_enrichments_complete(connection, enrichment_version)
+        foreign_key_error = connection.execute("PRAGMA foreign_key_check").fetchone()
+        if foreign_key_error is not None:
+            raise EnrichmentPersistenceError("SQLite foreign key check failed after enrichment")
+        connection.commit()
+        return report
+    except BaseException:
+        if connection is not None:
+            connection.rollback()
+        raise
+    finally:
+        if connection is not None:
+            connection.close()
+
+
 __all__ = [
     "DEFAULT_ENRICHMENT_VERSION",
     "EnrichmentConflict",
     "EnrichmentPersistenceError",
     "SELECTED_SPANISH_CAPTURE_PREDICATE",
+    "ensure_selected_enrichments_complete",
+    "persist_candidate_enrichments",
     "persist_selected_enrichments",
 ]

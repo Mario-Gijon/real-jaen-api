@@ -334,6 +334,13 @@ class Coordinador:
                 comentario = import_group_bundle(candidata, comentarios[0])
                 if isinstance(informe, dict):
                     informe['comments_persisted'] = comentario
+            # Enrichment belongs to the unpublished candidate. It must commit before the semantic description
+            # and generation snapshot are calculated, even when this job did not import a comments bundle.
+            from enrichment.store import persist_candidate_enrichments
+            enriquecimiento = persist_candidate_enrichments(candidata, 'rules-v1')
+            if isinstance(informe, dict):
+                informe['enrichment_persisted'] = enriquecimiento
+            self._frontera('enrichment_committed')
             self._frontera('candidate_committed')
             descripcion = comprobar(candidata)
             self._exigir_reglas(meta)
