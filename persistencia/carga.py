@@ -28,6 +28,19 @@ from persistencia.bloqueo import bloquear
 
 RAIZ = Path(__file__).resolve().parent.parent
 PROVEEDOR = 'sofascore'
+# Reglas que determinan o persisten las anotaciones. Los módulos de consultas y
+# HTTP quedan fuera: solo leen/exponen los resultados ya generados.
+ARCHIVOS_ENRIQUECIMIENTO = (
+    'enrichment/__init__.py',
+    'enrichment/corner_attributes.py',
+    'enrichment/foul_attributes.py',
+    'enrichment/goal_attributes.py',
+    'enrichment/normalizer.py',
+    'enrichment/pipeline.py',
+    'enrichment/shot_attributes.py',
+    'enrichment/store.py',
+    'enrichment/taxonomy.py',
+)
 # Espacio de nombres fijo de los uid (UUIDv5 del primer id externo; se asigna una vez y no se recalcula).
 ESPACIO_UID = uuid.uuid5(uuid.NAMESPACE_URL, 'urn:api-real-jaen:identidad')
 OBLIGATORIOS = ('equipos', 'jugadores', 'partidos', 'jugador_partido', 'originales', 'discrepancias', 'exportaciones',
@@ -62,8 +75,9 @@ def literal(valor):
 def archivos_de_codigo():
     """Los archivos que implementan reglas, esquema y carga (rutas relativas, en orden)."""
     propios = {'api.py', 'queries.py', 'importar.py', 'alembic.ini', 'requirements-sql.txt'}
+    propios |= set(ARCHIVOS_ENRIQUECIMIENTO)
     propios |= {p.relative_to(RAIZ).as_posix() for p in (RAIZ / 'persistencia').rglob('*') if p.is_file()
-                and '__pycache__' not in p.parts}
+                and '__pycache__' not in p.parts and p.suffix in {'.py', '.mako'}}
     return sorted(propios)
 
 
