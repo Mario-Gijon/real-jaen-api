@@ -35,17 +35,25 @@ from test_enrichment_queries import EnrichmentQueryTests as QueryDatabaseFixture
 async def _asgi_get(application, target: str):
     path, separator, query = target.partition("?")
     sent = []
-    received = False
+    received_request = False
+    response_complete = asyncio.Event()
 
     async def receive():
-        nonlocal received
-        if not received:
-            received = True
+        nonlocal received_request
+        if not received_request:
+            received_request = True
             return {"type": "http.request", "body": b"", "more_body": False}
+        # An ASGI server reports a disconnect only after the client has gone away.
+        # Returning it immediately races the synchronous endpoint and can cancel
+        # middleware while the response is still being produced.
+        await response_complete.wait()
         return {"type": "http.disconnect"}
 
     async def send(message):
         sent.append(message)
+        if (message["type"] == "http.response.body"
+                and not message.get("more_body", False)):
+            response_complete.set()
 
     scope = {
         "type": "http",
@@ -60,8 +68,31 @@ async def _asgi_get(application, target: str):
         "server": ("testserver", 80),
         "client": ("127.0.0.1", 12345),
         "root_path": "",
+        "app": application,
     }
-    await application(scope, receive, send)
+    # ASGI servers schedule each connection as a task. In the restricted local
+    # runner, a selector wakeup from AnyIO's worker thread can be missed while
+    # the event loop is idle, so this small timer mirrors the next server I/O
+    # wakeup without replacing the synchronous handler or its threadpool path.
+    task = asyncio.create_task(application(scope, receive, send))
+
+    async def event_loop_pulse():
+        while not task.done():
+            await asyncio.sleep(0.005)
+
+    pulse = asyncio.create_task(event_loop_pulse())
+    try:
+        done, _ = await asyncio.wait({task}, timeout=5)
+        if not done:
+            raise TimeoutError(f"ASGI request did not complete: {target}")
+        task.result()
+    finally:
+        response_complete.set()
+        pulse.cancel()
+        await asyncio.gather(pulse, return_exceptions=True)
+        if not task.done():
+            task.cancel()
+            await asyncio.wait({task}, timeout=1)
     start = next(message for message in sent if message["type"] == "http.response.start")
     body = b"".join(message.get("body", b"") for message in sent
                     if message["type"] == "http.response.body")
