@@ -2,7 +2,9 @@
 
 Run with ``uvicorn app:app``. By default this reads ``datos/``. Set
 ``SPORTS_DATA_STORAGE=sql`` and ``SPORTS_DATA_DB`` to read one SQLite generation;
-the cooperative lock is kept until the ASGI app shuts down.
+the cooperative lock is kept until the ASGI app shuts down. The separate
+read-only enrichment endpoint is registered only with
+``SPORTS_DATA_ENRICHMENT_ENABLED=1`` and uses ``SPORTS_DATA_ENRICHMENT_DB``.
 """
 from contextlib import ExitStack, asynccontextmanager
 import hmac
@@ -66,6 +68,13 @@ def _control_enabled():
     value = os.environ.get('SPORTS_DATA_CONTROL', '0')
     if value not in ('0', '1'):
         raise ValueError('SPORTS_DATA_CONTROL debe ser 0 o 1')
+    return value == '1'
+
+
+def _enrichment_enabled():
+    value = os.environ.get('SPORTS_DATA_ENRICHMENT_ENABLED', '0')
+    if value not in ('0', '1'):
+        raise ValueError('SPORTS_DATA_ENRICHMENT_ENABLED debe ser 0 o 1')
     return value == '1'
 
 
@@ -293,6 +302,7 @@ def fallback(request: Request, path: str):
 def create_app(data=None, *, control_mode=None) -> FastAPI:
     """Build an app, optionally with a preloaded dataset for isolated tests."""
     control_mode = _control_enabled() if control_mode is None else control_mode
+    enrichment_enabled = _enrichment_enabled()
     if control_mode and data is not None:
         raise ValueError('El modo control necesita la generación de SQLite, no datos precargados')
 
@@ -313,6 +323,14 @@ def create_app(data=None, *, control_mode=None) -> FastAPI:
     application = FastAPI(title='Sports Data API', lifespan=lifespan)
     if control_mode:
         application.include_router(updates_router)
+    if enrichment_enabled:
+        # This router has its own explicit, read-only database path. It is added
+        # before router's catch-all fallback and does not join the coordinator lifecycle.
+        from enrichment.router import router as enrichment_router
+
+        enrichment_database = os.environ.get('SPORTS_DATA_ENRICHMENT_DB')
+        application.state.enrichment_database_path = Path(enrichment_database) if enrichment_database else None
+        application.include_router(enrichment_router)
     application.include_router(router)
     # The old server accepts trailing slashes without redirecting; the fallback
     # route then lets ``consultar`` decide their exact result.
