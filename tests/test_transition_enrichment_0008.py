@@ -161,7 +161,8 @@ class TransitionEnrichment0008Tests(unittest.TestCase):
 
     def _write_coherent_package(self, package, *, coordinator_state="completed", phase="completed",
                                 description_mismatch=False, code_mismatch=False, scope_mismatch=False,
-                                missing_control=False, sidecar=False, incomplete_manifest=False):
+                                missing_control=False, sidecar=False, incomplete_manifest=False,
+                                scope_bytes=None, code_hash=None):
         package.mkdir(parents=True)
         bundle = package / transition.COHERENT_BUNDLE_NAME
         state = package / "build"
@@ -171,8 +172,8 @@ class TransitionEnrichment0008Tests(unittest.TestCase):
         updates = Path(str(base) + ".actualizaciones")
         updates.mkdir(parents=True)
         generation = str(uuid.uuid4())
-        scope_hash = "b" * 64
-        code_hash = "a" * 64
+        scope_hash = hashlib.sha256(scope_bytes).hexdigest() if scope_bytes is not None else "b" * 64
+        code_hash = code_hash or "a" * 64
         confirmed_code_hash = "c" * 64 if code_mismatch else code_hash
         manifest_scope_hash = "d" * 64 if scope_mismatch else scope_hash
         description = sqlite.describir(base)
@@ -181,6 +182,7 @@ class TransitionEnrichment0008Tests(unittest.TestCase):
         with closing(sqlite3.connect(coordinator)) as connection:
             connection.executescript(
                 "CREATE TABLE trabajo(id TEXT PRIMARY KEY, estado TEXT NOT NULL, detalle TEXT NOT NULL);"
+                "CREATE UNIQUE INDEX unico_activo ON trabajo((1)) WHERE estado IN ('queued','running');"
                 "CREATE TABLE confirmado(id INTEGER PRIMARY KEY CHECK(id=1), detalle TEXT NOT NULL);"
             )
             detail = {"id": "coord-1", "estado": coordinator_state, "fase": phase}
