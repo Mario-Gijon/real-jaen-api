@@ -10,6 +10,7 @@ RUN pip install --no-cache-dir -r requirements-fastapi.txt \
 COPY --chown=10001:10001 api.py app.py control.py importar.py queries.py ambito.json alembic.ini productores-adquisicion.json ./
 COPY --chown=10001:10001 acquisition/group_plan.py ./acquisition/group_plan.py
 COPY --chown=10001:10001 persistencia ./persistencia
+COPY --chown=10001:10001 enrichment ./enrichment
 COPY --chown=10001:10001 scripts ./scripts
 USER 10001:10001
 EXPOSE 8002

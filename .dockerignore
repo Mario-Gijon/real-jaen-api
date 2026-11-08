@@ -17,6 +17,8 @@
 !acquisition/group_plan.py
 !persistencia/
 !persistencia/**
+!enrichment/
+!enrichment/*.py
 !scripts/initialize_snapshot.py
 !scripts/check_container.py
 !scripts/adopt_coordinator_fingerprint.py
