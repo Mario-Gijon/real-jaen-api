@@ -4,7 +4,9 @@ Run with ``uvicorn app:app``. By default this reads ``datos/``. Set
 ``SPORTS_DATA_STORAGE=sql`` and ``SPORTS_DATA_DB`` to read one SQLite generation;
 the cooperative lock is kept until the ASGI app shuts down. The separate
 read-only enrichment endpoint is registered only with
-``SPORTS_DATA_ENRICHMENT_ENABLED=1`` and uses ``SPORTS_DATA_ENRICHMENT_DB``.
+``SPORTS_DATA_ENRICHMENT_ENABLED=1``. Outside control mode it reads the explicitly
+configured ``SPORTS_DATA_ENRICHMENT_DB``; control mode reads a retained snapshot
+of the coordinator generation captured for each request.
 """
 from contextlib import ExitStack, asynccontextmanager
 import hmac
@@ -109,7 +111,10 @@ def _load_control(resources):
         modo=mode,
         restriccion=restriccion(os.environ),
     )
-    coordinator = Coordinador(database, scope)
+    if _enrichment_enabled():
+        coordinator = Coordinador(database, scope, enrichment_snapshots=True)
+    else:
+        coordinator = Coordinador(database, scope)
     resources.enter_context(coordinator)
     updates = Actualizaciones(coordinator, client, recipe=os.environ.get('RJ_UPDATE_RECIPE', RECIPE))
     # ExitStack closes the update worker before releasing the coordinator's base lock.
@@ -324,12 +329,14 @@ def create_app(data=None, *, control_mode=None) -> FastAPI:
     if control_mode:
         application.include_router(updates_router)
     if enrichment_enabled:
-        # This router has its own explicit, read-only database path. It is added
-        # before router's catch-all fallback and does not join the coordinator lifecycle.
+        # In control mode the route captures the coordinator's current generation
+        # snapshot; otherwise it uses the explicit isolated database path.
         from enrichment.router import router as enrichment_router
 
         enrichment_database = os.environ.get('SPORTS_DATA_ENRICHMENT_DB')
-        application.state.enrichment_database_path = Path(enrichment_database) if enrichment_database else None
+        application.state.enrichment_database_path = (
+            Path(enrichment_database) if enrichment_database and not control_mode else None
+        )
         application.include_router(enrichment_router)
     application.include_router(router)
     # The old server accepts trailing slashes without redirecting; the fallback

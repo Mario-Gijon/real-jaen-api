@@ -23,12 +23,16 @@ from .store import DEFAULT_ENRICHMENT_VERSION, SELECTED_SPANISH_CAPTURE_PREDICAT
 router = APIRouter(tags=["enrichment"])
 
 
-def get_enrichment_database_path(request: Request) -> Path:
+def get_enrichment_database_path(request: Request) -> Path | None:
     """Resolve the database explicitly configured on this application.
 
-    Tests and future application wiring may override this dependency. The
-    main sports-data app intentionally does not install a database path yet.
+    Tests may override this dependency. In coordinator mode the route instead
+    obtains a retained snapshot after validating the query parameters.
     """
+    if getattr(request.app.state, "control_mode", False):
+        # A coordinator-backed request resolves its path only after the handler
+        # has validated filters and atomically retained the current generation.
+        return None
     database_path = getattr(request.app.state, "enrichment_database_path", None)
     if database_path is None:
         raise HTTPException(
@@ -144,7 +148,7 @@ def enriched_comments(
     ),
     limit: int = Query(default=DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
     offset: int = Query(default=0, ge=0),
-    database_path: Path = Depends(get_enrichment_database_path),
+    database_path: Path | None = Depends(get_enrichment_database_path),
 ) -> dict[str, Any]:
     """Query one page of selected Spanish comments enriched with rules-v1."""
     try:
@@ -155,40 +159,61 @@ def enriched_comments(
             detail={"error": "invalid_filter", "reason": str(error)},
         ) from error
 
-    try:
-        connection = open_readonly_connection(database_path)
-    except (OSError, sqlite3.Error) as error:
+    lease = None
+    if getattr(request.app.state, "control_mode", False):
+        try:
+            coordinator = request.app.state.coordinator
+            lease = coordinator.capturar(enrichment=True)
+            database_path = lease.path
+        except Exception as error:
+            raise HTTPException(
+                status_code=503,
+                detail={"error": "enrichment_unavailable", "reason": "generation_unavailable"},
+            ) from error
+    elif database_path is None:
         raise HTTPException(
             status_code=503,
-            detail={"error": "enrichment_unavailable", "reason": "database_unavailable"},
-        ) from error
+            detail={"error": "enrichment_unavailable", "reason": "database_not_configured"},
+        )
 
-    with closing(connection):
+    try:
         try:
-            _validate_enrichment_database(connection)
-            return query_enriched_comments(
-                connection,
-                match_id=match_id,
-                source_event_id=source_event_id,
-                player_id=player_id,
-                category=category,
-                original_type=original_type,
-                role=role,
-                attributes=parsed_attributes,
-                enrichment_version=DEFAULT_ENRICHMENT_VERSION,
-                limit=limit,
-                offset=offset,
-            )
-        except EnrichmentQueryError as error:
-            raise HTTPException(
-                status_code=422,
-                detail={"error": "invalid_filter", "reason": str(error)},
-            ) from error
-        except sqlite3.Error as error:
+            connection = open_readonly_connection(database_path)
+        except (OSError, sqlite3.Error) as error:
             raise HTTPException(
                 status_code=503,
                 detail={"error": "enrichment_unavailable", "reason": "database_unavailable"},
             ) from error
+
+        with closing(connection):
+            try:
+                _validate_enrichment_database(connection)
+                return query_enriched_comments(
+                    connection,
+                    match_id=match_id,
+                    source_event_id=source_event_id,
+                    player_id=player_id,
+                    category=category,
+                    original_type=original_type,
+                    role=role,
+                    attributes=parsed_attributes,
+                    enrichment_version=DEFAULT_ENRICHMENT_VERSION,
+                    limit=limit,
+                    offset=offset,
+                )
+            except EnrichmentQueryError as error:
+                raise HTTPException(
+                    status_code=422,
+                    detail={"error": "invalid_filter", "reason": str(error)},
+                ) from error
+            except sqlite3.Error as error:
+                raise HTTPException(
+                    status_code=503,
+                    detail={"error": "enrichment_unavailable", "reason": "database_unavailable"},
+                ) from error
+    finally:
+        if lease is not None:
+            lease.release()
 
 
 __all__ = ["get_enrichment_database_path", "router"]

@@ -19,6 +19,7 @@ import api
 from persistencia import carga, lectura, sincronizacion, sqlite
 from persistencia.bloqueo import bloquear, ruta_normalizada
 from persistencia.comentarios import load_current_comments, match_comments_response
+from persistencia.enrichment_snapshot import EnrichmentSnapshot, EnrichmentSnapshotRegistry
 
 
 class CoordinacionRechazada(RuntimeError):
@@ -54,6 +55,7 @@ class Generacion:
     _datos: dict
     _comentarios: dict
     comments_enabled: bool = True
+    enrichment_snapshot: EnrichmentSnapshot | None = None
 
     def consultar(self, ruta):
         # Devuelve una respuesta propia: los consumidores no pueden mutar la instantánea.
@@ -65,26 +67,33 @@ class Generacion:
         return estado, json.loads(json.dumps(cuerpo, ensure_ascii=False, allow_nan=False))
 
 
-def preparar(base, ambito, ident):
+def preparar(base, ambito, ident, *, enrichment_snapshots=None):
     from persistencia.comentarios import comments_schema_ready
-    generacion = Generacion(ident, lectura.cargar_desde_base(base, ambito), load_current_comments(base),
-                            comments_schema_ready(base))
-    rutas = ['/health', '/api/v1/scope']
-    for entidad, plural, clave, sufijos in (
-        ('teams', 'equipos', 'team_id', ('', '/players', '/matches', '/performance', '/player-stats')),
-        ('players', 'jugadores', 'player_id', ('', '/matches')),
-        ('matches', 'partidos', 'match_id', ('', '/statistics', '/lineups', '/incidents')),
-    ):
-        rutas.extend(f'/api/v1/{entidad}/{fila[clave]}{sufijo}'
-                     for fila in generacion._datos[plural] for sufijo in sufijos)
-    for ruta in rutas:
-        generacion.consultar(ruta)
-    for fila in generacion._datos['partidos']:
-        public_match_id = f"sofascore-match-{fila['match_id']}"
-        status, _ = generacion.consultar_comentarios(public_match_id)
-        if status != 200:
-            raise CoordinacionRechazada(f'No se pudo preparar la instantánea de comentarios de {public_match_id}')
-    return generacion
+    snapshot = enrichment_snapshots.create(base, ident) if enrichment_snapshots is not None else None
+    source = snapshot.path if snapshot is not None else base
+    try:
+        generacion = Generacion(ident, lectura.cargar_desde_base(source, ambito), load_current_comments(source),
+                                comments_schema_ready(source), snapshot)
+        rutas = ['/health', '/api/v1/scope']
+        for entidad, plural, clave, sufijos in (
+            ('teams', 'equipos', 'team_id', ('', '/players', '/matches', '/performance', '/player-stats')),
+            ('players', 'jugadores', 'player_id', ('', '/matches')),
+            ('matches', 'partidos', 'match_id', ('', '/statistics', '/lineups', '/incidents')),
+        ):
+            rutas.extend(f'/api/v1/{entidad}/{fila[clave]}{sufijo}'
+                         for fila in generacion._datos[plural] for sufijo in sufijos)
+        for ruta in rutas:
+            generacion.consultar(ruta)
+        for fila in generacion._datos['partidos']:
+            public_match_id = f"sofascore-match-{fila['match_id']}"
+            status, _ = generacion.consultar_comentarios(public_match_id)
+            if status != 200:
+                raise CoordinacionRechazada(f'No se pudo preparar la instantánea de comentarios de {public_match_id}')
+        return generacion
+    except BaseException:
+        if snapshot is not None:
+            snapshot.release_owner()
+        raise
 
 
 class Coordinador:
@@ -93,11 +102,14 @@ class Coordinador:
     exportaciones: secuencia (ruta fixture JSONL, equipo externo); calendarios/fichas: rutas.
     El callback privado _frontera permite pruebas de terminación, no ejecuta comandos.
     """
-    def __init__(self, base, ambito, *, reserva=64 * 1024 * 1024, _frontera=None):
+    def __init__(self, base, ambito, *, reserva=64 * 1024 * 1024, _frontera=None,
+                 enrichment_snapshots=False):
         self.base = ruta_normalizada(base)
         self.ambito = Path(ambito).resolve()
         self.directorio = self.base.with_name(self.base.name + '.actualizaciones')
         self.journal = self.directorio / 'jobs.sqlite'
+        self._enrichment_snapshots = (EnrichmentSnapshotRegistry(self.directorio / 'enrichment-snapshots')
+                                      if enrichment_snapshots else None)
         self.reserva = reserva
         self._frontera = _frontera or (lambda nombre: None)
         self._puerta = threading.Lock()
@@ -111,6 +123,10 @@ class Coordinador:
         self._listo.wait()
         if self._inicio_error:
             self._hilo.join()
+            actual = getattr(self, '_actual', None)
+            if actual is not None:
+                self._liberar_generacion(actual)
+                self._actual = None
             raise self._inicio_error
 
     def _db(self):
@@ -204,7 +220,13 @@ class Coordinador:
         self._exigir_reglas(meta)
         if descripcion != meta['descripcion']:
             raise CoordinacionRechazada('El principal no coincide con la generacion confirmada')
-        self._actual = preparar(self.base, self.ambito, meta['generacion'])
+        if self._enrichment_snapshots is not None:
+            # The previous process no longer owns the base lock. Rebuild a snapshot
+            # from the durable confirmed generation and remove only stale snapshot
+            # directories; no candidate or journal evidence is touched.
+            self._enrichment_snapshots.cleanup_after_restart()
+        self._actual = preparar(self.base, self.ambito, meta['generacion'],
+                                enrichment_snapshots=self._enrichment_snapshots)
 
     def _propietario(self):
         try:
@@ -222,11 +244,34 @@ class Coordinador:
         finally:
             self._listo.set()
 
-    def capturar(self):
+    def capturar(self, *, enrichment=False):
         with self._puerta:
-            if self._cerrado or self._bloqueado or not self._hilo.is_alive():
-                raise CoordinacionRechazada(str(self._bloqueado or 'Coordinador cerrado o propietario no disponible'))
-            return self._actual
+            generacion = self._capturar_locked()
+            if not enrichment:
+                return generacion
+            if generacion.enrichment_snapshot is None:
+                raise CoordinacionRechazada('La instantánea de enrichment no está habilitada')
+            try:
+                return generacion.enrichment_snapshot.retain()
+            except RuntimeError as error:
+                raise CoordinacionRechazada('La instantánea de enrichment ya no está disponible') from error
+
+    def _capturar_locked(self):
+        if self._cerrado or self._bloqueado or not self._hilo.is_alive():
+            raise CoordinacionRechazada(str(self._bloqueado or 'Coordinador cerrado o propietario no disponible'))
+        return self._actual
+
+    @staticmethod
+    def _liberar_generacion(generacion):
+        if generacion is not None and generacion.enrichment_snapshot is not None:
+            generacion.enrichment_snapshot.release_owner()
+
+    def _instalar_generacion(self, generacion):
+        anterior = self._actual
+        if anterior is generacion:
+            return None
+        self._actual = generacion
+        return anterior
 
     def solicitar(self, *, exportaciones=(), calendarios=(), fichas=(), comentarios=(), identificador=None,
                   generacion_esperada=None):
@@ -306,6 +351,7 @@ class Coordinador:
     def _ejecutar(self, ident):
         trabajo = self._leer(ident)
         nueva = None
+        retiradas = []
         try:
             meta = self._meta()
             if trabajo.get('generacion_base') is not None and trabajo['generacion_base'] != meta['generacion']:
@@ -345,7 +391,8 @@ class Coordinador:
             descripcion = comprobar(candidata)
             self._exigir_reglas(meta)
             generacion = str(uuid.uuid4())
-            nueva = preparar(candidata, self.ambito, generacion)
+            nueva = preparar(candidata, self.ambito, generacion,
+                             enrichment_snapshots=self._enrichment_snapshots)
             self._frontera('snapshot_prepared')
             trabajo.update(fase='publishing', esperada=descripcion, generacion=generacion, resultado=informe)
             self._guardar(trabajo)
@@ -370,9 +417,13 @@ class Coordinador:
                         self._bloqueado = CoordinacionRechazada(f'Confirmacion incierta: {lectura_error}')
                         raise
                     if confirmado:
-                        self._actual = nueva
+                        anterior = self._instalar_generacion(nueva)
+                        if anterior is not None:
+                            retiradas.append(anterior)
                     raise
-                self._actual = nueva
+                anterior = self._instalar_generacion(nueva)
+                if anterior is not None:
+                    retiradas.append(anterior)
                 self._frontera('swapped')
         except Exception as e:
             try:
@@ -380,7 +431,9 @@ class Coordinador:
                 durable = self._leer(ident)
                 if durable['estado'] == 'completed':
                     with self._puerta:
-                        self._actual = nueva
+                        anterior = self._instalar_generacion(nueva)
+                        if anterior is not None:
+                            retiradas.append(anterior)
                     return
                 if durable['fase'] in ('publishing', 'recovering'):
                     with self._puerta:
@@ -389,6 +442,14 @@ class Coordinador:
                 self._guardar(durable)
             except Exception as recuperacion:
                 self._bloqueado = CoordinacionRechazada(f'Recuperacion requerida: {recuperacion}')
+        finally:
+            for anterior in retiradas:
+                self._liberar_generacion(anterior)
+            if nueva is not None:
+                with self._puerta:
+                    instalada = self._actual is nueva
+                if not instalada:
+                    self._liberar_generacion(nueva)
 
     def close(self):
         with self._puerta:
@@ -397,6 +458,9 @@ class Coordinador:
             self._cerrado = True
         self._cola.put(None)
         self._hilo.join()
+        with self._puerta:
+            actual, self._actual = self._actual, None
+        self._liberar_generacion(actual)
 
     def __enter__(self):
         return self
