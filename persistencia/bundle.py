@@ -242,6 +242,60 @@ GROUP_FIELDS=frozenset({'schema','contract','job_id','request_id','recipe_id','p
                         'generation_id','rules_sha256','policy','started_at','finished_at','files','coverage','retained',
                         'attempts','errors','plan'})
 
+# Terminal SofaScore statuses used by the pinned scraper. Keep this small, conservative mirror here because the
+# backend verifier does not install the scraper package. Unknown/contradictory statuses are never treated as final.
+_COMMENT_POST_CODES=frozenset({100,110,120,91,92})
+_COMMENT_POST_DESCRIPTIONS=frozenset({'ended','aet','after extra time','ap','penalties','walkover','retired'})
+
+def _comment_payload_is_post(payload):
+    """The final-phase subset of the pinned scraper's status classifier, without importing it into Sports Data."""
+    event=importar.evento_de(payload)
+    status=event.get('status') or {}
+    if not isinstance(status,dict):return False
+    status_type=status.get('type');code=status.get('code')
+    if status_type:
+        if status_type!='finished':return False
+        if code in _COMMENT_POST_CODES:return True
+        return code is None and str(status.get('description') or '').strip().lower() in _COMMENT_POST_DESCRIPTIONS
+    if code is not None:return code in _COMMENT_POST_CODES
+    return str(status.get('description') or '').strip().lower() in _COMMENT_POST_DESCRIPTIONS
+
+def _listed_event_matches_inventory(ident,row,expected):
+    """A listing may update comment eligibility only for the same Group 2 event and teams in this inventory."""
+    tournament=row.get('tournament') or {};season=(row.get('season') or {}).get('id')
+    home=(row.get('homeTeam') or {}).get('id');away=(row.get('awayTeam') or {}).get('id')
+    event=expected.get(ident)
+    return (event is not None and row.get('id')==ident and tournament.get('id')==TOURNAMENT
+            and (tournament.get('uniqueTournament') or {}).get('id')==UNIQUE_TOURNAMENT
+            and season in (None,SEASON) and (home,away)==(event['home'],event['away']))
+
+def _group_comment_finished(current,expected,raw_records,listed,latest,planned):
+    """Match the producer's status-source priority using only evidence verified in this bundle.
+
+    A successful event-detail response wins; otherwise the latest successful round listing wins over a stale cached
+    event; otherwise the cached event, then the published inventory status is used.
+    """
+    planned_ids={item['id'] for item in planned}
+    finished=set()
+    for ident in current:
+        event_attempt=latest.get(event_path(ident))
+        event_raw=raw_records.get((ident,'event'))
+        fresh=(ident in planned_ids and event_attempt is not None and event_attempt['status']==200
+               and event_attempt['payload_sha256'] is not None)
+        if fresh:
+            is_post=event_raw is not None and _comment_payload_is_post(event_raw['payload'])
+        elif ident in listed:
+            row=listed[ident][0]
+            if not _listed_event_matches_inventory(ident,row,expected):
+                raise Rejected('Comments listing identity mismatch')
+            is_post=_comment_payload_is_post(row)
+        elif event_raw is not None:
+            is_post=_comment_payload_is_post(event_raw['payload'])
+        else:
+            is_post=expected[ident]['status']=='finished'
+        if is_post:finished.add(ident)
+    return finished
+
 def round_path(number):return f'/unique-tournament/{UNIQUE_TOURNAMENT}/season/{SEASON}/events/round/{number}'
 def event_path(ident,key='event'):return f'/event/{ident}'+('' if key=='event' else '/'+key)
 ROUND_PATHS={round_path(n):n for n in ROUND_NUMBERS}
@@ -470,16 +524,19 @@ def _verify_group(body,descriptor,baseline,*,context,expected_rules,test_transpo
     if set(raw_records)!=covered:raise Rejected('Raw resource outside coverage')
     if with_comments:
         _verify_group_comments(m['plan']['comments'],rows['comments.jsonl'],baseline,expected,current,calendar,
-                               attempts,latest,m['plan']['planned'],detail_rounds)
+                               attempts,latest,m['plan']['planned'],detail_rounds,listed,raw_records)
     return m,decoded
 
 
-def _verify_group_comments(summary,records,baseline,expected,current,calendar,attempts,latest,planned,detail_rounds):
+def _verify_group_comments(summary,records,baseline,expected,current,calendar,attempts,latest,planned,detail_rounds,
+                           listed,raw_records):
     """Verify the optional Spanish narrative backfill against the same job's scope and budget."""
     from persistencia.comentarios import validar_respuesta
     from acquisition.group_plan import matches as planned_matches
     previous={item['event_id']:item for item in baseline.get('comments',[])}
-    finished={ident for ident in current if calendar[ident][1]['status']=='finished'}
+    # Do not infer comment eligibility solely from the normalized calendar: it can still show the old event status
+    # when the latest round listing has already marked a match finished but the detail request was deferred by budget.
+    finished=_group_comment_finished(current,expected,raw_records,listed,latest,planned)
     round_by_event={ident:item['round'] for ident,item in planned_matches(baseline).items()}
     valid_prior={ident for ident in finished if ident in previous and previous[ident]['spanish_complete'] is True}
     review_due={item['id'] for item in planned if item['reason'] in ('finished','changed')}

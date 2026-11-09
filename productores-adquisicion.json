@@ -21,6 +21,11 @@
       "rules_sha256": "325fbbb5ccb18b48b0009f70fd4b9ddf46e14ff6cbfb3dbbb70f6288cabd6254",
       "productor": "Acquisition Grupo 2: comments.jsonl con límite 8 MiB y reserva de capacidad por línea antes de cada consulta",
       "uso": "Receta sofascore-group2-2627-v1, sin cambios en alcance, presupuesto de solicitudes ni reglas deportivas"
+    },
+    {
+      "rules_sha256": "575528e883b82c0d00ef796c36d5fcf7f3be55a55cab7abca88383a80d714198",
+      "productor": "Grupo 2: verificador de comentarios usa el estado final de detalle, listado de jornada validado o inventario en el mismo orden de prioridad que la receta",
+      "uso": "Receta sofascore-group2-2627-v1; corrige solo la cobertura incremental de comentarios, sin cambiar rutas, alcance, presupuesto ni reglas deportivas"
     }
   ]
 }
