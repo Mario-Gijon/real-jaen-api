@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import sqlite3
 import sys
 import unittest
@@ -99,6 +100,56 @@ class CommentsCoverageFingerprintTests(SynchronizedDatabaseBase):
         self.assertEqual(sqlite.describir(self.base), self.original_description)
         self.assertEqual(transition._db_signature(self.base), self.original_base_signature)
         self.assertEqual(sqlite.revision(self.base), "0008")
+
+    def test_prepare_preserves_eight_nested_candidate_wal_and_shm_pairs(self):
+        opened = []
+        expected = {}
+        try:
+            for index in range(8):
+                candidate_dir = self.updates / f"generation-{index:02d}"
+                candidate_dir.mkdir()
+                candidate = candidate_dir / "candidata.sqlite"
+                connection = sqlite3.connect(candidate)
+                opened.append(connection)
+                connection.execute("PRAGMA journal_mode=WAL")
+                connection.execute("PRAGMA wal_autocheckpoint=0")
+                connection.execute("CREATE TABLE evidence (value TEXT NOT NULL)")
+                connection.execute("INSERT INTO evidence VALUES (?)", (f"generation-{index}",))
+                connection.commit()
+                wal = Path(str(candidate) + "-wal")
+                shm = Path(str(candidate) + "-shm")
+                self.assertTrue(wal.is_file(), f"missing WAL pair {index}")
+                self.assertTrue(shm.is_file(), f"missing SHM pair {index}")
+                if index == 0:
+                    self.assertGreater(wal.stat().st_size, 0)
+                for artifact in (candidate, wal, shm):
+                    expected[artifact.relative_to(self.updates).as_posix()] = artifact.read_bytes()
+
+            self._transition()
+            _, manifest = transition._load_snapshot(self.backup)
+            saved_updates = (self.backup / "payload" / (self.base.name + ".actualizaciones"))
+            self.assertEqual(set(manifest["updates_artifacts"]), set(expected))
+            for relative, original_bytes in expected.items():
+                saved = saved_updates / relative
+                self.assertEqual(saved.read_bytes(), original_bytes, relative)
+                self.assertEqual(transition._file_sha(saved), manifest["updates_artifacts"][relative]["sha256"])
+
+            # Verify the non-empty WAL still contains a readable committed database, without
+            # opening or changing any SQLite artifact inside the verified snapshot.
+            validation_dir = self.workspace / "wal-validation"
+            validation_dir.mkdir(mode=0o700)
+            saved_candidate = saved_updates / "generation-00" / "candidata.sqlite"
+            for suffix in ("", "-wal", "-shm"):
+                shutil.copyfile(Path(str(saved_candidate) + suffix),
+                                Path(str(validation_dir / "candidata.sqlite") + suffix))
+            with closing(sqlite3.connect(f"file:{validation_dir / 'candidata.sqlite'}?mode=ro", uri=True)) as check:
+                self.assertEqual(check.execute("PRAGMA integrity_check").fetchone()[0], "ok")
+                self.assertEqual(check.execute("SELECT value FROM evidence").fetchone()[0], "generation-0")
+            self.assertEqual(transition._load_snapshot(self.backup)[1]["payload_sha256"], manifest["payload_sha256"])
+            self._assert_sports_unchanged()
+        finally:
+            for connection in opened:
+                connection.close()
 
     def test_prepare_adopt_and_restore_change_only_confirmed_code(self):
         prepared = self._transition()

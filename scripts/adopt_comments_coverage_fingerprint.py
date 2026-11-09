@@ -176,7 +176,7 @@ def _copy_tree(source, destination, skip=()):
             item = current / name
             if item.is_symlink():
                 raise MaintenanceRejected(f'Symlink is not allowed in snapshot: {item}')
-            if item.resolve() in skip or name.endswith('.lock') or name.endswith(sqlite.ACOMPANANTES):
+            if item.resolve() in skip or name.endswith('.lock'):
                 continue
             target = target_dir / name
             with item.open('rb') as source_stream, target.open('xb') as target_stream:
@@ -439,17 +439,16 @@ def _snapshot(source, backup_dir):
     state_exclusions.update(Path(str(path) + suffix) for path in paths.values()
                             for suffix in sqlite.ACOMPANANTES)
     state_inventory = _inventory_tree(source['base'].parent, state_exclusions)
-    updates_inventory = _inventory_tree(
-        updates, (source['journal'], control,
-                  *(Path(str(path) + suffix) for path in (source['journal'], control)
-                    for suffix in sqlite.ACOMPANANTES)),
-    )
+    updates_exclusions = (source['journal'], control,
+                          *(Path(str(path) + suffix) for path in (source['journal'], control)
+                            for suffix in sqlite.ACOMPANANTES))
+    updates_inventory = _inventory_tree(updates, updates_exclusions)
     acq_inventory = _inventory_tree(source['acquisition_journal'].parent, state_exclusions)
     for label, path in paths.items():
         _copy_sqlite(path, destinations[label])
     saved_base = payload / source['base'].name
     saved_updates = payload / (source['base'].name + '.actualizaciones')
-    _copy_tree(updates, saved_updates, skip=(source['journal'], control))
+    _copy_tree(updates, saved_updates, skip=updates_exclusions)
     if _inventory_tree(saved_updates) != updates_inventory:
         raise MaintenanceRejected('Coordinator artifacts changed while the snapshot was being copied')
     # Preserve every other root-level artifact (including procedencia and copias), not only known directories.
@@ -473,10 +472,7 @@ def _snapshot(source, backup_dir):
         raise MaintenanceRejected('SQLite sidecars changed during the coherent snapshot')
     if state_inventory != _inventory_tree(source['base'].parent, state_exclusions):
         raise MaintenanceRejected('State artifacts changed while the snapshot was being copied')
-    if updates_inventory != _inventory_tree(
-            updates, (source['journal'], control,
-                      *(Path(str(path) + suffix) for path in (source['journal'], control)
-                        for suffix in sqlite.ACOMPANANTES))):
+    if updates_inventory != _inventory_tree(updates, updates_exclusions):
         raise MaintenanceRejected('Coordinator artifacts changed while the snapshot was being copied')
     if acq_inventory != _inventory_tree(source['acquisition_journal'].parent, state_exclusions):
         raise MaintenanceRejected('Acquisition artifacts changed while the snapshot was being copied')
