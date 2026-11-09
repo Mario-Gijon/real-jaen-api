@@ -323,12 +323,17 @@ class Actualizaciones:
         comments=coverage.get('comments') or {}
         ids |= set(comments.get('new',())) | set(comments.get('kept',())) | set(comments.get('pending',()))
         ids |= {item['id'] for item in comments.get('failed',())}
-        data = self.c.capturar()._datos
+        generation = self.c.capturar()
+        data = generation._datos
         teams = {e['team_id']: e['name'] for e in data['equipos']}
         names = {}
         for m in data['partidos']:
             if m['match_id'] in ids:
                 names[str(m['match_id'])] = f"{teams.get(m['home_team_id']) or '?'} – {teams.get(m['away_team_id']) or '?'}"
+        if comments:
+            empty = sorted(ident for ident in comments.get('new', ())
+                           if (generation._comentarios.get(f'sofascore-match-{ident}') or {}).get('availability') == 'empty')
+            return dict(coverage, comments=dict(comments, empty=empty), names=names)
         return dict(coverage, names=names)
 
     @staticmethod

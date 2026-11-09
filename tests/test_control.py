@@ -12,6 +12,33 @@ import test_actualizacion as fixtures
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
+class CoverageNaming(unittest.TestCase):
+    def test_named_reports_successful_empty_comment_captures_without_mutating_coverage(self):
+        from control import Actualizaciones
+
+        class Generation:
+            _datos = {
+                'equipos': [dict(team_id=10, name='Real Jaén'), dict(team_id=20, name='Algeciras CF')],
+                'partidos': [dict(match_id=16600011, home_team_id=10, away_team_id=20)],
+            }
+            _comentarios = {'sofascore-match-16600011': {'availability': 'empty'}}
+
+        class Coordinator:
+            def capturar(self):
+                return Generation()
+
+        updates = object.__new__(Actualizaciones)
+        updates.c = Coordinator()
+        comments = dict(new=[16600011], kept=[], pending=[], failed=[])
+        coverage = dict(pending=[], deferred=[], restricted=[], new_matches=[], comments=comments)
+
+        named = updates._named(coverage)
+
+        self.assertEqual(named['comments']['empty'], [16600011])
+        self.assertEqual(named['names']['16600011'], 'Real Jaén – Algeciras CF')
+        self.assertNotIn('empty', coverage['comments'])
+
+
 class FakeCliente:
     """What persistencia.adquisicion.Cliente.publicar does, seen from the control: phases, records, coordinator."""
     def __init__(self, fixture):

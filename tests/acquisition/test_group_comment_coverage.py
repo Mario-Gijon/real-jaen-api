@@ -114,6 +114,29 @@ class GroupCommentCoverageTests(unittest.TestCase):
                                                  self.latest, self.planned), {101, 102, 103, 104, 105, 106})
         self.verify()
 
+    def test_reported_4_new_97_kept_9_pending_and_no_failures_is_accepted(self):
+        ids = tuple(range(1000, 1110))
+        self.baseline = {
+            'comments_enabled': True,
+            'events': [dict(id=i, current=True, replaced_by=None, home=10, away=20, status='finished',
+                            tournament_id=94191, season_id=97382) for i in ids],
+            'records': [],
+            'comments': [dict(event_id=i, spanish_complete=True) for i in ids[:97]],
+        }
+        self.expected = {i: dict(id=i, current=True, home=10, away=20, status='finished') for i in ids}
+        self.current = set(ids)
+        self.calendar = {}
+        self.planned = []
+        self.raw_records = {}
+        self.listed = {}
+        self.attempts = []
+        self.latest = {}
+        self.comment_records = []
+        for ident in ids[97:101]:
+            self._comment_attempt(ident, 200, {'comments': [self.comment(f'new-{ident}')]})
+
+        self.verify(dict(new=list(ids[97:101]), kept=list(ids[:97]), pending=list(ids[101:]), failed=[]))
+
     def test_inconsistent_pending_summary_is_still_rejected(self):
         wrong = self.valid_summary()
         wrong['pending'] = [105]
